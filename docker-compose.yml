@@ -1,0 +1,12 @@
+services:
+  nd2utils:
+    images: ghcr.io/cidmex/nd2utils:latest
+    ports:
+      - "8080:8080"
+    environment:
+      ND2UTILS_BIND_HOST: "0.0.0.0"
+      ND2UTILS_MAX_UPLOAD_BYTES: "8589934592"
+      ND2UTILS_TTL_HOURS: "24"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

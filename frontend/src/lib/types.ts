@@ -1,0 +1,113 @@
+export type Lang = "zh" | "en";
+export type Theme = "light" | "dark" | "system";
+
+export interface ChannelInfo {
+  index: number;
+  name: string;
+  color: number[];
+  emission_nm: number | null;
+  excitation_nm: number | null;
+  modality: string[];
+  lut_min: number | null;
+  lut_max: number | null;
+  lut_gamma: number;
+  suggested_min: number;
+  suggested_max: number;
+}
+
+export interface AxisInfo {
+  name: string;
+  size: number;
+}
+
+export interface FileSummary {
+  id: string;
+  name: string;
+  size_bytes: number;
+  status: string;
+  error?: string | null;
+  version: number[] | null;
+  dtype: string | null;
+  shape: number[];
+  axes: AxisInfo[];
+  width: number | null;
+  height: number | null;
+  channels: ChannelInfo[];
+  voxel_um: number[];
+  objective: string | null;
+  magnification: number | null;
+  na: number | null;
+  acquired: string | null;
+  instrument: string | null;
+  software: string | null;
+  bits_significant: number | null;
+  is_rgb: boolean;
+  created_at: number | null;
+}
+
+export interface FileDetail extends FileSummary {
+  text_info: Record<string, string>;
+  experiment: unknown[];
+  events: Record<string, unknown>[];
+  metadata: Record<string, unknown>;
+  app_info: Record<string, unknown>;
+  groups: Record<string, unknown>;
+}
+
+export interface LutSetting {
+  min: number;
+  max: number;
+  gamma: number;
+  visible: boolean;
+  color: number[];
+}
+
+export interface JobInfo {
+  id: string;
+  status: "queued" | "running" | "done" | "error";
+  progress: number;
+  message: string;
+  created_at: number;
+  download_name?: string | null;
+  error?: string | null;
+  format?: string | null;
+  file_ids: string[];
+}
+
+export type Tool = "pan" | "probe" | "line" | "rect" | "ellipse" | "polygon";
+
+export interface PackedPlane {
+  width: number;
+  height: number;
+  dtype: "u8" | "u16" | "f32";
+  channels: {
+    name: string;
+    color: number[];
+    suggestedMin: number;
+    suggestedMax: number;
+    data: Float32Array;
+  }[];
+}
+
+export interface MeasureResult {
+  tool: string;
+  area_px: number;
+  area_um2: number | null;
+  length_px: number;
+  length_um: number | null;
+  channels: {
+    name: string;
+    count: number;
+    min?: number;
+    max?: number;
+    mean?: number;
+    std?: number;
+    sum?: number;
+  }[];
+  profiles?: {
+    name: string;
+    distance_px: number;
+    distance_um?: number;
+    values: number[];
+  }[];
+}

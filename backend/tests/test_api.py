@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
+from pathlib import Path
+from zipfile import ZipFile
+
+import tifffile
+from PIL import Image
+
+from nd2utils.nd2io import close_all, open_nd2
+
+
+def test_health(client):
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_reject_non_nd2(client, tmp_path: Path):
+    png = tmp_path / "fake.nd2"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"not-an-nd2-file")
+    r = client.post("/api/files", files={"file": ("fake.nd2", png.read_bytes(), "application/octet-stream")})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "not_nd2"
+
+
+def test_reject_wrong_extension(client):
+    r = client.post("/api/files", files={"file": ("photo.png", b"abc", "image/png")})
+    assert r.status_code == 400
+
+
+def test_open_cache_is_thread_safe(sample_dir: Path):
+    path = sorted(sample_dir.glob("*.nd2"))[0]
+    close_all()
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        handles = list(pool.map(open_nd2, [path] * 6))
+    assert len({id(handle) for handle in handles}) == 1
+    close_all()
+
+
+def _upload_samples(client, sample_dir: Path) -> list[dict]:
+    records = []
+    for path in sorted(sample_dir.glob("*.nd2")):
+        response = client.post(
+            "/api/files",
+            files={"file": (path.name, path.read_bytes(), "application/octet-stream")},
+        )
+        assert response.status_code == 200, response.text
+        records.append(response.json())
+    assert len(records) == 3
+    return records
+
+
+def test_identify_samples(client, sample_dir: Path):
+    files = _upload_samples(client, sample_dir)
+    names = {f["name"] for f in files}
+    assert names == {"MB2310343.nd2", "MB2310344.nd2", "MB2310345.nd2"}
+    for rec in files:
+        assert rec["status"] == "ready"
+        assert rec["version"][:2] == [3, 0]
+        assert rec["width"] == 512
+        assert rec["height"] == 512
+        ch_names = [c["name"] for c in rec["channels"]]
+        assert ch_names == ["DAPI", "FITC", "TRITC"]
+        assert rec["objective"] and "100x" in rec["objective"]
+        assert rec["dtype"] == "uint16"
+        detail = client.get(f"/api/files/{rec['id']}")
+        assert detail.status_code == 200
+        body = detail.json()
+        assert "text_info" in body
+        assert "DAPI" in body["text_info"].get("description", "")
+
+
+def test_preview_and_plane(client, sample_dir: Path):
+    files = _upload_samples(client, sample_dir)
+    fid = files[0]["id"]
+    preview = client.get(f"/api/files/{fid}/preview")
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "image/jpeg"
+    img = Image.open(BytesIO(preview.content))
+    assert img.size[0] >= 512
+    assert img.mode in ("RGB", "YCbCr")
+    plane = client.get(f"/api/files/{fid}/plane")
+    assert plane.status_code == 200
+    assert plane.content[:4] == b"ND2P"
+    hist = client.get(f"/api/files/{fid}/histogram?c=0")
+    assert hist.status_code == 200
+    assert hist.json()["max"] > 0
+
+
+def test_preview_overlay_split_scale_and_visible(client, sample_dir: Path):
+    files = _upload_samples(client, sample_dir)
+    fid = files[0]["id"]
+    overlay = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false")
+    split = client.get(f"/api/files/{fid}/preview?composite=false&scale_bar=false")
+    assert overlay.status_code == 200
+    assert split.status_code == 200
+    overlay_img = Image.open(BytesIO(overlay.content))
+    split_img = Image.open(BytesIO(split.content))
+    assert overlay_img.size == (512, 512)
+    assert split_img.size[0] > 512 or split_img.size[1] > 512
+
+    with_bar = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=true")
+    without_bar = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false")
+    assert with_bar.content != without_bar.content
+
+    one = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false&visible=1,0,0")
+    all_ch = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false&visible=1,1,1")
+    assert one.status_code == 200
+    assert all_ch.status_code == 200
+    assert one.content != all_ch.content
+
+
+def test_measure_rect(client, sample_dir: Path):
+    files = _upload_samples(client, sample_dir)
+    fid = files[0]["id"]
+    r = client.post(
+        f"/api/files/{fid}/measure",
+        json={"tool": "rect", "points": [[10, 10], [200, 200]]},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["area_px"] > 0
+    assert len(body["channels"]) == 3
+    assert body["channels"][0]["mean"] >= 0
+
+
+def test_export_ome_tiff_and_png_batch(client, sample_dir: Path):
+    files = _upload_samples(client, sample_dir)
+    ids = [f["id"] for f in files]
+    r = client.post(
+        "/api/export",
+        json={"file_ids": ids, "format": "ome-tiff", "scope": "current", "channels_mode": "composite"},
+    )
+    assert r.status_code == 200
+    job_id = r.json()["id"]
+    job = client.get(f"/api/jobs/{job_id}")
+    assert job.status_code == 200
+    assert job.json()["status"] == "done"
+    dl = client.get(f"/api/jobs/{job_id}/download")
+    assert dl.status_code == 200
+    zf = ZipFile(BytesIO(dl.content))
+    names = zf.namelist()
+    assert any(n.endswith(".ome.tif") or n.endswith(".tif") for n in names)
+    stems = {Path(n).parts[0] for n in names if "/" in n or True}
+    joined = " ".join(names)
+    assert "MB2310343" in joined
+    assert "MB2310344" in joined
+    assert "MB2310345" in joined
+    tif_name = next(n for n in names if n.endswith(".tif"))
+    arr = tifffile.imread(zf.open(tif_name))
+    assert arr.ndim in (2, 3)
+    if arr.ndim == 3:
+        assert arr.shape[0] == 3
+
+    r2 = client.post(
+        "/api/export",
+        json={"file_ids": ids[:1], "format": "png", "scope": "current", "channels_mode": "composite", "scale_bar": True},
+    )
+    job2 = client.get(f"/api/jobs/{r2.json()['id']}").json()
+    assert job2["status"] == "done"
+    dl2 = client.get(f"/api/jobs/{job2['id']}/download")
+    z2 = ZipFile(BytesIO(dl2.content))
+    png_name = next(n for n in z2.namelist() if n.endswith(".png"))
+    img = Image.open(z2.open(png_name))
+    assert img.mode in ("RGB", "P", "RGBA")
+    assert img.size[0] >= 512
+
+
+def test_projection_without_z(client, sample_dir: Path):
+    files = _upload_samples(client, sample_dir)
+    r = client.get(f"/api/files/{files[0]['id']}/projection?axis=Z")
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "no_axis"
