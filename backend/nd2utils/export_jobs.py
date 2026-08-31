@@ -16,7 +16,7 @@ from nd2utils.jsonutil import jsonable
 from nd2utils.models import ExportRequest
 from nd2utils.nd2io import axis_size, extract_channels, iter_coords, open_nd2
 from nd2utils.render import build_luts, composite_rgb, draw_scale_bar, encode_image
-from nd2utils.store import get_file, source_path, upsert_job
+from nd2utils.store import get_owned_file, source_path, upsert_job
 
 _FORMAT_LABELS = {
     "ome-tiff": "OME-TIFF",
@@ -108,8 +108,19 @@ def _resolution(voxel: list[float] | None) -> tuple[float, float] | None:
     return (1.0 / float(voxel[0]), 1.0 / y)
 
 
+def _as_rgb8(rgb: np.ndarray) -> np.ndarray:
+    arr = np.asarray(rgb)
+    if arr.dtype == np.uint8:
+        return np.ascontiguousarray(arr)
+    if np.issubdtype(arr.dtype, np.floating):
+        finite = arr[np.isfinite(arr)]
+        if finite.size and float(finite.min()) >= 0.0 and float(finite.max()) <= 1.0:
+            arr = arr * 255.0
+    return np.ascontiguousarray(np.clip(arr, 0, 255).astype(np.uint8))
+
+
 def _write_display_tiff(path: Path, rgb: np.ndarray, voxel: list[float] | None = None) -> None:
-    rgb8 = np.ascontiguousarray(rgb, dtype=np.uint8)
+    rgb8 = _as_rgb8(rgb)
     kwargs: dict = {
         "photometric": "rgb",
         "compression": "adobe_deflate",
@@ -169,7 +180,7 @@ def _write_ome_tiff(
 
 
 def _save_display(path: Path, rgb: np.ndarray, fmt: str, jpeg_quality: int, voxel: list[float] | None) -> None:
-    rgb8 = np.ascontiguousarray(rgb, dtype=np.uint8)
+    rgb8 = _as_rgb8(rgb)
     if fmt == "png":
         Image.fromarray(rgb8, mode="RGB").save(path)
     elif fmt == "jpeg":
@@ -186,7 +197,7 @@ def _display_ext(fmt: str) -> str:
     return "tif"
 
 
-def run_export(job_id: str, req: ExportRequest) -> None:
+def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
     rec = {
         "id": job_id,
         "status": "running",
@@ -197,6 +208,7 @@ def run_export(job_id: str, req: ExportRequest) -> None:
         "error": None,
         "format": req.format,
         "file_ids": req.file_ids,
+        "_owner": owner_id,
     }
     upsert_job(rec)
     out_dir = settings.exports_dir / job_id
@@ -213,7 +225,7 @@ def run_export(job_id: str, req: ExportRequest) -> None:
             rec["message"] = f"Exporting {file_id}"
             rec["progress"] = 0.05 + 0.85 * (fi / total)
             upsert_job(rec)
-            meta = get_file(file_id)
+            meta = get_owned_file(file_id, owner_id)
             if not meta:
                 raise FileNotFoundError(f"Unknown file {file_id}")
             src = source_path(file_id)

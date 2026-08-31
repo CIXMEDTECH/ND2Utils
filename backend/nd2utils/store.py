@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import secrets
 import time
 from pathlib import Path
 from typing import Any
 
 from nd2utils.config import ensure_dirs, settings
 from nd2utils.nd2io import close_nd2
+
+
+OWNER_FIELD = "_owner"
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -36,24 +40,33 @@ def save_index(index: dict[str, dict[str, Any]]) -> None:
 
 
 def upsert_file(record: dict[str, Any]) -> dict[str, Any]:
+    if not record.get(OWNER_FIELD):
+        raise ValueError("file record is missing an owner")
     index = load_index()
     index[record["id"]] = record
     save_index(index)
     return record
 
 
-def get_file(file_id: str) -> dict[str, Any] | None:
-    return load_index().get(file_id)
+def _owned(record: dict[str, Any] | None, owner_id: str) -> bool:
+    stored = record.get(OWNER_FIELD) if record else None
+    return isinstance(stored, str) and secrets.compare_digest(stored, owner_id)
 
 
-def delete_file_record(file_id: str) -> None:
+def get_owned_file(file_id: str, owner_id: str) -> dict[str, Any] | None:
+    record = load_index().get(file_id)
+    return record if _owned(record, owner_id) else None
+
+
+def delete_file_record(file_id: str, owner_id: str) -> None:
     index = load_index()
-    index.pop(file_id, None)
-    save_index(index)
+    if _owned(index.get(file_id), owner_id):
+        index.pop(file_id, None)
+        save_index(index)
 
 
-def list_files() -> list[dict[str, Any]]:
-    items = list(load_index().values())
+def list_files(owner_id: str) -> list[dict[str, Any]]:
+    items = [record for record in load_index().values() if _owned(record, owner_id)]
     items.sort(key=lambda r: r.get("created_at") or 0, reverse=True)
     return items
 
@@ -69,14 +82,23 @@ def save_jobs(jobs: dict[str, dict[str, Any]]) -> None:
 
 
 def upsert_job(record: dict[str, Any]) -> dict[str, Any]:
+    if not record.get(OWNER_FIELD):
+        raise ValueError("job record is missing an owner")
     jobs = load_jobs()
     jobs[record["id"]] = record
     save_jobs(jobs)
     return record
 
 
-def get_job(job_id: str) -> dict[str, Any] | None:
-    return load_jobs().get(job_id)
+def get_owned_job(job_id: str, owner_id: str) -> dict[str, Any] | None:
+    record = load_jobs().get(job_id)
+    return record if _owned(record, owner_id) else None
+
+
+def list_jobs(owner_id: str) -> list[dict[str, Any]]:
+    items = [record for record in load_jobs().values() if _owned(record, owner_id)]
+    items.sort(key=lambda record: record.get("created_at") or 0, reverse=True)
+    return items
 
 
 def file_dir(file_id: str) -> Path:

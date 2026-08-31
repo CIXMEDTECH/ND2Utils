@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
+import secrets
 import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -41,10 +44,10 @@ from nd2utils.render import (
 from nd2utils.store import (
     delete_file_record,
     file_dir,
-    get_file,
-    get_job,
+    get_owned_file,
+    get_owned_job,
     list_files,
-    load_jobs,
+    list_jobs,
     purge_expired,
     source_path,
     upsert_file,
@@ -52,6 +55,9 @@ from nd2utils.store import (
 )
 
 FRONTEND_DIST = repo_root() / "frontend" / "dist"
+SESSION_COOKIE = "nd2utils_session"
+SESSION_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+_SESSION_TOKEN = re.compile(r"[A-Za-z0-9_-]{40,128}")
 
 
 @asynccontextmanager
@@ -85,21 +91,62 @@ app.add_middleware(
 )
 
 
+def _owner_key(token: str) -> str:
+    return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+
+@app.middleware("http")
+async def browser_session(request: Request, call_next):
+    token = request.cookies.get(SESSION_COOKIE)
+    set_cookie = not token or _SESSION_TOKEN.fullmatch(token) is None
+    if set_cookie:
+        token = secrets.token_urlsafe(32)
+    request.state.owner_id = _owner_key(token)
+    response = await call_next(request)
+    if set_cookie:
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            max_age=SESSION_COOKIE_MAX_AGE,
+            httponly=True,
+            secure=request.url.scheme == "https",
+            samesite="lax",
+            path="/",
+        )
+    return response
+
+
+def _browser_owner(request: Request) -> str:
+    return request.state.owner_id
+
+
+BrowserOwner = Annotated[str, Depends(_browser_owner)]
+
+
+def _public(record: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in record.items() if not key.startswith("_")}
+
+
 def _raise_nd2(exc: Nd2Error) -> None:
     status = 400 if exc.code in {"not_nd2", "parse_failed", "empty"} else 500
     raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
 
 
-def _need(file_id: str) -> dict[str, Any]:
-    rec = get_file(file_id)
+def _owned_file(file_id: str, owner_id: str) -> dict[str, Any]:
+    rec = get_owned_file(file_id, owner_id)
     if not rec:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "File not found."})
+    return rec
+
+
+def _need(file_id: str, owner_id: str) -> dict[str, Any]:
+    rec = _owned_file(file_id, owner_id)
     if rec.get("status") != "ready":
         raise HTTPException(status_code=409, detail={"code": "not_ready", "message": rec.get("error") or "File is not ready."})
     return rec
 
 
-def _ingest_file(src: Path, name: str, size_bytes: int | None = None) -> dict[str, Any]:
+def _ingest_file(src: Path, name: str, owner_id: str, size_bytes: int | None = None) -> dict[str, Any]:
     file_id = uuid.uuid4().hex
     dest = source_path(file_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -115,8 +162,24 @@ def _ingest_file(src: Path, name: str, size_bytes: int | None = None) -> dict[st
     except Nd2Error as exc:
         dest.unlink(missing_ok=True)
         _raise_nd2(exc)
+    rec["_owner"] = owner_id
     upsert_file(rec)
     return rec
+
+
+def _need_upload(upload_id: str, owner_id: str) -> tuple[Path, dict[str, Any]]:
+    dest_dir = settings.staging_dir / upload_id
+    meta_path = dest_dir / "meta.json"
+    if not meta_path.is_file():
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
+    stored_owner = meta.get("_owner")
+    if not isinstance(stored_owner, str) or not secrets.compare_digest(stored_owner, owner_id):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
+    return dest_dir, meta
 
 
 class ChunkInit(BaseModel):
@@ -143,9 +206,9 @@ def get_settings() -> dict[str, Any]:
 
 
 @app.get("/api/files")
-def api_list_files() -> dict[str, Any]:
+def api_list_files(owner_id: BrowserOwner) -> dict[str, Any]:
     purge_expired()
-    items = list_files()
+    items = list_files(owner_id)
     summaries = []
     for rec in items:
         summaries.append({k: rec.get(k) for k in (
@@ -158,7 +221,7 @@ def api_list_files() -> dict[str, Any]:
 
 
 @app.post("/api/files")
-async def api_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+async def api_upload(owner_id: BrowserOwner, file: UploadFile = File(...)) -> dict[str, Any]:
     name = file.filename or "upload.nd2"
     if not name.lower().endswith(".nd2"):
         raise HTTPException(status_code=400, detail={"code": "not_nd2", "message": "Please upload a .nd2 file."})
@@ -177,21 +240,21 @@ async def api_upload(file: UploadFile = File(...)) -> dict[str, Any]:
                 raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
             fh.write(chunk)
     try:
-        rec = _ingest_file(tmp, name, size)
+        rec = _ingest_file(tmp, name, owner_id, size)
     finally:
         tmp.unlink(missing_ok=True)
-    return rec
+    return _public(rec)
 
 
 @app.post("/api/uploads/init")
-def api_chunk_init(body: ChunkInit) -> dict[str, str]:
+def api_chunk_init(body: ChunkInit, owner_id: BrowserOwner) -> dict[str, str]:
     if body.size > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
     upload_id = uuid.uuid4().hex
     dest = settings.staging_dir / upload_id
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "meta.json").write_text(
-        json.dumps({"filename": body.filename, "size": body.size}),
+        json.dumps({"filename": body.filename, "size": body.size, "_owner": owner_id}),
         encoding="utf-8",
     )
     (dest / "source.partial").touch()
@@ -199,9 +262,15 @@ def api_chunk_init(body: ChunkInit) -> dict[str, str]:
 
 
 @app.put("/api/uploads/{upload_id}/chunk")
-async def api_chunk(upload_id: str, offset: int = 0, file: UploadFile = File(...)) -> dict[str, int]:
-    dest = settings.staging_dir / upload_id / "source.partial"
-    if not dest.parent.exists():
+async def api_chunk(
+    upload_id: str,
+    owner_id: BrowserOwner,
+    offset: int = 0,
+    file: UploadFile = File(...),
+) -> dict[str, int]:
+    dest_dir, _ = _need_upload(upload_id, owner_id)
+    dest = dest_dir / "source.partial"
+    if not dest.is_file():
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
     data = await file.read()
     with dest.open("r+b") as fh:
@@ -217,38 +286,35 @@ async def api_chunk(upload_id: str, offset: int = 0, file: UploadFile = File(...
 
 
 @app.post("/api/uploads/{upload_id}/complete")
-def api_chunk_complete(upload_id: str) -> dict[str, Any]:
-    dest_dir = settings.staging_dir / upload_id
+def api_chunk_complete(upload_id: str, owner_id: BrowserOwner) -> dict[str, Any]:
+    dest_dir, meta = _need_upload(upload_id, owner_id)
     partial = dest_dir / "source.partial"
     if not partial.exists():
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
-    meta = json.loads((dest_dir / "meta.json").read_text(encoding="utf-8"))
     name = meta.get("filename") or "upload.nd2"
-    rec = _ingest_file(partial, name, partial.stat().st_size)
+    rec = _ingest_file(partial, name, owner_id, partial.stat().st_size)
     shutil.rmtree(dest_dir, ignore_errors=True)
-    return rec
+    return _public(rec)
 
 
 @app.get("/api/files/{file_id}")
-def api_file(file_id: str) -> dict[str, Any]:
-    return _need(file_id)
+def api_file(file_id: str, owner_id: BrowserOwner) -> dict[str, Any]:
+    return _public(_need(file_id, owner_id))
 
 
 @app.delete("/api/files/{file_id}")
-def api_delete(file_id: str) -> dict[str, str]:
-    rec = get_file(file_id)
-    if not rec:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "File not found."})
+def api_delete(file_id: str, owner_id: BrowserOwner) -> dict[str, str]:
+    _owned_file(file_id, owner_id)
     close_nd2(source_path(file_id))
     shutil.rmtree(file_dir(file_id), ignore_errors=True)
     cache = settings.cache_dir / file_id
     shutil.rmtree(cache, ignore_errors=True)
-    delete_file_record(file_id)
+    delete_file_record(file_id, owner_id)
     return {"id": file_id, "status": "deleted"}
 
 
-def _planes(file_id: str, t: int, z: int, p: int):
-    rec = _need(file_id)
+def _planes(file_id: str, owner_id: str, t: int, z: int, p: int):
+    rec = _need(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     planes, sizes = extract_channels(handle, t=t, z=z, p=p)
     return rec, handle, planes, sizes
@@ -257,6 +323,7 @@ def _planes(file_id: str, t: int, z: int, p: int):
 @app.get("/api/files/{file_id}/preview")
 def api_preview(
     file_id: str,
+    owner_id: BrowserOwner,
     t: int = 0,
     z: int = 0,
     p: int = 0,
@@ -266,7 +333,7 @@ def api_preview(
     quality: int = 88,
     visible: str | None = None,
 ) -> Response:
-    rec, _, planes, _ = _planes(file_id, t, z, p)
+    rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
     vis = parse_visible_mask(visible, len(planes))
     rgb = preview_rgb(
         planes,
@@ -283,15 +350,22 @@ def api_preview(
 
 
 @app.get("/api/files/{file_id}/plane")
-def api_plane(file_id: str, t: int = 0, z: int = 0, p: int = 0) -> Response:
-    rec, _, planes, _ = _planes(file_id, t, z, p)
+def api_plane(file_id: str, owner_id: BrowserOwner, t: int = 0, z: int = 0, p: int = 0) -> Response:
+    rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
     payload = pack_planes(planes, rec.get("channels") or [])
     return Response(content=payload, media_type="application/octet-stream")
 
 
 @app.get("/api/files/{file_id}/histogram")
-def api_histogram(file_id: str, t: int = 0, z: int = 0, p: int = 0, c: int = 0) -> dict[str, Any]:
-    rec, _, planes, _ = _planes(file_id, t, z, p)
+def api_histogram(
+    file_id: str,
+    owner_id: BrowserOwner,
+    t: int = 0,
+    z: int = 0,
+    p: int = 0,
+    c: int = 0,
+) -> dict[str, Any]:
+    rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
     if c < 0 or c >= len(planes):
         raise HTTPException(status_code=400, detail={"code": "bad_channel", "message": "Channel index out of range."})
     bits = rec.get("bits_significant") or 16
@@ -299,8 +373,8 @@ def api_histogram(file_id: str, t: int = 0, z: int = 0, p: int = 0, c: int = 0) 
 
 
 @app.get("/api/files/{file_id}/autoscale")
-def api_autoscale(file_id: str, t: int = 0, z: int = 0, p: int = 0) -> dict[str, Any]:
-    rec, _, planes, _ = _planes(file_id, t, z, p)
+def api_autoscale(file_id: str, owner_id: BrowserOwner, t: int = 0, z: int = 0, p: int = 0) -> dict[str, Any]:
+    rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
     items = []
     for i, plane in enumerate(planes):
         lo, hi = autoscale_limits(plane)
@@ -320,6 +394,7 @@ def api_autoscale(file_id: str, t: int = 0, z: int = 0, p: int = 0) -> dict[str,
 @app.get("/api/files/{file_id}/projection")
 def api_projection(
     file_id: str,
+    owner_id: BrowserOwner,
     axis: str = "Z",
     mode: str = "max",
     t: int = 0,
@@ -327,7 +402,7 @@ def api_projection(
     p: int = 0,
     scale_bar: bool = True,
 ) -> Response:
-    rec = _need(file_id)
+    rec = _need(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     if axis_size(handle.sizes, axis.upper()) <= 1:
         raise HTTPException(
@@ -348,12 +423,13 @@ def api_projection(
 @app.get("/api/files/{file_id}/tiles")
 def api_tiles(
     file_id: str,
+    owner_id: BrowserOwner,
     axis: str = "Z",
     t: int = 0,
     p: int = 0,
     max_tiles: int = 24,
 ) -> dict[str, Any]:
-    rec = _need(file_id)
+    rec = _need(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     n = axis_size(handle.sizes, axis.upper())
     step = max(1, n // max_tiles)
@@ -368,8 +444,8 @@ def api_tiles(
 
 
 @app.post("/api/files/{file_id}/measure")
-def api_measure(file_id: str, body: MeasureRequest) -> dict[str, Any]:
-    rec, _, planes, _ = _planes(file_id, body.t, body.z, body.p)
+def api_measure(file_id: str, body: MeasureRequest, owner_id: BrowserOwner) -> dict[str, Any]:
+    rec, _, planes, _ = _planes(file_id, owner_id, body.t, body.z, body.p)
     names = [c.get("name") or f"C{i}" for i, c in enumerate(rec.get("channels") or [])]
     voxel = rec.get("voxel_um") or [0, 0, 0]
     um = float(voxel[0]) if voxel else 0
@@ -396,13 +472,14 @@ def api_measure(file_id: str, body: MeasureRequest) -> dict[str, Any]:
 @app.get("/api/files/{file_id}/orthogonal")
 def api_orthogonal(
     file_id: str,
+    owner_id: BrowserOwner,
     t: int = 0,
     z: int = 0,
     p: int = 0,
     x: int | None = None,
     y: int | None = None,
 ) -> dict[str, Any]:
-    rec = _need(file_id)
+    rec = _need(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     sizes = handle.sizes
     n_z = axis_size(sizes, "Z")
@@ -419,11 +496,11 @@ def api_orthogonal(
 
 
 @app.post("/api/export")
-def api_export(body: ExportRequest, background: BackgroundTasks) -> dict[str, Any]:
+def api_export(body: ExportRequest, background: BackgroundTasks, owner_id: BrowserOwner) -> dict[str, Any]:
     if not body.file_ids:
         raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select at least one file."})
     for fid in body.file_ids:
-        _need(fid)
+        _need(fid, owner_id)
     job_id = new_job_id()
     upsert_job(
         {
@@ -436,37 +513,38 @@ def api_export(body: ExportRequest, background: BackgroundTasks) -> dict[str, An
             "error": None,
             "format": body.format,
             "file_ids": body.file_ids,
+            "_owner": owner_id,
         }
     )
-    background.add_task(run_export, job_id, body)
+    background.add_task(run_export, job_id, body, owner_id)
     return {"id": job_id, "status": "queued"}
 
 
 @app.get("/api/jobs")
-def api_jobs() -> dict[str, Any]:
-    jobs = list(load_jobs().values())
-    jobs.sort(key=lambda j: j.get("created_at") or 0, reverse=True)
-    return {"jobs": jobs[:50]}
+def api_jobs(owner_id: BrowserOwner) -> dict[str, Any]:
+    return {"jobs": [_public(job) for job in list_jobs(owner_id)[:50]]}
 
 
 @app.get("/api/jobs/{job_id}")
-def api_job(job_id: str) -> dict[str, Any]:
-    job = get_job(job_id)
+def api_job(job_id: str, owner_id: BrowserOwner) -> dict[str, Any]:
+    job = get_owned_job(job_id, owner_id)
     if not job:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Job not found."})
-    return job
+    return _public(job)
 
 
 @app.get("/api/jobs/{job_id}/events")
-async def api_job_events(job_id: str) -> StreamingResponse:
-    if not get_job(job_id):
+async def api_job_events(job_id: str, owner_id: BrowserOwner) -> StreamingResponse:
+    if not get_owned_job(job_id, owner_id):
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Job not found."})
 
     async def gen():
         last = None
         for _ in range(600):
-            job = get_job(job_id) or {}
-            payload = json.dumps(job)
+            job = get_owned_job(job_id, owner_id)
+            if not job:
+                break
+            payload = json.dumps(_public(job))
             if payload != last:
                 yield f"data: {payload}\n\n"
                 last = payload
@@ -478,8 +556,8 @@ async def api_job_events(job_id: str) -> StreamingResponse:
 
 
 @app.get("/api/jobs/{job_id}/download")
-def api_job_download(job_id: str) -> FileResponse:
-    job = get_job(job_id)
+def api_job_download(job_id: str, owner_id: BrowserOwner) -> FileResponse:
+    job = get_owned_job(job_id, owner_id)
     if not job:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Job not found."})
     if job.get("status") != "done":

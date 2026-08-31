@@ -7,8 +7,10 @@ from zipfile import ZipFile
 
 import numpy as np
 import tifffile
+from fastapi.testclient import TestClient
 from PIL import Image
 
+from nd2utils.main import SESSION_COOKIE, app
 from nd2utils.nd2io import close_all, open_nd2
 
 
@@ -220,3 +222,70 @@ def test_projection_without_z(client, sample_dir: Path):
     r = client.get(f"/api/files/{files[0]['id']}/projection?axis=Z")
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "no_axis"
+
+
+def test_browser_sessions_isolate_uploads_files_and_jobs(client, sample_dir: Path):
+    sample = sorted(sample_dir.glob("*.nd2"))[0]
+    uploaded = client.post(
+        "/api/files",
+        files={"file": (sample.name, sample.read_bytes(), "application/octet-stream")},
+    )
+    assert uploaded.status_code == 200
+    assert "_owner" not in uploaded.json()
+    file_id = uploaded.json()["id"]
+    owner_cookie = client.cookies.get(SESSION_COOKIE)
+    assert owner_cookie
+    assert "HttpOnly" in uploaded.headers.get("set-cookie", "")
+    assert "SameSite=lax" in uploaded.headers.get("set-cookie", "")
+
+    export = client.post(
+        "/api/export",
+        json={"file_ids": [file_id], "format": "tiff", "scope": "current", "channels_mode": "composite"},
+    )
+    assert export.status_code == 200
+    job_id = export.json()["id"]
+    owner_job = client.get(f"/api/jobs/{job_id}")
+    assert owner_job.status_code == 200
+    assert "_owner" not in owner_job.json()
+    assert client.get(f"/api/jobs/{job_id}/download").status_code == 200
+
+    chunk_init = client.post("/api/uploads/init", json={"filename": "large.nd2", "size": 3})
+    assert chunk_init.status_code == 200
+    upload_id = chunk_init.json()["upload_id"]
+
+    with TestClient(app) as other:
+        assert other.get("/api/health").status_code == 200
+        assert other.cookies.get(SESSION_COOKIE)
+        assert other.cookies.get(SESSION_COOKIE) != owner_cookie
+        assert other.get("/api/files").json()["files"] == []
+        assert other.get(f"/api/files/{file_id}").status_code == 404
+        for suffix in ("preview", "plane", "histogram", "autoscale", "projection", "tiles", "orthogonal"):
+            assert other.get(f"/api/files/{file_id}/{suffix}").status_code == 404
+        assert other.post(
+            f"/api/files/{file_id}/measure",
+            json={"tool": "point", "points": [[0, 0]]},
+        ).status_code == 404
+        assert other.delete(f"/api/files/{file_id}").status_code == 404
+        denied_export = other.post(
+            "/api/export",
+            json={"file_ids": [file_id], "format": "tiff", "scope": "current", "channels_mode": "composite"},
+        )
+        assert denied_export.status_code == 404
+        assert other.get("/api/jobs").json()["jobs"] == []
+        assert other.get(f"/api/jobs/{job_id}").status_code == 404
+        assert other.get(f"/api/jobs/{job_id}/events").status_code == 404
+        assert other.get(f"/api/jobs/{job_id}/download").status_code == 404
+        denied_chunk = other.put(
+            f"/api/uploads/{upload_id}/chunk?offset=0",
+            files={"file": ("chunk", b"abc", "application/octet-stream")},
+        )
+        assert denied_chunk.status_code == 404
+        assert other.post(f"/api/uploads/{upload_id}/complete").status_code == 404
+
+    assert [item["id"] for item in client.get("/api/files").json()["files"]] == [file_id]
+    assert [item["id"] for item in client.get("/api/jobs").json()["jobs"]] == [job_id]
+    accepted_chunk = client.put(
+        f"/api/uploads/{upload_id}/chunk?offset=0",
+        files={"file": ("chunk", b"abc", "application/octet-stream")},
+    )
+    assert accepted_chunk.status_code == 200

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from nd2utils.export_jobs import _archive_name, _coord_tag, _export_filename, _safe_stem
+import numpy as np
+import tifffile
+
+from nd2utils.export_jobs import _archive_name, _coord_tag, _export_filename, _safe_stem, _write_display_tiff
 
 
 def test_safe_stem_strips_extension_and_odd_chars():
@@ -34,3 +37,17 @@ def test_archive_name_uses_stems_format_and_timestamp():
     assert "MB2310345_MB2310344_OME-TIFF_" in two
     many = _archive_name(["A", "B", "C"], "png", created, "abc123def")
     assert many.startswith("A_and_2_more_PNG_")
+
+
+def test_display_tiff_scales_normalized_float_rgb(tmp_path):
+    rgb = np.zeros((12, 12, 3), dtype=np.float32)
+    rgb[..., 1] = 0.75
+    path = tmp_path / "normalized.tif"
+
+    _write_display_tiff(path, rgb)
+
+    saved = tifffile.imread(path)
+    assert saved.dtype == np.uint8
+    assert saved.shape == (12, 12, 3)
+    assert int(saved[..., 1].max()) >= 190
+    assert int(saved[..., 0].max()) == 0
