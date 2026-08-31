@@ -3,7 +3,15 @@ from __future__ import annotations
 import numpy as np
 import tifffile
 
-from nd2utils.export_jobs import _archive_name, _coord_tag, _export_filename, _safe_stem, _write_display_tiff
+from nd2utils.export_jobs import (
+    _archive_name,
+    _coord_tag,
+    _export_filename,
+    _safe_stem,
+    _significant_bits,
+    _write_display_tiff,
+)
+from nd2utils.nd2io import open_nd2
 
 
 def test_safe_stem_strips_extension_and_odd_chars():
@@ -51,3 +59,8 @@ def test_display_tiff_scales_normalized_float_rgb(tmp_path):
     assert saved.shape == (12, 12, 3)
     assert int(saved[..., 1].max()) >= 190
     assert int(saved[..., 0].max()) == 0
+
+
+def test_significant_bits_falls_back_to_nd2_attributes(sample_dir):
+    handle = open_nd2(sorted(sample_dir.glob("*.nd2"))[0])
+    assert _significant_bits({"bits_significant": None}, handle) == 12

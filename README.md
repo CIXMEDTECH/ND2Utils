@@ -39,6 +39,7 @@ docker compose up -d
 3. 高级模式：通道 LUT、直方图、比例尺、Z/T 投影与切片（无该维度时会提示）、直线/ROI 测量。
 
 TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF。
+OME-TIFF 导出包同时包含文件名带 `DISPLAY` 的 8 位预览 TIFF；预览图用于系统看图和演示，`.ome.tif` 与原始通道 TIFF 用于定量分析。
 
 文件、预览和导出记录按浏览器会话隔离；同一浏览器的标签页共享数据，不同浏览器或无痕窗口互不可见。这是匿名会话隔离，不等同于账号登录，公开部署仍应放在带身份认证的反向代理后面。
 
@@ -60,5 +61,6 @@ Open http://localhost:8080. Persistent data is stored directly in the host direc
 
 - Large files are read plane-by-plane. Do not expect the whole T×Z cube in RAM.
 - OME-TIFF keeps native bit depth. TIFF / PNG / JPEG apply the on-screen LUT and are 8-bit.
+- OME-TIFF exports also include bright 8-bit TIFF companions marked `DISPLAY`; use those for ordinary viewers and the raw `.ome.tif`/channel TIFF files for analysis.
 - Files, previews, and export jobs are isolated by browser session. This is anonymous session isolation rather than account authentication; public deployments should still use an authenticating reverse proxy.
 - The local `ND2demo/` directory is a development-only fixture and is not included in git. The application does not read it at runtime, and Docker excludes it from the build context.

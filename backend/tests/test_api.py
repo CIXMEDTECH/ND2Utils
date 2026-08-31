@@ -154,12 +154,21 @@ def test_export_ome_tiff_and_png_batch(client, sample_dir: Path):
     assert "MB2310344" in joined
     assert "MB2310345" in joined
     tif_name = next(n for n in names if n.endswith(".ome.tif"))
-    arr = tifffile.imread(zf.open(tif_name))
+    with tifffile.TiffFile(zf.open(tif_name)) as tif:
+        arr = tif.asarray()
+        assert tif.ome_metadata and 'SignificantBits="12"' in tif.ome_metadata
     assert arr.dtype == np.uint16
     assert arr.ndim in (2, 3)
     if arr.ndim == 3:
         assert arr.shape[0] == 3
     assert int(arr.max()) > 0
+    display_name = next(n for n in names if n.endswith("_DISPLAY.tif"))
+    display = tifffile.imread(zf.open(display_name))
+    assert display.dtype == np.uint8
+    assert display.ndim == 3 and display.shape[-1] == 3
+    assert int(display.max()) > 40
+    assert float(display.mean()) > 1.0
+    assert any(n.endswith("README_DISPLAY_FILES.txt") for n in names)
 
     r2 = client.post(
         "/api/export",

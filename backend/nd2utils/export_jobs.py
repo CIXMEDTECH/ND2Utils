@@ -179,6 +179,19 @@ def _write_ome_tiff(
     tifffile.imwrite(path, arr, **kwargs)
 
 
+def _significant_bits(meta: dict, handle: object) -> int | None:
+    value = meta.get("bits_significant")
+    if not value:
+        nd = getattr(handle, "nd", None)
+        attributes = getattr(nd, "attributes", None)
+        value = getattr(attributes, "bitsPerComponentSignificant", None)
+    try:
+        bits = int(value)
+    except (TypeError, ValueError):
+        return None
+    return bits if bits > 0 else None
+
+
 def _save_display(path: Path, rgb: np.ndarray, fmt: str, jpeg_quality: int, voxel: list[float] | None) -> None:
     rgb8 = _as_rgb8(rgb)
     if fmt == "png":
@@ -239,7 +252,9 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
             names = [c.get("name") or f"C{i}" for i, c in enumerate(channels)]
             colors = [c.get("color") or [255, 255, 255] for c in channels]
             voxel = meta.get("voxel_um") or [1, 1, 1]
-            bits_sig = meta.get("bits_significant")
+            bits_sig = _significant_bits(meta, handle)
+            if bits_sig and not meta.get("bits_significant"):
+                meta = {**meta, "bits_significant": bits_sig}
             coords_list = (
                 list(iter_coords(sizes))
                 if req.scope == "all"
@@ -262,6 +277,29 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                         dest = folder / _export_filename(stem, tag=tag, role=composite_role, ext="ome.tif")
                         _write_ome_tiff(dest, planes, names, colors, voxel, bits_sig)
                         written.append(dest)
+
+                    # Raw OME-TIFF pixels must stay unchanged for quantification. Add clearly
+                    # labelled 8-bit companions so ordinary image viewers do not show black files.
+                    vis = req.visible
+                    rgb = composite_rgb(planes, luts, colors, vis)
+                    if req.scale_bar and voxel and voxel[0]:
+                        rgb = draw_scale_bar(rgb, float(voxel[0]))
+                    if req.channels_mode in ("composite", "both"):
+                        preview_role = "DISPLAY_composite" if composite_role else "DISPLAY"
+                        dest = folder / _export_filename(stem, tag=tag, role=preview_role, ext="tif")
+                        _write_display_tiff(dest, rgb, voxel)
+                        written.append(dest)
+                    if req.channels_mode in ("split", "both"):
+                        for i, plane in enumerate(planes):
+                            lut = luts[i]
+                            fallback_color = colors[i] if i < len(colors) else [255, 255, 255]
+                            ch_rgb = composite_rgb([plane], [lut], [lut.color or fallback_color], [True])
+                            if req.scale_bar and voxel and voxel[0]:
+                                ch_rgb = draw_scale_bar(ch_rgb, float(voxel[0]))
+                            ch_name = _safe_stem(names[i] if i < len(names) else f"C{i}")
+                            dest = folder / _export_filename(stem, tag=tag, role=f"DISPLAY_{ch_name}", ext="tif")
+                            _write_display_tiff(dest, ch_rgb, voxel)
+                            written.append(dest)
                 else:
                     vis = req.visible
                     rgb = composite_rgb(planes, luts, colors, vis)
@@ -275,7 +313,8 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                     if req.channels_mode in ("split", "both"):
                         for i, plane in enumerate(planes):
                             lut = luts[i]
-                            ch_rgb = composite_rgb([plane], [lut], [lut.color or colors[i]], [True])
+                            fallback_color = colors[i] if i < len(colors) else [255, 255, 255]
+                            ch_rgb = composite_rgb([plane], [lut], [lut.color or fallback_color], [True])
                             if req.scale_bar and voxel and voxel[0]:
                                 ch_rgb = draw_scale_bar(ch_rgb, float(voxel[0]))
                             ch_name = _safe_stem(names[i] if i < len(names) else f"C{i}")
@@ -284,6 +323,17 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                             written.append(dest)
                 rec["progress"] = 0.05 + 0.85 * ((fi + (ci + 1) / n_coords) / total)
                 upsert_job(rec)
+            if write_raw:
+                note = folder / "README_DISPLAY_FILES.txt"
+                note.write_text(
+                    "Files containing DISPLAY are 8-bit previews for ordinary image viewers and presentations; "
+                    "do not use them for quantification. The .ome.tif and channel TIFF files retain the original "
+                    "pixel values for analysis.\n\n"
+                    "文件名含 DISPLAY 的 TIFF 是供普通看图软件和演示使用的 8 位预览图，请勿用于定量分析。"
+                    ".ome.tif 和通道 TIFF 保留原始像素值，供分析使用。\n",
+                    encoding="utf-8",
+                )
+                written.append(note)
             if req.include_metadata:
                 sidecar = folder / _export_filename(stem, role="metadata", ext="json")
                 sidecar.write_text(
