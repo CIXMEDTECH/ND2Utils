@@ -31,7 +31,7 @@ export function ExportPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const display = format === "png" || format === "jpeg";
+  const display = format === "png" || format === "jpeg" || format === "tiff";
 
   async function run() {
     if (!fileIds.length || busy) return;
@@ -76,13 +76,13 @@ export function ExportPanel({
 
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
-          key={display ? "display" : "raw"}
+          key={format}
           initial={reduce ? false : { opacity: 0, y: 5 }}
           animate={{ opacity: 1, y: 0 }}
           exit={reduce ? undefined : { opacity: 0, y: -4 }}
           transition={{ duration: 0.18 }}
         >
-          <Guide title="export" body={display ? "displayWarn" : "omeHint"} />
+          <Guide title="export" body={format === "ome-tiff" ? "omeHint" : format === "tiff" ? "tiffHint" : "displayWarn"} />
         </motion.div>
       </AnimatePresence>
 

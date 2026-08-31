@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
 
+import numpy as np
 import tifffile
 from PIL import Image
 
@@ -137,22 +138,26 @@ def test_export_ome_tiff_and_png_batch(client, sample_dir: Path):
     job_id = r.json()["id"]
     job = client.get(f"/api/jobs/{job_id}")
     assert job.status_code == 200
-    assert job.json()["status"] == "done"
+    body = job.json()
+    assert body["status"] == "done"
+    assert "OME-TIFF" in (body.get("download_name") or "")
+    assert "MB2310343" in (body.get("download_name") or "")
     dl = client.get(f"/api/jobs/{job_id}/download")
     assert dl.status_code == 200
     zf = ZipFile(BytesIO(dl.content))
     names = zf.namelist()
-    assert any(n.endswith(".ome.tif") or n.endswith(".tif") for n in names)
-    stems = {Path(n).parts[0] for n in names if "/" in n or True}
+    assert any(n.endswith(".ome.tif") for n in names)
     joined = " ".join(names)
     assert "MB2310343" in joined
     assert "MB2310344" in joined
     assert "MB2310345" in joined
-    tif_name = next(n for n in names if n.endswith(".tif"))
+    tif_name = next(n for n in names if n.endswith(".ome.tif"))
     arr = tifffile.imread(zf.open(tif_name))
+    assert arr.dtype == np.uint16
     assert arr.ndim in (2, 3)
     if arr.ndim == 3:
         assert arr.shape[0] == 3
+    assert int(arr.max()) > 0
 
     r2 = client.post(
         "/api/export",
@@ -160,12 +165,54 @@ def test_export_ome_tiff_and_png_batch(client, sample_dir: Path):
     )
     job2 = client.get(f"/api/jobs/{r2.json()['id']}").json()
     assert job2["status"] == "done"
+    assert "PNG" in (job2.get("download_name") or "")
     dl2 = client.get(f"/api/jobs/{job2['id']}/download")
     z2 = ZipFile(BytesIO(dl2.content))
     png_name = next(n for n in z2.namelist() if n.endswith(".png"))
     img = Image.open(z2.open(png_name))
     assert img.mode in ("RGB", "P", "RGBA")
     assert img.size[0] >= 512
+
+
+def test_export_tiff_is_viewable_rgb(client, sample_dir: Path):
+    files = _upload_samples(client, sample_dir)
+    fid = files[0]["id"]
+    r = client.post(
+        "/api/export",
+        json={
+            "file_ids": [fid],
+            "format": "tiff",
+            "scope": "current",
+            "channels_mode": "both",
+            "scale_bar": False,
+            "include_metadata": True,
+        },
+    )
+    assert r.status_code == 200
+    job = client.get(f"/api/jobs/{r.json()['id']}").json()
+    assert job["status"] == "done"
+    assert "TIFF" in (job.get("download_name") or "")
+    assert Path(files[0]["name"]).stem in (job.get("download_name") or "")
+    dl = client.get(f"/api/jobs/{job['id']}/download")
+    zf = ZipFile(BytesIO(dl.content))
+    names = zf.namelist()
+    tifs = [n for n in names if n.endswith(".tif") and not n.endswith(".ome.tif")]
+    assert any(n.endswith("_composite.tif") for n in tifs)
+    assert any("_DAPI.tif" in n for n in tifs)
+    assert any("_FITC.tif" in n for n in tifs)
+    assert any("_TRITC.tif" in n for n in tifs)
+    assert any(n.endswith("_metadata.json") for n in names)
+    composite = next(n for n in tifs if n.endswith("_composite.tif"))
+    arr = tifffile.imread(zf.open(composite))
+    assert arr.dtype == np.uint8
+    assert arr.ndim == 3
+    assert arr.shape[-1] == 3
+    assert arr.max() > 40
+    assert float(arr.mean()) > 1.0
+    with tifffile.TiffFile(zf.open(composite)) as tif:
+        page = tif.pages[0]
+        assert page.photometric == 2
+        assert page.bitspersample in (8, (8, 8, 8))
 
 
 def test_projection_without_z(client, sample_dir: Path):

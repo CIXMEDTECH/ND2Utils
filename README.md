@@ -38,7 +38,7 @@ docker compose up -d
 2. 工作区：预览、元信息、勾选文件后导出。
 3. 高级模式：通道 LUT、直方图、比例尺、Z/T 投影与切片（无该维度时会提示）、直线/ROI 测量。
 
-JPEG / PNG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF。
+TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF。
 
 
 ## English
@@ -57,5 +57,5 @@ Open http://localhost:8080. Persistent data is stored directly in the host direc
 ### Notes
 
 - Large files are read plane-by-plane. Do not expect the whole T×Z cube in RAM.
-- OME-TIFF keeps native bit depth. PNG/JPEG apply the on-screen LUT and are 8-bit.
+- OME-TIFF keeps native bit depth. TIFF / PNG / JPEG apply the on-screen LUT and are 8-bit.
 - The local `ND2demo/` directory is a development-only fixture and is not included in git. The application does not read it at runtime, and Docker excludes it from the build context.
