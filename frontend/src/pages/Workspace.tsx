@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, Copy, File as FileIcon, MagnifyingGlass, Trash, X } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -9,11 +9,19 @@ import { Glass } from "../components/Glass";
 import { Shell } from "../components/Shell";
 import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
-import { deleteFile, getFile, previewUrl } from "../lib/api";
+import { deleteFile, fetchPlane, getFile } from "../lib/api";
 import { axisSize, detailMessage, formatBytes, formatUm, rgbCss } from "../lib/format";
+import { autoscaleLimits, createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
+import type { LutSetting, PackedPlane } from "../lib/types";
 import { useApp } from "../store";
 
 type WorkspaceTab = "identify" | "metadata" | "export";
+
+interface LocalPreview {
+  fileId: string;
+  dimensions: Pick<PackedPlane, "width" | "height">;
+  layers: ReturnType<typeof createPreviewLayers>;
+}
 
 const WORKSPACE_TABS: { key: WorkspaceTab; label: WorkspaceTab }[] = [
   { key: "identify", label: "identify" },
@@ -41,8 +49,11 @@ export function Workspace() {
   const [scaleBar, setScaleBar] = useState(true);
   const [visible, setVisible] = useState<boolean[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [localPreview, setLocalPreview] = useState<LocalPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     void refreshFiles().catch((err) => setError(detailMessage(err, lang)));
@@ -91,17 +102,67 @@ export function Workspace() {
     () => selected?.channels.map((_, index) => visible[index] ?? true) ?? [],
     [selected, visible],
   );
-  const preview = useMemo(
-    () =>
-      selected
-        ? previewUrl(selected.id, {
-            composite,
-            scale_bar: scaleBar,
-            visible: channelVisible,
-          })
-        : null,
-    [channelVisible, composite, scaleBar, selected],
-  );
+  const previewReady = Boolean(selected && localPreview?.fileId === selected.id);
+
+  useEffect(() => {
+    if (!selected) {
+      setLocalPreview(null);
+      setLoadingPreview(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    const file = selected;
+    setLoadingPreview(true);
+    void fetchPlane(file.id, 0, 0, 0, controller.signal)
+      .then((buffer) => {
+        if (cancelled) return;
+        const packed = unpackPlane(buffer);
+        const luts: LutSetting[] = packed.channels.map((channel, index) => {
+          const [min, autoMax] = autoscaleLimits(channel.data);
+          const metadata = file.channels[index];
+          const fileMax = metadata?.lut_max;
+          return {
+            min,
+            max: fileMax ? Math.min(autoMax, fileMax) : autoMax,
+            gamma: metadata?.lut_gamma || 1,
+            visible: true,
+            color: metadata?.color ?? channel.color,
+          };
+        });
+        const layers = createPreviewLayers(packed, luts);
+        if (!cancelled) {
+          setLocalPreview({
+            fileId: file.id,
+            dimensions: { width: packed.width, height: packed.height },
+            layers,
+          });
+        }
+      })
+      .catch((err) => {
+        if (!cancelled && !(err instanceof DOMException && err.name === "AbortError")) {
+          setError(detailMessage(err, lang));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPreview(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [lang, selected?.id]);
+
+  useLayoutEffect(() => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas || !selected || localPreview?.fileId !== selected.id) return;
+    drawPreview(canvas, localPreview.dimensions, localPreview.layers, {
+      composite,
+      scaleBar,
+      visible: channelVisible,
+      umPerPixel: Number(selected.voxel_um?.[0] || 0),
+    });
+  }, [channelVisible, composite, localPreview, scaleBar, selected]);
   const selectedIds = files.filter((file) => checked[file.id]).map((file) => file.id);
   const exportIds = selectedIds.length ? selectedIds : selected ? [selected.id] : [];
   const allChecked = files.length > 0 && files.every((file) => checked[file.id]);
@@ -257,7 +318,20 @@ export function Workspace() {
         </Glass>
 
         <main className="min-h-[430px] bg-[var(--well)]">
-          <ZoomStage src={preview} alt={t(lang, "previewAlt")}>
+          <ZoomStage
+            src={null}
+            alt={t(lang, "previewAlt")}
+            mediaReady={previewReady}
+            mediaLoading={loadingPreview}
+            media={
+              <canvas
+                ref={previewCanvasRef}
+                role="img"
+                aria-label={t(lang, "previewAlt")}
+                className="block max-h-none max-w-none"
+              />
+            }
+          >
             <Glass tone="dark" shape="chip" className="absolute left-3 top-3 flex gap-1 overflow-visible p-1">
               {([
                 ["overlay", composite, () => setComposite(true)],

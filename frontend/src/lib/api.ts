@@ -76,8 +76,8 @@ export function previewUrl(
   return `/api/files/${id}/preview?${q.toString()}`;
 }
 
-export async function fetchPlane(id: string, t = 0, z = 0, p = 0): Promise<ArrayBuffer> {
-  const res = await fetch(`/api/files/${id}/plane?t=${t}&z=${z}&p=${p}`);
+export async function fetchPlane(id: string, t = 0, z = 0, p = 0, signal?: AbortSignal): Promise<ArrayBuffer> {
+  const res = await fetch(`/api/files/${id}/plane?t=${t}&z=${z}&p=${p}`, { signal });
   if (!res.ok) throw await parseError(res);
   return res.arrayBuffer();
 }

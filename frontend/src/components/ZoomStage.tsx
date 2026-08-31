@@ -15,10 +15,16 @@ export function ZoomStage({
   src,
   alt,
   children,
+  media,
+  mediaReady = false,
+  mediaLoading,
 }: {
   src: string | null;
   alt: string;
   children?: React.ReactNode;
+  media?: React.ReactNode;
+  mediaReady?: boolean;
+  mediaLoading?: boolean;
 }) {
   const lang = useApp((s) => s.lang);
   const reduce = useReducedMotion();
@@ -31,6 +37,8 @@ export function ZoomStage({
   const stageRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  const previewReady = mediaReady || Boolean(loadedSrc);
+  const previewLoading = mediaLoading ?? loading;
 
   useEffect(() => {
     if (!src) {
@@ -79,13 +87,13 @@ export function ZoomStage({
     const element = stageRef.current;
     if (!element) return;
     const onWheel = (event: WheelEvent) => {
-      if (!src) return;
+      if (!previewReady) return;
       event.preventDefault();
       setClampedZoom(zoomRef.current * (event.deltaY > 0 ? 0.9 : 1.1));
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
-  }, [src]);
+  }, [previewReady]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -122,13 +130,13 @@ export function ZoomStage({
 
       <div
         ref={stageRef}
-        className={`relative min-h-0 flex-1 overflow-hidden bg-[var(--well)] ${src ? (dragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
+        className={`relative min-h-0 flex-1 overflow-hidden bg-[var(--well)] ${previewReady ? (dragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
         onDoubleClick={(event) => {
           if (isControlTarget(event.target)) return;
           fit();
         }}
         onPointerDown={(event) => {
-          if (!src || event.button !== 0 || isControlTarget(event.target)) return;
+          if (!previewReady || event.button !== 0 || isControlTarget(event.target)) return;
           event.currentTarget.setPointerCapture(event.pointerId);
           drag.current = { x: event.clientX, y: event.clientY, px: pan.x, py: pan.y };
           setDragging(true);
@@ -143,7 +151,18 @@ export function ZoomStage({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-        {loadedSrc ? (
+        {mediaReady && media ? (
+          <div
+            className="pointer-events-none absolute left-1/2 top-1/2 max-h-none max-w-none select-none will-change-transform"
+            style={{
+              transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: "center center",
+              transition: dragging || reduce ? "none" : "transform 180ms cubic-bezier(0.16, 1, 0.3, 1)",
+            }}
+          >
+            {media}
+          </div>
+        ) : loadedSrc ? (
           <img
             src={loadedSrc}
             alt={alt}
@@ -157,12 +176,12 @@ export function ZoomStage({
           />
         ) : (
           <div className="flex h-full items-center justify-center px-8 text-center text-[13px] leading-5 text-white/38">
-            {t(lang, src ? "previewLoading" : "noneSelected")}
+            {t(lang, src || mediaLoading ? "previewLoading" : "noneSelected")}
           </div>
         )}
 
         <AnimatePresence>
-          {loading && (
+          {previewLoading && (
             <motion.div
               role="status"
               initial={{ opacity: 0 }}
