@@ -107,8 +107,12 @@ export const useUploads = create<UploadState>((set, get) => ({
     }
     try {
       set({ progress: { label: t(lang, "indexing"), ratio: null } });
-      await useApp.getState().refreshFiles();
-      if (lastId) useApp.getState().select(lastId);
+      const app = useApp.getState();
+      await app.refreshFiles();
+      if (lastId) {
+        app.select(lastId);
+        app.reveal(useApp.getState().files.find((f) => f.id === lastId)?.folder ?? target);
+      }
     } catch (err) {
       firstError ??= detailMessage(err, lang);
     } finally {

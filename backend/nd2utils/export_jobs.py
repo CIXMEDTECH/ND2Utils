@@ -16,7 +16,7 @@ from nd2utils.jsonutil import jsonable
 from nd2utils.models import ExportRequest
 from nd2utils.nd2io import axis_size, extract_channels, iter_coords, open_nd2
 from nd2utils.render import build_luts, composite_rgb, draw_scale_bar, encode_image
-from nd2utils.store import get_owned_file, get_owned_job, source_path, upsert_job
+from nd2utils.store import get_file_detail, get_owned_job, source_path, upsert_job
 
 _FORMAT_LABELS = {
     "ome-tiff": "OME-TIFF",
@@ -294,7 +294,7 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
     write_raw = req.format == "ome-tiff" and not req.burn_lut
     try:
         for fi, file_id in enumerate(req.file_ids):
-            meta = get_owned_file(file_id, owner_id)
+            meta = get_file_detail(file_id, owner_id)
             if not meta:
                 raise FileNotFoundError(f"Unknown file {file_id}")
             rec["message"] = f"Exporting {meta.get('name') or file_id}"

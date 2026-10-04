@@ -45,6 +45,8 @@ export interface FileSummary {
   bits_significant: number | null;
   is_rgb: boolean;
   created_at: number | null;
+  /** Background preparation of the preview after import. */
+  prepare?: "pending" | "ready" | "error" | null;
 }
 
 export interface FileDetail extends FileSummary {

@@ -93,6 +93,24 @@ export async function deleteCode(id: string) {
   return json(await send(`/api/admin/codes/${id}`, "DELETE"));
 }
 
+export async function adminWorkspace(codeId: string): Promise<{ files: FileSummary[]; folders: string[] }> {
+  return json(await fetch(`/api/admin/workspaces/${codeId}`));
+}
+
+export async function adminTransfer(body: {
+  source: string;
+  target: string;
+  file_ids: string[];
+  folders: string[];
+  target_folder: string;
+  mode: "copy" | "move";
+  conflict: "skip" | "replace";
+}) {
+  return json<{ copied: number; moved: number; skipped: number; replaced: number }>(
+    await send("/api/admin/transfer", "POST", body),
+  );
+}
+
 export async function listWorkspace(): Promise<{ files: FileSummary[]; folders: string[] }> {
   return json(await fetch("/api/files"));
 }
@@ -142,6 +160,37 @@ export function previewUrl(
     q.set("visible", opts.visible.map((value) => (value ? "1" : "0")).join(","));
   }
   return `/api/files/${id}/preview?${q.toString()}`;
+}
+
+// Recently viewed / prefetched previews. Each entry is a few MB at most (8-bit channels).
+const DISPLAY_CACHE_LIMIT = 12;
+const displayCache = new Map<string, Promise<ArrayBuffer>>();
+
+/**
+ * 8-bit, already auto-contrasted channels of the first plane (prepared by the server at import).
+ * Results are kept in memory, so going back to a file, or one that was prefetched, is instant.
+ */
+export function fetchDisplay(id: string): Promise<ArrayBuffer> {
+  const hit = displayCache.get(id);
+  if (hit) {
+    displayCache.delete(id);
+    displayCache.set(id, hit);
+    return hit;
+  }
+  const request = fetch(`/api/files/${id}/display`).then(async (res) => {
+    if (!res.ok) throw await parseError(res);
+    return res.arrayBuffer();
+  });
+  displayCache.set(id, request);
+  request.catch(() => displayCache.delete(id));
+  while (displayCache.size > DISPLAY_CACHE_LIMIT) {
+    displayCache.delete(displayCache.keys().next().value as string);
+  }
+  return request;
+}
+
+export function prefetchDisplay(ids: string[]) {
+  for (const id of ids) void fetchDisplay(id).catch(() => undefined);
 }
 
 export async function fetchPlane(id: string, t = 0, z = 0, p = 0, signal?: AbortSignal): Promise<ArrayBuffer> {

@@ -14,15 +14,8 @@ export function folderInputId(inputId: string) {
   return `${inputId}-folder`;
 }
 
-export function DropZone({
-  compact = false,
-  inputId = "nd2-upload",
-}: {
-  compact?: boolean;
-  inputId?: string;
-}) {
+export function DropZone({ inputId = "nd2-upload" }: { inputId?: string }) {
   const lang = useApp((s) => s.lang);
-  const currentFolder = useApp((s) => s.currentFolder);
   const progress = useUploads((s) => s.progress);
   const error = useUploads((s) => s.error);
   const upload = useUploads((s) => s.upload);
@@ -47,11 +40,7 @@ export function DropZone({
       animate={{ opacity: 1, scale: over ? 1.012 : 1 }}
       whileHover={reduce || progress ? undefined : { scale: 1.006 }}
       transition={{ type: "spring", stiffness: 260, damping: 24 }}
-      className={`drop-zone liquid-glass group relative flex cursor-pointer flex-col items-center justify-center overflow-hidden transition-[border-color,box-shadow,transform] duration-300 focus-within:outline-none focus-within:ring-2 focus-within:ring-[var(--focus)] focus-within:ring-offset-2 focus-within:ring-offset-[var(--bg)] ${
-        compact
-          ? "liquid-glass--card min-h-40"
-          : "liquid-glass--dark liquid-glass--island min-h-[340px] text-[#eef1f2] md:min-h-[420px]"
-      } ${over ? "border-[var(--accent)] shadow-[0_20px_70px_var(--accent-glow)]" : ""}`}
+      className={`drop-zone liquid-glass group relative flex cursor-pointer flex-col items-center justify-center overflow-hidden transition-[border-color,box-shadow,transform] duration-300 focus-within:outline-none focus-within:ring-2 focus-within:ring-[var(--focus)] focus-within:ring-offset-2 focus-within:ring-offset-[var(--bg)] liquid-glass--dark liquid-glass--island min-h-[340px] text-[#eef1f2] md:min-h-[420px] ${over ? "border-[var(--accent)] shadow-[0_20px_70px_var(--accent-glow)]" : ""}`}
       onDragOver={(event) => {
         event.preventDefault();
         setOver(true);
@@ -91,28 +80,26 @@ export function DropZone({
         }}
       />
 
-      {!compact && (
-        <div className="pointer-events-none absolute inset-0" aria-hidden>
-          <div className="stage-grid absolute inset-0 opacity-55" />
-          <div className="drop-orbit drop-orbit-outer" />
-          <div className="drop-orbit drop-orbit-inner" />
-          <div className={`scan-line ${over ? "is-active" : ""}`} />
-        </div>
-      )}
+      <div className="pointer-events-none absolute inset-0" aria-hidden>
+        <div className="stage-grid absolute inset-0 opacity-55" />
+        <div className="drop-orbit drop-orbit-outer" />
+        <div className="drop-orbit drop-orbit-inner" />
+        <div className={`scan-line ${over ? "is-active" : ""}`} />
+      </div>
 
       <div className="relative z-[1] flex max-w-md flex-col items-center px-6 text-center">
         <motion.span
           animate={reduce ? undefined : { y: over ? -5 : [0, -3, 0] }}
           transition={over ? { type: "spring", stiffness: 260, damping: 18 } : { duration: 4, repeat: Infinity, ease: "easeInOut" }}
-          className={`${compact ? "mb-3 h-9 w-9" : "mb-7 h-14 w-14"} flex items-center justify-center rounded-2xl border border-current/15 bg-white/[0.07] text-[var(--accent)] shadow-[inset_0_1px_0_rgb(255_255_255/0.12)]`}
+          className={`mb-7 flex h-14 w-14 items-center justify-center rounded-2xl border border-current/15 bg-white/[0.07] text-[var(--accent)] shadow-[inset_0_1px_0_rgb(255_255_255/0.12)]`}
         >
-          <UploadSimple size={compact ? 19 : 26} weight="duotone" />
+          <UploadSimple size={26} weight="duotone" />
         </motion.span>
 
-        <p className={`font-semibold tracking-[-0.02em] ${compact ? "text-[14px]" : "text-xl"}`}>
+        <p className="text-xl font-semibold tracking-[-0.02em]">
           {over ? t(lang, "dropActive") : t(lang, "drop")}
         </p>
-        <p className={`mt-2 max-w-[38ch] text-[13px] leading-5 ${compact ? "text-[var(--text-dim)]" : "text-white/58"}`}>
+        <p className="mt-2 max-w-[38ch] text-[13px] leading-5 text-white/58">
           {t(lang, "dropHint")}
         </p>
         <button
@@ -123,16 +110,11 @@ export function DropZone({
             event.stopPropagation();
             document.getElementById(folderInputId(inputId))?.click();
           }}
-          className={`mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors ${compact ? "text-[var(--accent)] hover:bg-[var(--accent-soft)]" : "text-[var(--accent)] hover:bg-white/10"}`}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium text-[var(--accent)] transition-colors hover:bg-white/10"
         >
           <FolderSimplePlus size={15} weight="duotone" />
           {t(lang, "chooseFolder")}
         </button>
-        {compact && (
-          <p className="mt-1 max-w-full truncate font-mono text-[10px] text-[var(--text-dim)]" title={currentFolder || t(lang, "workspaceRoot")}>
-            {t(lang, "uploadTarget")} /{currentFolder}
-          </p>
-        )}
 
         <AnimatePresence mode="wait" initial={false}>
           {progress && (

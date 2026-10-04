@@ -478,3 +478,165 @@ def test_frontend_cache_headers(anon):
 def test_api_responses_are_not_cacheable(anon):
     assert anon.get("/api/auth/me").headers["cache-control"] == "no-store"
     assert anon.get("/api/files").headers["cache-control"] == "no-store"
+
+
+# --- background preparation ---------------------------------------------------
+
+
+def test_import_prepares_previews_in_background(client, sample_files):
+    from nd2utils import prepare
+    from nd2utils.nd2io import PLANE_MAGIC
+    from nd2utils.store import load_index
+
+    rec = _upload(client, sample_files[0])
+    assert rec["prepare"] == "pending"
+    prepare.wait_idle()
+    listed = client.get("/api/files").json()["files"][0]
+    assert listed["prepare"] == "ready"
+    assert prepare.is_prepared(rec["id"])
+
+    # Heavy metadata is kept out of index.json but still served in the detail view.
+    assert "text_info" not in load_index()[rec["id"]]
+    assert "text_info" in client.get(f"/api/files/{rec['id']}").json()
+
+    display = client.get(f"/api/files/{rec['id']}/display")
+    assert display.status_code == 200
+    assert display.headers["content-encoding"] == "gzip"
+    body = display.content
+    assert body[:4] == PLANE_MAGIC
+    assert body[16] == 0  # uint8 channels, already contrast-mapped
+    n, h, w = int.from_bytes(body[6:8], "little"), int.from_bytes(body[8:12], "little"), int.from_bytes(body[12:16], "little")
+    assert n == 2 and (w, h) == (rec["width"], rec["height"])
+    first = np.frombuffer(body, dtype=np.uint8, count=h * w, offset=20 + 44)
+    assert first.max() >= 250 and first.mean() > 1
+
+    plane = client.get(f"/api/files/{rec['id']}/plane")
+    assert plane.headers["content-encoding"] == "gzip"
+    assert plane.content[16] == 1 and len(plane.content) == 20 + 2 * (44 + h * w * 2)
+    scaled = client.get(f"/api/files/{rec['id']}/autoscale").json()["channels"]
+    assert len(scaled) == 2 and scaled[0]["max"] > scaled[0]["min"]
+    # Positions other than the first plane are computed on demand.
+    assert client.get(f"/api/files/{rec['id']}/display?t=3").status_code == 200
+
+
+def test_unprepared_file_is_built_on_first_view(client, sample_files):
+    import shutil as _shutil
+
+    from nd2utils import prepare
+
+    rec = _upload(client, sample_files[0])
+    prepare.wait_idle()
+    _shutil.rmtree(settings.cache_dir / rec["id"])
+    assert client.get(f"/api/files/{rec['id']}/display").status_code == 200
+    assert prepare.is_prepared(rec["id"])
+
+
+def test_migrate_index_moves_metadata_out(client, sample_files):
+    from nd2utils import jsoncache
+    from nd2utils.store import load_index, migrate_index, save_index
+
+    rec = _upload(client, sample_files[0])
+    index = load_index()
+    index[rec["id"]] = {**index[rec["id"]], "text_info": {"legacy": "yes"}}
+    save_index(index)
+    jsoncache.forget(settings.index_path)
+    migrate_index()
+    assert "text_info" not in load_index()[rec["id"]]
+    assert client.get(f"/api/files/{rec['id']}").json()["text_info"] == {"legacy": "yes"}
+
+
+# --- admin transfer -----------------------------------------------------------
+
+
+def test_admin_copy_and_move_between_workspaces(admin, sample_files):
+    from nd2utils import prepare
+
+    a = auth.create_code(label="A", kind="permanent", expires_at=None)
+    b = auth.create_code(label="B", kind="temporary", expires_at=None)
+    with TestClient(app) as ca:
+        login(ca, a["code"])
+        f1 = _upload(ca, sample_files[0], "exp/day 1")
+        f2 = _upload(ca, sample_files[1], "exp/day 2")
+        loose = _upload(ca, sample_files[2], "")
+        ca.post("/api/folders", json={"path": "exp/empty"})
+        prepare.wait_idle()
+
+        listing = admin.get(f"/api/admin/workspaces/{a['id']}").json()
+        assert {f["id"] for f in listing["files"]} == {f1["id"], f2["id"], loose["id"]}
+        with TestClient(app) as user:
+            login(user, auth.create_code(label="x", kind="temporary", expires_at=None)["code"])
+            assert user.get(f"/api/admin/workspaces/{a['id']}").status_code == 403
+            assert user.post("/api/admin/transfer", json={"source": a["id"], "target": b["id"], "folders": ["exp"]}).status_code == 403
+
+        # Copy a folder: it keeps its name and inner structure under the target folder.
+        r = admin.post(
+            "/api/admin/transfer",
+            json={"source": a["id"], "target": b["id"], "folders": ["exp"], "file_ids": [loose["id"]], "target_folder": "from A"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"copied": 3, "moved": 0, "skipped": 0, "replaced": 0}
+        with TestClient(app) as cb:
+            login(cb, b["code"])
+            got = cb.get("/api/files").json()
+            assert sorted((f["folder"], f["name"]) for f in got["files"]) == sorted(
+                [("from A/exp/day 1", f1["name"]), ("from A/exp/day 2", f2["name"]), ("from A", loose["name"])]
+            )
+            assert "from A/exp/empty" in got["folders"]
+            copied = next(f for f in got["files"] if f["name"] == f1["name"])
+            assert copied["id"] != f1["id"]
+            assert cb.get(f"/api/files/{copied['id']}/display").status_code == 200
+            assert "text_info" in cb.get(f"/api/files/{copied['id']}").json()
+        # The source is untouched by a copy, and both copies are independent.
+        assert len(ca.get("/api/files").json()["files"]) == 3
+        assert ca.delete(f"/api/files/{f1['id']}").status_code == 200
+        assert get_owned_file(copied["id"], b["id"]) is not None
+        assert (settings.uploads_dir / copied["id"] / "source.nd2").is_file()
+
+        # Copying again: same names are skipped, or replaced on request.
+        again = {"source": a["id"], "target": b["id"], "folders": ["exp"], "target_folder": "from A"}
+        assert admin.post("/api/admin/transfer", json=again).json()["skipped"] == 1
+        assert admin.post("/api/admin/transfer", json={**again, "conflict": "replace"}).json() == {
+            "copied": 1, "moved": 0, "skipped": 0, "replaced": 1,
+        }
+
+        # Move: the files leave the source workspace together with the folder.
+        r = admin.post("/api/admin/transfer", json={**again, "mode": "move", "conflict": "replace"})
+        assert r.json()["moved"] == 1
+        left = ca.get("/api/files").json()
+        assert [f["id"] for f in left["files"]] == [loose["id"]]
+        assert not any(f.startswith("exp") for f in left["folders"])
+        moved = get_owned_file(f2["id"], b["id"])
+        assert moved and moved["folder"] == "from A/exp/day 2"
+
+
+def test_admin_transfer_within_workspace(admin, sample_files):
+    a = auth.create_code(label="A", kind="permanent", expires_at=None)
+    with TestClient(app) as ca:
+        login(ca, a["code"])
+        f1 = _upload(ca, sample_files[0], "x/y")
+        body = {"source": a["id"], "target": a["id"]}
+        assert admin.post("/api/admin/transfer", json={**body, "folders": ["x"], "target_folder": "x/y", "mode": "move"}).status_code == 400
+        # Copying a file onto itself is a no-op, never a duplicate.
+        r = admin.post("/api/admin/transfer", json={**body, "file_ids": [f1["id"]], "target_folder": "x/y", "conflict": "replace"})
+        assert r.json()["skipped"] == 1
+        r = admin.post("/api/admin/transfer", json={**body, "folders": ["x/y"], "target_folder": "z", "mode": "move"})
+        assert r.json()["moved"] == 1
+        files = ca.get("/api/files").json()
+        assert files["files"][0]["folder"] == "z/y"
+        assert "x/y" not in files["folders"] and "x" in files["folders"]
+        assert admin.post("/api/admin/transfer", json={**body, "folders": ["nope"]}).status_code == 404
+
+
+def test_admin_transfer_whole_workspace(admin, sample_files):
+    a = auth.create_code(label="A", kind="temporary", expires_at=None)
+    b = auth.create_code(label="B", kind="permanent", expires_at=None)
+    with TestClient(app) as ca:
+        login(ca, a["code"])
+        _upload(ca, sample_files[0], "p/q")
+        _upload(ca, sample_files[1], "")
+        body = {"source": a["id"], "folders": [""], "mode": "move"}
+        assert admin.post("/api/admin/transfer", json={**body, "target": a["id"], "target_folder": "x"}).status_code == 400
+        r = admin.post("/api/admin/transfer", json={**body, "target": b["id"], "target_folder": "old A"})
+        assert r.json()["moved"] == 2
+        assert ca.get("/api/files").json() == {"files": [], "folders": []}
+        assert sorted(f["folder"] for f in list_files(b["id"])) == ["old A", "old A/p/q"]

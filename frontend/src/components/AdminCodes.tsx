@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ArrowsClockwise,
+  ArrowsLeftRight,
+  FolderOpen,
   Check,
   Copy,
   Key,
@@ -19,6 +21,7 @@ import type { AccessCode, CodeKind, CodeStatus } from "../lib/types";
 import { useApp } from "../store";
 import { Glass } from "./Glass";
 import { ConfirmDialog } from "./Modal";
+import { TransferDialog, type TransferSeed } from "./TransferDialog";
 
 type ExpiryChoice = "never" | "1" | "7" | "30" | "90" | "custom";
 
@@ -135,7 +138,15 @@ function StatusBadge({ status }: { status: CodeStatus }) {
   return <span className={`rounded-full px-2 py-0.5 text-[10.5px] font-medium ${tone}`}>{t(lang, STATUS_KEY[status])}</span>;
 }
 
-function CodeRow({ code, onChanged }: { code: AccessCode; onChanged: () => Promise<void> }) {
+function CodeRow({
+  code,
+  onChanged,
+  onFiles,
+}: {
+  code: AccessCode;
+  onChanged: () => Promise<void>;
+  onFiles: () => void;
+}) {
   const lang = useApp((s) => s.lang);
   const reduce = useReducedMotion();
   const [editing, setEditing] = useState(false);
@@ -201,6 +212,7 @@ function CodeRow({ code, onChanged }: { code: AccessCode; onChanged: () => Promi
             onClick: () => void run(() => updateCode(code.id, { disabled: !code.disabled })),
           },
           { key: "regen", label: t(lang, "regenerate"), icon: <ArrowsClockwise size={13} />, onClick: () => setConfirm("regenerate") },
+          { key: "files", label: t(lang, "manageFiles"), icon: <FolderOpen size={13} />, onClick: onFiles },
         ].map((action) => (
           <button
             key={action.key}
@@ -302,6 +314,7 @@ export function AdminCodes() {
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<AccessCode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [transferSeed, setTransferSeed] = useState<TransferSeed | null>(null);
 
   const load = useCallback(async () => {
     const res = await listCodes();
@@ -342,6 +355,14 @@ export function AdminCodes() {
           <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "adminEyebrow")}</p>
           <h2 className="mt-1 text-[14px] font-semibold">{t(lang, "adminTitle")}</h2>
           <p className="mt-2 text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "adminIntro")}</p>
+          <button
+            type="button"
+            onClick={() => setTransferSeed({ fileIds: [], folders: [] })}
+            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-3 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            <ArrowsLeftRight size={14} />
+            {t(lang, "transferFiles")}
+          </button>
 
           {admin && (
             <div className="mt-4 rounded-xl bg-[var(--bg)]/60 p-3">
@@ -420,13 +441,28 @@ export function AdminCodes() {
             ) : (
               <ul>
                 {users.map((code) => (
-                  <CodeRow key={code.id} code={code} onChanged={load} />
+                  <CodeRow
+                    key={code.id}
+                    code={code}
+                    onChanged={load}
+                    onFiles={() => setTransferSeed({ source: code.id, fileIds: [], folders: [] })}
+                  />
                 ))}
               </ul>
             )}
           </div>
         </div>
       </div>
+      <TransferDialog
+        open={Boolean(transferSeed)}
+        seed={transferSeed}
+        onClose={() => setTransferSeed(null)}
+        onDone={() => {
+          void load();
+          // The admin's own workspace may have changed too.
+          void useApp.getState().refreshFiles().catch(() => undefined);
+        }}
+      />
     </Glass>
   );
 }

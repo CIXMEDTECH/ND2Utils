@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
@@ -140,6 +141,17 @@ def open_nd2(path: Path) -> OpenNd2:
             _, old = _OPEN.popitem(last=False)
             old.close()
         return handle
+
+
+@contextmanager
+def open_uncached(path: Path) -> Iterator[OpenNd2]:
+    """A private, lazily-read handle (background preparation): it neither evicts the
+    viewer's cached handles nor loads the whole file into memory."""
+    nd = nd2.ND2File(path)
+    try:
+        yield OpenNd2(path=path, nd=nd, sizes=dict(nd.sizes), array=nd.to_dask())
+    finally:
+        nd.close()
 
 
 def close_nd2(path: Path) -> None:

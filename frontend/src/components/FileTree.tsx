@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { CaretRight, DotsThree, Folder, FolderOpen, HardDrives } from "@phosphor-icons/react";
-import { motion, useReducedMotion } from "motion/react";
+import {
+  ArrowsInLineVertical,
+  ArrowsOutLineVertical,
+  CaretRight,
+  DotsThree,
+  Folder,
+  FolderOpen,
+  HardDrives,
+  MagnifyingGlass,
+  SpinnerGap,
+  WarningCircle,
+  X,
+} from "@phosphor-icons/react";
 import { t } from "../i18n";
 import { formatBytes, joinPath, parentPath, rgbCss } from "../lib/format";
 import type { FileSummary } from "../lib/types";
@@ -9,7 +20,7 @@ import { useApp } from "../store";
 
 export type TreeTarget = { type: "folder"; path: string } | { type: "file"; file: FileSummary };
 
-interface FolderNode {
+export interface FolderNode {
   path: string;
   name: string;
   folders: FolderNode[];
@@ -18,7 +29,9 @@ interface FolderNode {
   total: number;
 }
 
-function buildTree(folders: string[], files: FileSummary[]): FolderNode {
+const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, undefined, { numeric: true });
+
+export function buildTree(folders: string[], files: FileSummary[]): FolderNode {
   const root: FolderNode = { path: "", name: "", folders: [], files: [], total: 0 };
   const nodes = new Map<string, FolderNode>([["", root]]);
   const ensure = (path: string): FolderNode => {
@@ -32,8 +45,8 @@ function buildTree(folders: string[], files: FileSummary[]): FolderNode {
   folders.forEach(ensure);
   for (const file of files) ensure(file.folder || "").files.push(file);
   const finish = (node: FolderNode): number => {
-    node.folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    node.files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    node.folders.sort(byName);
+    node.files.sort(byName);
     node.total = node.files.length + node.folders.reduce((sum, child) => sum + finish(child), 0);
     return node.total;
   };
@@ -41,15 +54,29 @@ function buildTree(folders: string[], files: FileSummary[]): FolderNode {
   return root;
 }
 
+/** Files in display order (folders first, natural sort), e.g. for prefetching neighbours. */
+export function orderedFiles(folders: string[], files: FileSummary[]): FileSummary[] {
+  const out: FileSummary[] = [];
+  const walk = (node: FolderNode) => {
+    node.folders.forEach(walk);
+    out.push(...node.files);
+  };
+  walk(buildTree(folders, files));
+  return out;
+}
+
 export function countFilesIn(files: FileSummary[], folder: string): number {
   if (!folder) return files.length;
   return files.filter((f) => f.folder === folder || f.folder.startsWith(`${folder}/`)).length;
 }
 
-function ancestorsOf(path: string): string[] {
+/** "a/b/c" -> ["a", "a/b", "a/b/c"] */
+function pathAndAncestors(path: string): string[] {
   const parts = path.split("/").filter(Boolean);
   return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
 }
+
+const INDENT = 14;
 
 export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y: number) => void }) {
   const lang = useApp((s) => s.lang);
@@ -58,35 +85,49 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
   const selectedId = useApp((s) => s.selectedId);
   const checked = useApp((s) => s.checked);
   const currentFolder = useApp((s) => s.currentFolder);
+  const revealRequest = useApp((s) => s.revealRequest);
   const select = useApp((s) => s.select);
   const setCurrentFolder = useApp((s) => s.setCurrentFolder);
   const toggleChecked = useApp((s) => s.toggleChecked);
   const upload = useUploads((s) => s.upload);
   const uploading = useUploads((s) => Boolean(s.progress));
-  const reduce = useReducedMotion();
-  // Folders start collapsed; only the path to the current folder / selected file is opened.
+  // Folders start collapsed. They open only when the user toggles them or something asks to reveal
+  // a path (selection, new folder, upload). Opening a folder never happens as a side effect of
+  // clicking another one - that used to shift rows under the pointer.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const tree = useMemo(() => buildTree(folders, files), [folders, files]);
 
-  // Whatever becomes current (new folder, upload target, selected file) must be visible.
-  const selectedFolder = files.find((f) => f.id === selectedId)?.folder ?? "";
-  useEffect(() => {
-    const reveal = [...ancestorsOf(parentPath(currentFolder)), ...ancestorsOf(selectedFolder)];
+  function expandPath(path: string) {
+    const wanted = pathAndAncestors(path);
     setExpanded((prev) => {
-      if (reveal.every((p) => prev.has(p))) return prev;
+      if (wanted.every((p) => prev.has(p))) return prev;
       const next = new Set(prev);
-      reveal.forEach((p) => next.add(p));
+      wanted.forEach((p) => next.add(p));
       return next;
     });
-  }, [currentFolder, selectedFolder]);
+  }
+
+  const selectedFolder = files.find((f) => f.id === selectedId)?.folder;
+  // Reveal a newly selected file (also after upload or when coming from another page). Collapsing
+  // its folder afterwards changes neither value, so the folder stays collapsed.
+  useEffect(() => {
+    if (selectedFolder) expandPath(selectedFolder);
+  }, [selectedId, selectedFolder]);
+
+  useEffect(() => {
+    if (revealRequest) expandPath(revealRequest.path);
+  }, [revealRequest]);
 
   function toggle(path: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      if (next.has(path)) {
+        // Collapsing a folder also collapses everything below it.
+        for (const p of prev) if (p === path || p.startsWith(`${path}/`)) next.delete(p);
+      } else next.add(path);
       return next;
     });
   }
@@ -124,16 +165,16 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
     };
   }
 
-  const rowBase = "group relative flex min-h-9 items-center gap-1.5 pr-1.5 transition-colors";
+  const rowBase = "group relative flex h-8 items-center gap-1 pr-1 transition-colors";
   const moreButton = (target: TreeTarget, label: string) => (
     <button
       type="button"
       onClick={(event) => openMenu(event, target)}
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-dim)] opacity-60 transition-opacity hover:bg-[var(--bg)] hover:text-[var(--text)] focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-dim)] opacity-0 transition-opacity hover:bg-[var(--bg)] hover:text-[var(--text)] focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-70"
       aria-label={`${t(lang, "moreActions")}: ${label}`}
       aria-haspopup="menu"
     >
-      <DotsThree size={18} weight="bold" />
+      <DotsThree size={16} weight="bold" />
     </button>
   );
 
@@ -144,34 +185,31 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
     const label = isRoot ? t(lang, "workspaceRoot") : node.name;
     const target: TreeTarget = { type: "folder", path: node.path };
     return (
-      <li key={`d:${node.path}`} role="treeitem" aria-expanded={open} aria-selected={active}>
+      <li key={`d:${node.path}`} role="treeitem" aria-expanded={isRoot ? undefined : open} aria-selected={active}>
         <div
           {...dropProps(node.path)}
           onContextMenu={(event) => openMenu(event, target)}
           className={`${rowBase} ${dropTarget === node.path ? "bg-[var(--accent-soft)] ring-1 ring-inset ring-[var(--accent)]" : active ? "bg-[color-mix(in_srgb,var(--accent-soft)_65%,transparent)]" : "hover:bg-[var(--bg)]"}`}
-          style={{ paddingLeft: 8 + depth * 14 }}
+          style={{ paddingLeft: 6 + depth * INDENT }}
         >
           <button
             type="button"
             onClick={() => {
               setCurrentFolder(node.path);
-              if (!isRoot && (active || !open)) toggle(node.path);
+              if (!isRoot) toggle(node.path);
             }}
-            onDoubleClick={() => !isRoot && toggle(node.path)}
-            className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left"
+            className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
             title={node.path || label}
           >
             {isRoot ? (
               <HardDrives size={15} weight="duotone" className="ml-[18px] shrink-0 text-[var(--accent)]" />
             ) : (
               <>
-                <motion.span
-                  animate={{ rotate: open ? 90 : 0 }}
-                  transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 32 }}
-                  className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-dim)]"
-                >
-                  <CaretRight size={11} weight="bold" />
-                </motion.span>
+                <CaretRight
+                  size={11}
+                  weight="bold"
+                  className={`mx-[2.5px] shrink-0 text-[var(--text-dim)] transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+                />
                 {open ? (
                   <FolderOpen size={16} weight="duotone" className="shrink-0 text-[var(--accent)]" />
                 ) : (
@@ -189,7 +227,7 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
             {node.folders.map((child) => renderFolder(child, depth + 1))}
             {node.files.map((file) => renderFile(file, depth + 1))}
             {!isRoot && node.total === 0 && (
-              <li className="py-1.5 text-[11px] italic text-[var(--text-dim)]" style={{ paddingLeft: 8 + (depth + 1) * 14 + 22 }}>
+              <li className="flex h-7 items-center text-[11px] italic text-[var(--text-dim)]" style={{ paddingLeft: 6 + (depth + 1) * INDENT + 22 }}>
                 {t(lang, "emptyFolder")}
               </li>
             )}
@@ -199,7 +237,7 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
     );
   }
 
-  function renderFile(file: FileSummary, depth: number) {
+  function renderFile(file: FileSummary, depth: number, showPath = false) {
     const active = selectedId === file.id;
     const target: TreeTarget = { type: "file", file };
     return (
@@ -207,16 +245,10 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
         <div
           {...dropProps(file.folder)}
           onContextMenu={(event) => openMenu(event, target)}
-          className={`${rowBase} ${active ? "bg-[var(--accent-soft)]" : "hover:bg-[var(--bg)]"}`}
-          style={{ paddingLeft: 8 + depth * 14 }}
+          className={`${rowBase} ${showPath ? "h-11" : ""} ${active ? "bg-[var(--accent-soft)]" : "hover:bg-[var(--bg)]"}`}
+          style={{ paddingLeft: 6 + depth * INDENT }}
         >
-          {active && (
-            <motion.span
-              layoutId="selected-file"
-              className="absolute inset-y-1.5 left-0 w-0.5 rounded-r-full bg-[var(--accent)]"
-              transition={{ type: "spring", stiffness: 420, damping: 34 }}
-            />
-          )}
+          {active && <span className="absolute inset-y-1 left-0 w-0.5 rounded-r-full bg-[var(--accent)]" aria-hidden />}
           <label className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md hover:bg-black/5">
             <input
               type="checkbox"
@@ -231,23 +263,31 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
               select(file.id);
               setCurrentFolder(file.folder);
             }}
-            className="min-w-0 flex-1 py-1.5 text-left"
-            title={joinPath(file.folder, file.name)}
+            className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
+            title={`${joinPath(file.folder, file.name)} · ${file.width ?? "–"}×${file.height ?? "–"} · ${formatBytes(file.size_bytes, lang)}`}
           >
-            <span className="block truncate text-[12.5px] font-medium tracking-[-0.01em]">{file.name}</span>
-            <span className="mt-1 flex items-center gap-1 overflow-hidden">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12.5px] tracking-[-0.01em]">{file.name}</span>
+              {showPath && <span className="block truncate font-mono text-[10px] text-[var(--text-dim)]">/{file.folder}</span>}
+            </span>
+            {file.prepare === "pending" && (
+              <SpinnerGap size={12} className="shrink-0 animate-spin text-[var(--text-dim)]" aria-label={t(lang, "preparing")} />
+            )}
+            {file.prepare === "error" && (
+              <WarningCircle size={12} className="shrink-0 text-[var(--danger)]" aria-label={t(lang, "prepareFailed")} />
+            )}
+            <span className="flex shrink-0 items-center gap-0.5" aria-hidden>
               {file.channels?.map((channel) => (
                 <span
                   key={channel.index}
-                  className="shrink-0 rounded px-1 py-px font-mono text-[8.5px] font-medium text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
+                  className="h-2 w-2 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.15)]"
                   style={{ background: rgbCss(channel.color) }}
-                >
-                  {channel.name}
-                </span>
+                  title={channel.name}
+                />
               ))}
-              <span className="ml-1 truncate font-mono text-[9.5px] text-[var(--text-dim)]">
-                {file.width ?? "–"}×{file.height ?? "–"} · {formatBytes(file.size_bytes, lang)}
-              </span>
+            </span>
+            <span className="hidden w-12 shrink-0 text-right font-mono text-[9.5px] text-[var(--text-dim)] @[260px]:block">
+              {formatBytes(file.size_bytes, lang)}
             </span>
           </button>
           {moreButton(target, file.name)}
@@ -256,9 +296,58 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
     );
   }
 
+  const needle = query.trim().toLowerCase();
+  const matches = useMemo(() => {
+    if (!needle) return [];
+    return orderedFiles(folders, files).filter((f) => joinPath(f.folder, f.name).toLowerCase().includes(needle));
+  }, [needle, folders, files]);
+
+  const iconButton = "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-dim)] transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]";
+
   return (
-    <ul role="tree" aria-label={t(lang, "files")} className="pb-3" {...dropProps(currentFolder)}>
-      {renderFolder(tree, 0)}
-    </ul>
+    <div className="@container">
+      <div className="sticky top-0 z-[1] flex items-center gap-1 border-b border-[var(--line)] bg-[var(--bg-elev)]/85 px-2 py-1.5 backdrop-blur">
+        <label className="relative min-w-0 flex-1">
+          <MagnifyingGlass size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => event.key === "Escape" && setQuery("")}
+            placeholder={t(lang, "searchFiles")}
+            aria-label={t(lang, "searchFiles")}
+            className="h-7 w-full rounded-md border border-[var(--line)] bg-[var(--bg)] pl-7 pr-6 text-[12px] focus:border-[var(--accent)] focus:outline-none"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--text)]"
+              aria-label={t(lang, "cancel")}
+            >
+              <X size={11} />
+            </button>
+          )}
+        </label>
+        <button type="button" onClick={() => setExpanded(new Set(folders))} className={iconButton} title={t(lang, "expandAll")} aria-label={t(lang, "expandAll")}>
+          <ArrowsOutLineVertical size={15} />
+        </button>
+        <button type="button" onClick={() => setExpanded(new Set())} className={iconButton} title={t(lang, "collapseAll")} aria-label={t(lang, "collapseAll")}>
+          <ArrowsInLineVertical size={15} />
+        </button>
+      </div>
+
+      {needle ? (
+        <ul role="tree" aria-label={t(lang, "files")} className="pb-3">
+          <li className="px-3 py-1.5 font-mono text-[10px] text-[var(--text-dim)]">
+            {matches.length ? `${matches.length} ${t(lang, "nFiles")}` : t(lang, "noMatches")}
+          </li>
+          {matches.slice(0, 500).map((file) => renderFile(file, 0, true))}
+        </ul>
+      ) : (
+        <ul role="tree" aria-label={t(lang, "files")} className="pb-3" {...dropProps(currentFolder)}>
+          {renderFolder(tree, 0)}
+        </ul>
+      )}
+    </div>
   );
 }

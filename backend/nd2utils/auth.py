@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import secrets
 import time
 import uuid
 from threading import RLock
 from typing import Any, Literal
 
+from nd2utils import jsoncache
 from nd2utils.config import ensure_dirs, settings
 
 Role = Literal["admin", "user"]
@@ -52,12 +52,11 @@ def generate_code() -> str:
 
 
 def _load() -> dict[str, Any]:
+    # Read on every request; jsoncache avoids re-parsing an unchanged file.
     ensure_dirs()
     path = settings.auth_path
-    if not path.exists():
-        return {"codes": {}, "sessions": {}}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = jsoncache.read(path, lambda: {"codes": {}, "sessions": {}}, strict=True)
     except (json.JSONDecodeError, OSError):
         # Never silently start over: that would drop every code and session.
         raise RuntimeError(f"{path} is unreadable; fix or remove it before starting ND2Utils.")
@@ -70,11 +69,7 @@ def _load() -> dict[str, Any]:
 
 def _save(data: dict[str, Any]) -> None:
     ensure_dirs()
-    path = settings.auth_path
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
+    jsoncache.write(settings.auth_path, data, mode=0o600)
 
 
 def code_status(rec: dict[str, Any], now: float | None = None) -> str:

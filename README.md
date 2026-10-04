@@ -45,7 +45,9 @@ docker compose up -d
 ### 使用
 
 1. 在首页或工作区拖入 `.nd2` 文件或整个文件夹（也可点“选择文件夹”），目录结构会原样保留。
-2. 工作区左侧是文件树：右键文件或文件夹可导出、上传到此处、新建文件夹、重命名、删除（触屏设备点 `⋯`）。
+2. 工作区左侧是文件树：右键文件或文件夹可导出、上传到此处、新建文件夹、重命名、删除（触屏设备点 `⋯`）。文件树支持搜索、全部展开/折叠，拖动右边缘可调整宽度。
+   每个文件导入后会在后台初始化（预先计算自动亮度和预览数据，缓存在 `data/cache`），之后打开文件无需等待；初始化中的文件旁会显示转圈图标。
+   管理员可通过右键菜单或“设置 → 授权码管理 → 转移 / 复制文件”，在任意两个工作空间之间（或同一工作空间内）复制、转移文件和文件夹。
 3. 导出包内的文件位于与原 ND2 文件相同的目录中，例如 `20260918H2/vector 6h/MB2310439_DAPI.png`。
 4. 高级模式：通道 LUT、直方图、比例尺、Z/T 投影与切片（无该维度时会提示）、直线/ROI 测量。
 
@@ -74,5 +76,7 @@ On first start an admin access code is generated and printed to the server log (
 - Large files are read plane-by-plane. Do not expect the whole T×Z cube in RAM.
 - Every page and API call requires an access code. Each code owns one workspace. Codes have an optional expiry and are either *temporary* (files removed after `TTL_HOURS` and when the code expires) or *permanent* (never cleaned up automatically). Export archives are kept for `TTL_HOURS` for everyone.
 - Upload files or whole folders; the workspace keeps the folder tree. Right-click a file or folder to export it — exported files land in the same folders as their ND2 source inside the zip.
+- Every imported file is prepared in the background (auto-contrast and an 8-bit preview cached in `data/cache`), so opening it later is immediate.
+- Administrators can copy or move files and folders between any two workspaces (Settings → Access codes → Copy / move files, or the workspace context menu).
 - OME-TIFF keeps native bit depth in `*.ome.tif` (12-bit data looks dark in ordinary viewers). Each one has an 8-bit `*.tif` with the same name and the display LUT applied. TIFF / PNG / JPEG are 8-bit display images. Hidden channels are not exported.
 - The local `ND2demo/` directory is a development-only fixture and is not included in git. The application does not read it at runtime, and Docker excludes it from the build context.

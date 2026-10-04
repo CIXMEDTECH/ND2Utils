@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  ArrowsLeftRight,
   Check,
   Copy,
   Export as ExportIcon,
@@ -18,17 +19,20 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChannelToggles } from "../components/ChannelToggles";
 import { ContextMenu, type MenuItem, type MenuState } from "../components/ContextMenu";
-import { DropZone, folderInputId } from "../components/DropZone";
+import { folderInputId } from "../components/DropZone";
 import { ExportPanel } from "../components/ExportPanel";
-import { countFilesIn, FileTree, type TreeTarget } from "../components/FileTree";
+import { countFilesIn, FileTree, orderedFiles, type TreeTarget } from "../components/FileTree";
 import { ConfirmDialog, Modal, NameDialog } from "../components/Modal";
 import { Glass } from "../components/Glass";
 import { Shell } from "../components/Shell";
+import { TransferDialog, type TransferSeed } from "../components/TransferDialog";
+import { UploadBar } from "../components/UploadBar";
 import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
-import { createFolder, deleteFile, deleteFolder, fetchPlane, getFile, renameFolder, updateFile } from "../lib/api";
+import { createFolder, deleteFile, deleteFolder, fetchDisplay, getFile, prefetchDisplay, renameFolder, updateFile } from "../lib/api";
 import { axisSize, baseName, detailMessage, formatUm, joinPath, parentPath } from "../lib/format";
-import { autoscaleLimits, createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
+import { createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
+import { readPref, writePref } from "../lib/storage";
 import type { ExportTarget, FileSummary, LutSetting, PackedPlane } from "../lib/types";
 import { useApp } from "../store";
 
@@ -48,6 +52,13 @@ type NameAction =
 type DeleteAction = { type: "folder"; path: string } | { type: "file"; file: FileSummary };
 
 const UPLOAD_INPUT = "workspace-nd2-upload";
+const TREE_WIDTH_KEY = "nd2utils.treeWidth";
+const TREE_WIDTH_DEFAULT = 340;
+const TREE_WIDTH_MIN = 240;
+
+function clampTreeWidth(width: number) {
+  return Math.round(Math.min(Math.max(width, TREE_WIDTH_MIN), Math.max(TREE_WIDTH_MIN, window.innerWidth * 0.6)));
+}
 
 const WORKSPACE_TABS: { key: WorkspaceTab; label: WorkspaceTab }[] = [
   { key: "identify", label: "identify" },
@@ -66,6 +77,9 @@ export function Workspace() {
   const refreshFiles = useApp((s) => s.refreshFiles);
   const checkAll = useApp((s) => s.checkAll);
   const setCurrentFolder = useApp((s) => s.setCurrentFolder);
+  const reveal = useApp((s) => s.reveal);
+  const folders = useApp((s) => s.folders);
+  const isAdmin = useApp((s) => s.user?.role === "admin");
   const nav = useNavigate();
   const reduce = useReducedMotion();
   const [tab, setTab] = useState<WorkspaceTab>("identify");
@@ -83,6 +97,8 @@ export function Workspace() {
   const [exportTarget, setExportTarget] = useState<ExportTarget | null>(null);
   const [nameAction, setNameAction] = useState<NameAction | null>(null);
   const [deleteAction, setDeleteAction] = useState<DeleteAction | null>(null);
+  const [transferSeed, setTransferSeed] = useState<TransferSeed | null>(null);
+  const [treeWidth, setTreeWidth] = useState(() => clampTreeWidth(Number(readPref(TREE_WIDTH_KEY)) || TREE_WIDTH_DEFAULT));
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
 
@@ -142,33 +158,26 @@ export function Workspace() {
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
     const file = selected;
     setLoadingPreview(true);
-    void fetchPlane(file.id, 0, 0, 0, controller.signal)
+    // The server prepared these 8-bit, auto-contrasted channels when the file was imported.
+    void fetchDisplay(file.id)
       .then((buffer) => {
         if (cancelled) return;
         const packed = unpackPlane(buffer);
-        const luts: LutSetting[] = packed.channels.map((channel, index) => {
-          const [min, autoMax] = autoscaleLimits(channel.data);
-          const metadata = file.channels[index];
-          const fileMax = metadata?.lut_max;
-          return {
-            min,
-            max: fileMax ? Math.min(autoMax, fileMax) : autoMax,
-            gamma: metadata?.lut_gamma || 1,
-            visible: true,
-            color: metadata?.color ?? channel.color,
-          };
-        });
+        const luts: LutSetting[] = packed.channels.map((channel, index) => ({
+          min: 0,
+          max: 255,
+          gamma: 1,
+          visible: true,
+          color: file.channels[index]?.color ?? channel.color,
+        }));
         const layers = createPreviewLayers(packed, luts);
-        if (!cancelled) {
-          setLocalPreview({
-            fileId: file.id,
-            dimensions: { width: packed.width, height: packed.height },
-            layers,
-          });
-        }
+        setLocalPreview({
+          fileId: file.id,
+          dimensions: { width: packed.width, height: packed.height },
+          layers,
+        });
       })
       .catch((err) => {
         if (!cancelled && !(err instanceof DOMException && err.name === "AbortError")) {
@@ -180,9 +189,60 @@ export function Workspace() {
       });
     return () => {
       cancelled = true;
-      controller.abort();
     };
   }, [lang, selected?.id]);
+
+  // Warm up the neighbours so stepping through a folder does not wait for the network.
+  const order = useMemo(() => orderedFiles(folders, files), [folders, files]);
+  useEffect(() => {
+    if (!previewReady || !selectedId) return;
+    const at = order.findIndex((f) => f.id === selectedId);
+    if (at < 0) return;
+    const handle = window.setTimeout(() => {
+      prefetchDisplay(
+        [order[at + 1], order[at + 2], order[at - 1]]
+          .filter((f): f is FileSummary => Boolean(f) && f.prepare === "ready")
+          .map((f) => f.id),
+      );
+    }, 150);
+    return () => window.clearTimeout(handle);
+  }, [order, previewReady, selectedId]);
+
+  // While files are still being prepared in the background, keep their status fresh.
+  const preparing = files.some((f) => f.prepare === "pending");
+  useEffect(() => {
+    if (!preparing) return;
+    const handle = window.setInterval(() => void refreshFiles().catch(() => undefined), 2500);
+    return () => window.clearInterval(handle);
+  }, [preparing, refreshFiles]);
+
+  function resizeTree(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = treeWidth;
+    const target = event.currentTarget;
+    target.setPointerCapture(event.pointerId);
+    let latest = startWidth;
+    const move = (e: PointerEvent) => {
+      latest = clampTreeWidth(startWidth + e.clientX - startX);
+      setTreeWidth(latest);
+    };
+    const up = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
+      writePref(TREE_WIDTH_KEY, String(latest));
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
+  }
+
+  function nudgeTree(delta: number) {
+    const next = clampTreeWidth(treeWidth + delta);
+    setTreeWidth(next);
+    writePref(TREE_WIDTH_KEY, String(next));
+  }
 
   useLayoutEffect(() => {
     const canvas = previewCanvasRef.current;
@@ -267,6 +327,14 @@ export function Workspace() {
         { key: "upload-dir", label: t(lang, "uploadFolderHere"), icon: <FolderSimplePlus size={15} />, onSelect: () => uploadInto(path, true) },
         { key: "mkdir", label: t(lang, "newFolder"), icon: <FolderPlus size={15} />, onSelect: () => setNameAction({ mode: "newFolder", parent: path }) },
       );
+      if (isAdmin && count > 0) {
+        items.push({
+          key: "transfer",
+          label: t(lang, "transferEllipsis"),
+          icon: <ArrowsLeftRight size={15} />,
+          onSelect: () => setTransferSeed({ fileIds: [], folders: [path] }),
+        });
+      }
       if (path) {
         items.push(
           { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, separated: true, onSelect: () => setNameAction({ mode: "renameFolder", path }) },
@@ -289,6 +357,16 @@ export function Workspace() {
         separated: true,
         onSelect: () => exportFiles(exportChecked ? checkedFiles : [file]),
       },
+      ...(isAdmin
+        ? [
+            {
+              key: "transfer",
+              label: t(lang, "transferEllipsis"),
+              icon: <ArrowsLeftRight size={15} />,
+              onSelect: () => setTransferSeed({ fileIds: (exportChecked ? checkedFiles : [file]).map((f) => f.id), folders: [] }),
+            },
+          ]
+        : []),
       { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, separated: true, onSelect: () => setNameAction({ mode: "renameFile", file }) },
       { key: "delete", label: t(lang, "delete"), icon: <Trash size={15} />, danger: true, onSelect: () => setDeleteAction({ type: "file", file }) },
     );
@@ -300,12 +378,14 @@ export function Workspace() {
     if (nameAction.mode === "newFolder") {
       const created = await createFolder(joinPath(nameAction.parent, value));
       setCurrentFolder(created.path);
+      reveal(created.path);
     } else if (nameAction.mode === "renameFolder") {
       const renamed = await renameFolder(nameAction.path, joinPath(parentPath(nameAction.path), value));
       const current = useApp.getState().currentFolder;
       if (current === nameAction.path || current.startsWith(`${nameAction.path}/`)) {
         setCurrentFolder(renamed.path + current.slice(nameAction.path.length));
       }
+      reveal(renamed.path);
     } else {
       const name = value.toLowerCase().endsWith(".nd2") ? value : `${value}.nd2`;
       await updateFile(nameAction.file.id, { name });
@@ -338,9 +418,29 @@ export function Workspace() {
 
   return (
     <Shell dense>
-      <div className="grid min-h-[calc(100dvh-4rem)] grid-cols-1 lg:h-[calc(100dvh-4rem)] lg:min-h-0 lg:grid-cols-[272px_minmax(0,1fr)_352px]">
-        <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-b lg:border-b-0">
-          <div className="flex items-center justify-between gap-2 px-4 py-3 text-[12px] text-[var(--text-dim)]">
+      <div
+        className="grid min-h-[calc(100dvh-4rem)] grid-cols-1 lg:h-[calc(100dvh-4rem)] lg:min-h-0 lg:grid-cols-[var(--tree-w)_minmax(0,1fr)_340px]"
+        style={{ "--tree-w": `${treeWidth}px` } as React.CSSProperties}
+      >
+        <Glass as="aside" shape="panel" className="relative flex min-h-0 flex-col overflow-visible border-b lg:border-b-0">
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t(lang, "resizePanel")}
+            aria-valuenow={treeWidth}
+            tabIndex={0}
+            title={t(lang, "resizePanel")}
+            onPointerDown={resizeTree}
+            onDoubleClick={() => nudgeTree(TREE_WIDTH_DEFAULT - treeWidth)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft") nudgeTree(-24);
+              if (event.key === "ArrowRight") nudgeTree(24);
+            }}
+            className="group absolute inset-y-0 -right-1.5 z-10 hidden w-3 cursor-col-resize touch-none lg:block"
+          >
+            <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-[var(--accent)] group-focus-visible:bg-[var(--accent)] group-active:bg-[var(--accent)]" />
+          </div>
+          <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-[12px] text-[var(--text-dim)]">
             <span className="inline-flex items-center gap-2">
               {t(lang, "files")}
               <span className="font-mono text-[10px]">{files.length}</span>
@@ -366,8 +466,8 @@ export function Workspace() {
               </button>
             </span>
           </div>
-          <div className="px-3 pb-3">
-            <DropZone compact inputId={UPLOAD_INPUT} />
+          <div className="px-3 pb-2.5">
+            <UploadBar inputId={UPLOAD_INPUT} />
           </div>
 
           <AnimatePresence>
@@ -384,7 +484,7 @@ export function Workspace() {
             )}
           </AnimatePresence>
 
-          <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--line)] max-lg:max-h-[50dvh]">
+          <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--line)] max-lg:max-h-[70dvh]">
             <FileTree onMenu={openMenu} />
             {files.length === 0 && (
               <p className="mx-3 mb-3 rounded-xl border border-dashed border-[var(--line)] px-4 py-6 text-center text-[12px] leading-5 text-[var(--text-dim)]">
@@ -393,7 +493,7 @@ export function Workspace() {
               </p>
             )}
           </div>
-          <p className="border-t border-[var(--line)] px-4 py-2.5 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, "treeHint")}</p>
+          <p className="border-t border-[var(--line)] px-3 py-2 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, "treeHint")}</p>
         </Glass>
 
         <main className="min-h-[430px] bg-[var(--well)]">
@@ -628,6 +728,15 @@ export function Workspace() {
       </div>
 
       <ContextMenu menu={menu} onClose={closeMenu} />
+
+      {isAdmin && (
+        <TransferDialog
+          open={Boolean(transferSeed)}
+          seed={transferSeed}
+          onClose={() => setTransferSeed(null)}
+          onDone={() => void refreshFiles()}
+        />
+      )}
 
       <Modal
         open={Boolean(exportTarget)}

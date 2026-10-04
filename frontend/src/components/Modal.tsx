@@ -24,12 +24,16 @@ export function Modal({
   const lang = useApp((s) => s.lang);
   const reduce = useReducedMotion();
   const panelRef = useRef<HTMLDivElement>(null);
+  // Callers usually pass an inline onClose; keep the latest one without re-running the open
+  // effect (which would steal focus back to the first field on every parent re-render).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     window.addEventListener("keydown", onKey);
     // Focus the first field (or the panel) so keyboard users land inside the dialog.
@@ -41,7 +45,7 @@ export function Modal({
       window.removeEventListener("keydown", onKey);
       previous?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   return createPortal(
     <AnimatePresence>

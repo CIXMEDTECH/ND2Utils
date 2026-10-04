@@ -24,6 +24,11 @@ export interface AppState {
   folders: string[];
   /** Folder that uploads go into and that is highlighted in the tree. */
   currentFolder: string;
+  /**
+   * Ask the file tree to expand the path to a folder (new folder, upload target …).
+   * Only explicit requests open folders, so a folder the user collapsed stays collapsed.
+   */
+  revealRequest: { path: string; seq: number } | null;
   selectedId: string | null;
   detail: FileDetail | null;
   jobs: JobInfo[];
@@ -36,6 +41,7 @@ export interface AppState {
   refreshFiles: () => Promise<void>;
   refreshJobs: () => Promise<void>;
   setCurrentFolder: (folder: string) => void;
+  reveal: (folder: string) => void;
   select: (id: string | null) => void;
   setDetail: (d: FileDetail | null) => void;
   toggleChecked: (id: string, value?: boolean) => void;
@@ -50,6 +56,7 @@ const emptyWorkspace = {
   files: [],
   folders: [],
   currentFolder: "",
+  revealRequest: null,
   selectedId: null,
   detail: null,
   jobs: [],
@@ -112,6 +119,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({ jobs: await listJobs() });
   },
   setCurrentFolder: (folder) => set({ currentFolder: folder }),
+  reveal: (folder) => set({ revealRequest: { path: folder, seq: (get().revealRequest?.seq ?? 0) + 1 } }),
   select: (id) => set({ selectedId: id, detail: id === get().selectedId ? get().detail : null }),
   setDetail: (d) => set({ detail: d }),
   toggleChecked: (id, value) => {

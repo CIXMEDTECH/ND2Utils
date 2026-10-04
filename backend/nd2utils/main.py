@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 import secrets
@@ -9,7 +10,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -17,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from nd2utils import __version__, auth
+from nd2utils import __version__, auth, prepare
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import new_job_id, run_export
 from nd2utils.models import ExportRequest, MeasureRequest
@@ -28,11 +29,9 @@ from nd2utils.nd2io import (
     extract_channels,
     identify_path,
     open_nd2,
-    pack_planes,
     projection,
 )
 from nd2utils.render import (
-    autoscale_limits,
     encode_image,
     histogram,
     line_profile,
@@ -48,16 +47,19 @@ from nd2utils.store import (
     delete_workspace,
     files_in_folder,
     find_file,
+    get_file_detail,
     get_owned_file,
     get_owned_job,
     list_files,
     list_folders,
     list_jobs,
+    migrate_index,
     normalize_filename,
     normalize_folder,
     purge_expired,
     rename_folder,
     source_path,
+    transfer,
     update_file,
     upsert_file,
     upsert_job,
@@ -85,10 +87,14 @@ async def _purge_loop() -> None:
 async def lifespan(_app: FastAPI):
     ensure_dirs()
     auth.ensure_admin()
+    migrate_index()
     purge_expired()
+    # Files imported before background preparation existed (or interrupted by a restart).
+    prepare.schedule_missing()
     task = asyncio.create_task(_purge_loop())
     yield
     task.cancel()
+    prepare.shutdown()
     close_all()
 
 
@@ -229,11 +235,14 @@ def _ingest_file(
         _raise_nd2(exc)
     rec["_owner"] = owner_id
     rec["folder"] = folder
+    rec["prepare"] = "pending"
     # Uploading the same file name into the same folder replaces the old copy, like a file system.
     previous = find_file(owner_id, folder, name)
     upsert_file(rec)
     if previous and previous["id"] != file_id:
         delete_file(previous["id"], owner_id)
+    # Prepare previews in the background so opening the file later is instant.
+    prepare.schedule(file_id)
     return rec
 
 
@@ -411,22 +420,76 @@ def api_admin_delete_code(code_id: str, _admin: AdminUser) -> dict[str, str]:
     return {"id": code_id, "status": "deleted"}
 
 
+class TransferBody(BaseModel):
+    source: str
+    target: str
+    file_ids: list[str] = []
+    folders: list[str] = []
+    target_folder: str = ""
+    mode: Literal["copy", "move"] = "copy"
+    conflict: Literal["skip", "replace"] = "skip"
+
+
+def _known_code(code_id: str) -> dict[str, Any]:
+    rec = auth.get_code(code_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Access code not found."})
+    return rec
+
+
+@app.get("/api/admin/workspaces/{code_id}")
+def api_admin_workspace(code_id: str, _admin: AdminUser) -> dict[str, Any]:
+    _known_code(code_id)
+    return _workspace_listing(code_id)
+
+
+@app.post("/api/admin/transfer")
+def api_admin_transfer(body: TransferBody, _admin: AdminUser) -> dict[str, Any]:
+    """Copy or move files/folders between any two workspaces (or within one)."""
+    _known_code(body.source)
+    _known_code(body.target)
+    if not body.file_ids and not body.folders:
+        raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select files or folders first."})
+    try:
+        result = transfer(
+            body.source,
+            body.target,
+            file_ids=body.file_ids,
+            folders=body.folders,
+            target_folder=body.target_folder,
+            mode=body.mode,
+            conflict=body.conflict,
+        )
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "File or folder not found."}) from exc
+    for file_id in result["files"]:
+        prepare.schedule(file_id)
+    result.pop("files")
+    return result
+
+
 # --- workspace --------------------------------------------------------------
 
 _SUMMARY_KEYS = (
     "id", "name", "folder", "size_bytes", "status", "error", "version", "dtype",
     "shape", "axes", "width", "height", "channels", "voxel_um",
     "objective", "magnification", "na", "acquired", "instrument",
-    "software", "bits_significant", "is_rgb", "created_at",
+    "software", "bits_significant", "is_rgb", "created_at", "prepare",
 )
 
 
-@app.get("/api/files")
-def api_list_files(owner_id: Owner) -> dict[str, Any]:
+def _workspace_listing(owner_id: str) -> dict[str, Any]:
     files = [{k: rec.get(k) for k in _SUMMARY_KEYS} for rec in list_files(owner_id)]
     for item in files:
         item["folder"] = item.get("folder") or ""
     return {"files": files, "folders": list_folders(owner_id)}
+
+
+@app.get("/api/files")
+def api_list_files(owner_id: Owner) -> dict[str, Any]:
+    return _workspace_listing(owner_id)
 
 
 @app.post("/api/folders")
@@ -547,7 +610,8 @@ def api_chunk_complete(upload_id: str, owner_id: Owner) -> dict[str, Any]:
 
 @app.get("/api/files/{file_id}")
 def api_file(file_id: str, owner_id: Owner) -> dict[str, Any]:
-    return _public(_need(file_id, owner_id))
+    _need(file_id, owner_id)
+    return _public(get_file_detail(file_id, owner_id) or {})
 
 
 @app.patch("/api/files/{file_id}")
@@ -605,11 +669,31 @@ def api_preview(
     return Response(content=payload, media_type=media)
 
 
+def _gzip_response(request: Request, body: bytes) -> Response:
+    headers = {"Vary": "Accept-Encoding"}
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        headers["Content-Encoding"] = "gzip"
+        return Response(content=body, media_type="application/octet-stream", headers=headers)
+    return Response(content=gzip.decompress(body), media_type="application/octet-stream", headers=headers)
+
+
+def _prepared(file_id: str, owner_id: str, kind: str, t: int, z: int, p: int) -> Any:
+    rec = _need(file_id, owner_id)
+    coords = (max(t, 0), max(z, 0), max(p, 0))
+    return prepare.get(file_id, rec, source_path(file_id), kind, coords)
+
+
+@app.get("/api/files/{file_id}/display")
+def api_display(file_id: str, request: Request, owner_id: Owner, t: int = 0, z: int = 0, p: int = 0) -> Response:
+    """8-bit, auto-contrasted channels for the workspace preview (same layout as /plane)."""
+    body = _prepared(file_id, owner_id, "display", t, z, p)
+    return _gzip_response(request, body)
+
+
 @app.get("/api/files/{file_id}/plane")
-def api_plane(file_id: str, owner_id: Owner, t: int = 0, z: int = 0, p: int = 0) -> Response:
-    rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
-    payload = pack_planes(planes, rec.get("channels") or [])
-    return Response(content=payload, media_type="application/octet-stream")
+def api_plane(file_id: str, request: Request, owner_id: Owner, t: int = 0, z: int = 0, p: int = 0) -> Response:
+    body = _prepared(file_id, owner_id, "plane", t, z, p)
+    return _gzip_response(request, body)
 
 
 @app.get("/api/files/{file_id}/histogram")
@@ -630,21 +714,7 @@ def api_histogram(
 
 @app.get("/api/files/{file_id}/autoscale")
 def api_autoscale(file_id: str, owner_id: Owner, t: int = 0, z: int = 0, p: int = 0) -> dict[str, Any]:
-    rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
-    items = []
-    for i, plane in enumerate(planes):
-        lo, hi = autoscale_limits(plane)
-        ch = (rec.get("channels") or [{}])[i] if i < len(rec.get("channels") or []) else {}
-        items.append(
-            {
-                "index": i,
-                "name": ch.get("name"),
-                "min": lo,
-                "max": hi,
-                "color": ch.get("color"),
-            }
-        )
-    return {"channels": items}
+    return _prepared(file_id, owner_id, "autoscale", t, z, p)
 
 
 @app.get("/api/files/{file_id}/projection")
