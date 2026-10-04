@@ -444,3 +444,37 @@ def test_retention_temporary_vs_permanent(admin, sample_files):
     # Deleting a code removes its workspace immediately.
     admin.delete(f"/api/admin/codes/{perm['id']}")
     assert list_files(perm["id"]) == []
+
+
+# --- static frontend caching ----------------------------------------------------
+
+
+def test_frontend_cache_headers(anon):
+    from nd2utils.main import FRONTEND_DIST
+
+    if not (FRONTEND_DIST / "index.html").exists():
+        import pytest
+
+        pytest.skip("frontend is not built")
+    index = anon.get("/")
+    assert index.status_code == 200
+    assert index.headers["cache-control"] == "no-cache"
+    deep = anon.get("/workspace")
+    assert deep.headers["content-type"].startswith("text/html")
+    assert deep.headers["cache-control"] == "no-cache"
+
+    bundle = next((FRONTEND_DIST / "assets").glob("*.js"))
+    asset = anon.get(f"/assets/{bundle.name}")
+    assert asset.status_code == 200
+    assert "immutable" in asset.headers["cache-control"]
+
+    # A bundle from an older build must 404, not come back as index.html.
+    missing = anon.get("/assets/index-0ldBuild.js")
+    assert missing.status_code == 404
+    assert missing.headers["cache-control"] == "no-store"
+    assert "text/html" not in missing.headers.get("content-type", "")
+
+
+def test_api_responses_are_not_cacheable(anon):
+    assert anon.get("/api/auth/me").headers["cache-control"] == "no-store"
+    assert anon.get("/api/files").headers["cache-control"] == "no-store"

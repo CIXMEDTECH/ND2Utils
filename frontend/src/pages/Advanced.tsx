@@ -19,6 +19,7 @@ import { autoscale, fetchPlane, measure, projectionUrl } from "../lib/api";
 import { axisSize, detailMessage, formatUm, rgbCss } from "../lib/format";
 import { histogram, renderComposite, unpackPlane } from "../lib/plane";
 import type { LutSetting, MeasureResult, PackedPlane, Tool } from "../lib/types";
+import { readPref, writePref } from "../lib/storage";
 import { useApp } from "../store";
 
 const TOUR_KEY = "nd2utils.tour.v1";
@@ -59,7 +60,7 @@ export function Advanced() {
 
   useEffect(() => {
     void refreshFiles();
-    if (!localStorage.getItem(TOUR_KEY)) setTour(0);
+    if (!readPref(TOUR_KEY)) setTour(0);
   }, [refreshFiles]);
 
   useEffect(() => {
@@ -631,7 +632,7 @@ export function Advanced() {
                   type="button"
                   className="rounded-lg px-2 py-1.5 text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
                   onClick={() => {
-                    localStorage.setItem(TOUR_KEY, "1");
+                    writePref(TOUR_KEY, "1");
                     setTour(null);
                   }}
                 >
@@ -642,7 +643,7 @@ export function Advanced() {
                   className="rounded-xl bg-[var(--accent)] px-4 py-2 font-medium text-white transition-all hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] active:scale-[0.98]"
                   onClick={() => {
                     if (tour >= tourCopy.length - 1) {
-                      localStorage.setItem(TOUR_KEY, "1");
+                      writePref(TOUR_KEY, "1");
                       setTour(null);
                     } else setTour(tour + 1);
                   }}

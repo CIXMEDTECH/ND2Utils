@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AccessUser, FileDetail, FileSummary, JobInfo, Lang, Theme } from "./lib/types";
+import { readPref, writePref } from "./lib/storage";
 import { listJobs, listWorkspace, logout as apiLogout, me, setUnauthorizedHandler } from "./lib/api";
 
 function systemDark(): boolean {
@@ -41,8 +42,8 @@ export interface AppState {
   checkAll: (value: boolean) => void;
 }
 
-const savedLang = (localStorage.getItem("nd2utils.lang") as Lang | null) ?? "zh";
-const savedTheme = (localStorage.getItem("nd2utils.theme") as Theme | null) ?? "system";
+const savedLang = (readPref("nd2utils.lang") as Lang | null) ?? "zh";
+const savedTheme = (readPref("nd2utils.theme") as Theme | null) ?? "system";
 applyTheme(savedTheme);
 
 const emptyWorkspace = {
@@ -63,12 +64,12 @@ export const useApp = create<AppState>((set, get) => ({
   sessionExpired: false,
   ...emptyWorkspace,
   setLang: (lang) => {
-    localStorage.setItem("nd2utils.lang", lang);
+    writePref("nd2utils.lang", lang);
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
     set({ lang });
   },
   setTheme: (theme) => {
-    localStorage.setItem("nd2utils.theme", theme);
+    writePref("nd2utils.theme", theme);
     applyTheme(theme);
     set({ theme });
   },

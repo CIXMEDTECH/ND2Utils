@@ -1,15 +1,16 @@
-import { lazy, Suspense, useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { t } from "./i18n";
+import { lazyPage } from "./lib/lazyPage";
 import { useApp } from "./store";
 
-const Home = lazy(() => import("./pages/Home").then((module) => ({ default: module.Home })));
-const Workspace = lazy(() => import("./pages/Workspace").then((module) => ({ default: module.Workspace })));
-const Advanced = lazy(() => import("./pages/Advanced").then((module) => ({ default: module.Advanced })));
-const Jobs = lazy(() => import("./pages/Jobs").then((module) => ({ default: module.Jobs })));
-const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })));
-const Login = lazy(() => import("./pages/Login").then((module) => ({ default: module.Login })));
+const Home = lazyPage(() => import("./pages/Home").then((module) => module.Home));
+const Workspace = lazyPage(() => import("./pages/Workspace").then((module) => module.Workspace));
+const Advanced = lazyPage(() => import("./pages/Advanced").then((module) => module.Advanced));
+const Jobs = lazyPage(() => import("./pages/Jobs").then((module) => module.Jobs));
+const Settings = lazyPage(() => import("./pages/Settings").then((module) => module.Settings));
+const Login = lazyPage(() => import("./pages/Login").then((module) => module.Login));
 
 export function App() {
   const lang = useApp((s) => s.lang);

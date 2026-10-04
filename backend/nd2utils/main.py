@@ -129,8 +129,13 @@ async def require_login(request: Request, call_next):
     request.state.user = user
     path = request.url.path
     if path.startswith("/api/") and path not in _PUBLIC_API and user is None:
-        return _unauthorized()
-    return await call_next(request)
+        response = _unauthorized()
+    else:
+        response = await call_next(request)
+    if path.startswith("/api/"):
+        # Per-user data: never let a browser or CDN reuse it (e.g. a stale "not logged in").
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 def _current_user(request: Request) -> dict[str, Any]:
@@ -837,6 +842,20 @@ def api_job_download(job_id: str, owner_id: Owner) -> FileResponse:
     return FileResponse(zip_path, filename=job.get("download_name") or zip_path.name, media_type="application/zip")
 
 
+# Vite puts content-hashed bundles under /assets: their URL changes whenever their content does.
+_IMMUTABLE = "public, max-age=31536000, immutable"
+# index.html must be revalidated on every load, otherwise browsers/CDNs keep an old page that points
+# at bundles which no longer exist after a redeploy (blank page).
+_REVALIDATE = "no-cache"
+
+
+def _index_response() -> Response:
+    index = FRONTEND_DIST / "index.html"
+    if not index.exists():
+        return JSONResponse({"ok": True, "frontend": False})
+    return FileResponse(index, headers={"Cache-Control": _REVALIDATE})
+
+
 @app.get("/{full_path:path}")
 def spa(full_path: str):
     if full_path.startswith("api/"):
@@ -848,9 +867,11 @@ def spa(full_path: str):
         candidate.relative_to(FRONTEND_DIST.resolve())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid path") from exc
-    if full_path and candidate.is_file():
-        return FileResponse(candidate)
-    index = FRONTEND_DIST / "index.html"
-    if index.exists():
-        return FileResponse(index)
-    return {"ok": True, "frontend": False}
+    if full_path and candidate.is_file() and candidate.name != "index.html":
+        cache = _IMMUTABLE if full_path.startswith("assets/") else "public, max-age=3600"
+        return FileResponse(candidate, headers={"Cache-Control": cache})
+    if full_path.startswith("assets/") or Path(full_path).suffix in {".js", ".css", ".map", ".woff2", ".svg", ".png"}:
+        # A missing bundle must fail loudly. Answering with index.html (200, text/html) makes the
+        # browser - and Cloudflare, which caches by extension - store HTML as the "script".
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    return _index_response()
