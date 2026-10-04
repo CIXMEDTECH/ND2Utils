@@ -20,6 +20,8 @@ docker compose up -d
 
 打开 http://localhost:8080 。数据直接持久化到宿主机的项目目录 `./data`（容器内路径为 `/data`），删除或重建容器不会删除该目录中的文件。
 
+**首次部署的管理员授权码**：第一次启动时自动生成，并输出在服务日志中（`docker compose logs nd2utils`）。用它登录后，在“设置 → 授权码管理”中为其他用户发放授权码；登录后也可以在该页面再次查看管理员授权码。
+
 
 环境变量（前缀 `ND2UTILS_`）：
 
@@ -27,21 +29,29 @@ docker compose up -d
 |---|---|---|
 | `DATA_DIR` | `./data` | 上传 / 缓存 / 导出 |
 | `MAX_UPLOAD_BYTES` | 8 GB | 单文件上限 |
-| `TTL_HOURS` | 24 | 自动清理 |
+| `TTL_HOURS` | 24 | 临时用户文件与所有导出包的保留时长 |
 | `BIND_HOST` | `127.0.0.1` | Docker 镜像里是 `0.0.0.0` |
 
 默认只监听本机。若要给实验室局域网用，把 `BIND_HOST` 设为 `0.0.0.0` 并放在反向代理后面。
 
+### 授权与工作空间
+
+- 所有页面和接口都需要授权码登录。每个授权码拥有唯一的工作空间，用同一授权码在不同浏览器登录看到的是同一个工作空间。
+- 管理员可为每个授权码设置备注、有效期（永久 / 1–90 天 / 自定义）和用户类型，也可停用、重新生成或删除授权码（删除会同时删除其工作空间）。
+- **临时用户**：文件在上传 `TTL_HOURS` 小时后自动删除；授权码过期后整个工作空间被清理。
+- **永久用户**：工作空间内容不会自动删除；授权码过期只会阻止登录，数据保留。
+- 导出包（zip）对所有用户都只保留 `TTL_HOURS` 小时，请及时下载。
+
 ### 使用
 
-1. 在首页或工作区拖入一个或多个 `.nd2` 文件。
-2. 工作区：预览、元信息、勾选文件后导出。
-3. 高级模式：通道 LUT、直方图、比例尺、Z/T 投影与切片（无该维度时会提示）、直线/ROI 测量。
+1. 在首页或工作区拖入 `.nd2` 文件或整个文件夹（也可点“选择文件夹”），目录结构会原样保留。
+2. 工作区左侧是文件树：右键文件或文件夹可导出、上传到此处、新建文件夹、重命名、删除（触屏设备点 `⋯`）。
+3. 导出包内的文件位于与原 ND2 文件相同的目录中，例如 `20260918H2/vector 6h/MB2310439_DAPI.png`。
+4. 高级模式：通道 LUT、直方图、比例尺、Z/T 投影与切片（无该维度时会提示）、直线/ROI 测量。
 
-TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF。
-OME-TIFF 导出包同时包含文件名带 `DISPLAY` 的 8 位预览 TIFF；预览图用于系统看图和演示，`.ome.tif` 与原始通道 TIFF 用于定量分析。
-
-文件、预览和导出记录按浏览器会话隔离；同一浏览器的标签页共享数据，不同浏览器或无痕窗口互不可见。这是匿名会话隔离，不等同于账号登录，公开部署仍应放在带身份认证的反向代理后面。
+TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF：
+`*.ome.tif` 保留原始像素值（12 位数据存放在 16 位文件中，普通看图软件里会很暗），供 Fiji / QuPath / napari 分析；
+同名的 `*.tif` 是应用了显示 LUT 的 8 位图，可直接用系统看图或放入 PPT。在高级模式中隐藏的通道不会被导出为文件。
 
 
 ## English
@@ -56,11 +66,13 @@ docker compose up -d
 
 Open http://localhost:8080. Persistent data is stored directly in the host directory `./data`. Bind address defaults to localhost; set `ND2UTILS_BIND_HOST=0.0.0.0` only behind a proxy.
 
+On first start an admin access code is generated and printed to the server log (`docker compose logs nd2utils`). Sign in with it and issue codes for other users under Settings → Access codes, where the admin code is shown again.
+
 
 ### Notes
 
 - Large files are read plane-by-plane. Do not expect the whole T×Z cube in RAM.
-- OME-TIFF keeps native bit depth. TIFF / PNG / JPEG apply the on-screen LUT and are 8-bit.
-- OME-TIFF exports also include bright 8-bit TIFF companions marked `DISPLAY`; use those for ordinary viewers and the raw `.ome.tif`/channel TIFF files for analysis.
-- Files, previews, and export jobs are isolated by browser session. This is anonymous session isolation rather than account authentication; public deployments should still use an authenticating reverse proxy.
+- Every page and API call requires an access code. Each code owns one workspace. Codes have an optional expiry and are either *temporary* (files removed after `TTL_HOURS` and when the code expires) or *permanent* (never cleaned up automatically). Export archives are kept for `TTL_HOURS` for everyone.
+- Upload files or whole folders; the workspace keeps the folder tree. Right-click a file or folder to export it — exported files land in the same folders as their ND2 source inside the zip.
+- OME-TIFF keeps native bit depth in `*.ome.tif` (12-bit data looks dark in ordinary viewers). Each one has an 8-bit `*.tif` with the same name and the display LUT applied. TIFF / PNG / JPEG are 8-bit display images. Hidden channels are not exported.
 - The local `ND2demo/` directory is a development-only fixture and is not included in git. The application does not read it at runtime, and Docker excludes it from the build context.

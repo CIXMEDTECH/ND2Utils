@@ -9,14 +9,42 @@ const Workspace = lazy(() => import("./pages/Workspace").then((module) => ({ def
 const Advanced = lazy(() => import("./pages/Advanced").then((module) => ({ default: module.Advanced })));
 const Jobs = lazy(() => import("./pages/Jobs").then((module) => ({ default: module.Jobs })));
 const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })));
+const Login = lazy(() => import("./pages/Login").then((module) => ({ default: module.Login })));
 
 export function App() {
   const lang = useApp((s) => s.lang);
+  const user = useApp((s) => s.user);
+  const authChecked = useApp((s) => s.authChecked);
+  const checkAuth = useApp((s) => s.checkAuth);
   const location = useLocation();
   const reduce = useReducedMotion();
+  const sessionExpired = useApp((s) => s.sessionExpired);
   useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   }, [lang]);
+  useEffect(() => {
+    void checkAuth().catch(() => undefined);
+  }, [checkAuth]);
+
+  const fallback = (
+    <div role="status" className="flex min-h-[100dvh] items-center justify-center gap-2 bg-[var(--bg)] font-mono text-[11px] text-[var(--text-dim)]">
+      <motion.span
+        animate={reduce ? undefined : { rotate: 360 }}
+        transition={{ duration: 1.1, repeat: Infinity, ease: "linear" }}
+        className="h-3.5 w-3.5 rounded-full border border-[var(--line-strong)] border-t-[var(--accent)]"
+      />
+      {t(lang, "loadingPage")}
+    </div>
+  );
+
+  if (!authChecked) return fallback;
+  if (!user) {
+    return (
+      <Suspense fallback={fallback}>
+        <Login sessionEnded={sessionExpired} />
+      </Suspense>
+    );
+  }
 
   return (
     <AnimatePresence mode="wait" initial={false}>
@@ -28,18 +56,7 @@ export function App() {
         transition={{ type: "spring", bounce: 0, duration: 0.45 }}
         className="min-h-[100dvh]"
       >
-        <Suspense
-          fallback={(
-            <div role="status" className="flex min-h-[100dvh] items-center justify-center gap-2 bg-[var(--bg)] font-mono text-[11px] text-[var(--text-dim)]">
-              <motion.span
-                animate={reduce ? undefined : { rotate: 360 }}
-                transition={{ duration: 1.1, repeat: Infinity, ease: "linear" }}
-                className="h-3.5 w-3.5 rounded-full border border-[var(--line-strong)] border-t-[var(--accent)]"
-              />
-              {t(lang, "loadingPage")}
-            </div>
-          )}
-        >
+        <Suspense fallback={fallback}>
           <Routes location={location}>
             <Route path="/" element={<Home />} />
             <Route path="/workspace" element={<Workspace />} />

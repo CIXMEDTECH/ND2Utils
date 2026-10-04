@@ -1,16 +1,18 @@
+import { useNavigate, useLocation } from "react-router-dom";
+import { CheckCircle, FolderSimplePlus, UploadSimple, WarningCircle } from "@phosphor-icons/react";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { CheckCircle, UploadSimple, WarningCircle } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { t } from "../i18n";
-import { uploadFile } from "../lib/api";
-import { detailMessage } from "../lib/format";
+import { fromDataTransfer, fromFileList, type PendingUpload, useUploads } from "../lib/uploads";
 import { useApp } from "../store";
 
-type UploadProgress = {
-  label: string;
-  ratio: number | null;
-};
+// React's input typings do not know the (widely supported) directory picker attributes.
+const DIRECTORY_PICKER = { webkitdirectory: "", directory: "" } as Record<string, string>;
+
+/** id of the hidden folder picker that belongs to a DropZone with `inputId`. */
+export function folderInputId(inputId: string) {
+  return `${inputId}-folder`;
+}
 
 export function DropZone({
   compact = false,
@@ -20,62 +22,21 @@ export function DropZone({
   inputId?: string;
 }) {
   const lang = useApp((s) => s.lang);
-  const refreshFiles = useApp((s) => s.refreshFiles);
-  const select = useApp((s) => s.select);
+  const currentFolder = useApp((s) => s.currentFolder);
+  const progress = useUploads((s) => s.progress);
+  const error = useUploads((s) => s.error);
+  const upload = useUploads((s) => s.upload);
   const nav = useNavigate();
+  const location = useLocation();
   const reduce = useReducedMotion();
   const [over, setOver] = useState(false);
-  const [progress, setProgress] = useState<UploadProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  async function handleFiles(list: FileList | File[]) {
+  async function handle(items: PendingUpload[] | Promise<PendingUpload[]>) {
     if (progress) return;
-    const files = [...list].filter((file) => file.name.toLowerCase().endsWith(".nd2"));
-    if (!files.length) {
-      setError(t(lang, "notNd2"));
-      return;
-    }
-
-    setError(null);
-    let lastId: string | null = null;
-    let firstError: string | null = null;
-
-    for (let i = 0; i < files.length; i += 1) {
-      const file = files[i];
-      setProgress({
-        label: `${t(lang, "uploading")} ${file.name} (${i + 1}/${files.length})`,
-        ratio: i / files.length,
-      });
-      try {
-        const rec = await uploadFile(file, (ratio) => {
-          setProgress({
-            label: `${t(lang, "uploading")} ${file.name} · ${Math.round(ratio * 100)}%`,
-            ratio: (i + ratio) / files.length,
-          });
-        });
-        lastId = rec.id;
-      } catch (err) {
-        firstError ??= detailMessage(err, lang);
-      }
-    }
-
-    if (!lastId) {
-      setProgress(null);
-      setError(firstError ?? t(lang, "errorGeneric"));
-      return;
-    }
-
-    try {
-      setProgress({ label: t(lang, "indexing"), ratio: null });
-      await refreshFiles();
-      select(lastId);
-      if (firstError) setError(firstError);
-      nav("/workspace");
-    } catch (err) {
-      setError(detailMessage(err, lang));
-    } finally {
-      setProgress(null);
-    }
+    // Read the target now: the user may click another folder while uploads are running.
+    const target = useApp.getState().currentFolder;
+    const lastId = await upload(await items, target);
+    if (lastId && location.pathname !== "/workspace") nav("/workspace");
   }
 
   return (
@@ -99,7 +60,7 @@ export function DropZone({
       onDrop={(event) => {
         event.preventDefault();
         setOver(false);
-        void handleFiles(event.dataTransfer.files);
+        void handle(fromDataTransfer(event.dataTransfer));
       }}
     >
       <input
@@ -111,7 +72,21 @@ export function DropZone({
         className="sr-only"
         aria-label={t(lang, "chooseFiles")}
         onChange={(event) => {
-          if (event.target.files) void handleFiles(event.target.files);
+          if (event.target.files) void handle(fromFileList(event.target.files));
+          event.target.value = "";
+        }}
+      />
+      <input
+        id={folderInputId(inputId)}
+        type="file"
+        multiple
+        {...DIRECTORY_PICKER}
+        disabled={Boolean(progress)}
+        className="sr-only"
+        tabIndex={-1}
+        aria-label={t(lang, "chooseFolder")}
+        onChange={(event) => {
+          if (event.target.files) void handle(fromFileList(event.target.files));
           event.target.value = "";
         }}
       />
@@ -140,6 +115,24 @@ export function DropZone({
         <p className={`mt-2 max-w-[38ch] text-[13px] leading-5 ${compact ? "text-[var(--text-dim)]" : "text-white/58"}`}>
           {t(lang, "dropHint")}
         </p>
+        <button
+          type="button"
+          disabled={Boolean(progress)}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            document.getElementById(folderInputId(inputId))?.click();
+          }}
+          className={`mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors ${compact ? "text-[var(--accent)] hover:bg-[var(--accent-soft)]" : "text-[var(--accent)] hover:bg-white/10"}`}
+        >
+          <FolderSimplePlus size={15} weight="duotone" />
+          {t(lang, "chooseFolder")}
+        </button>
+        {compact && (
+          <p className="mt-1 max-w-full truncate font-mono text-[10px] text-[var(--text-dim)]" title={currentFolder || t(lang, "workspaceRoot")}>
+            {t(lang, "uploadTarget")} /{currentFolder}
+          </p>
+        )}
 
         <AnimatePresence mode="wait" initial={false}>
           {progress && (

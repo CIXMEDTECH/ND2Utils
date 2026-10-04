@@ -11,10 +11,16 @@ import { Guide } from "./Guide";
 
 export function ExportPanel({
   fileIds,
+  folders = [],
+  fileCount,
   coords,
   luts,
 }: {
   fileIds: string[];
+  /** Workspace folders to export recursively (resolved on the server). */
+  folders?: string[];
+  /** Number of ND2 files the export covers, when it differs from fileIds.length (folders). */
+  fileCount?: number;
   coords?: { t: number; z: number; p: number };
   luts?: LutSetting[];
 }) {
@@ -32,18 +38,21 @@ export function ExportPanel({
   const [error, setError] = useState<string | null>(null);
 
   const display = format === "png" || format === "jpeg" || format === "tiff";
+  const count = fileCount ?? fileIds.length;
 
   async function run() {
-    if (!fileIds.length || busy) return;
+    if (!count || busy) return;
     setBusy(true);
     setError(null);
     try {
       await startExport({
         file_ids: fileIds,
+        folders,
         format,
         scope,
         channels_mode: channelsMode,
-        scale_bar: display && scaleBar,
+        // OME-TIFF packages also contain viewable 8-bit companions; they get the scale bar too.
+        scale_bar: scaleBar,
         include_metadata: includeMetadata,
         burn_lut: false,
         jpeg_quality: jpegQuality,
@@ -109,16 +118,10 @@ export function ExportPanel({
           <input type="checkbox" checked={includeMetadata} onChange={(event) => setIncludeMetadata(event.target.checked)} className="mt-0.5" />
           {t(lang, "includeMeta")}
         </label>
-        {display && (
-          <motion.label
-            initial={reduce ? false : { opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            className="flex cursor-pointer items-start gap-2.5 overflow-hidden text-[12px] leading-5"
-          >
-            <input type="checkbox" checked={scaleBar} onChange={(event) => setScaleBar(event.target.checked)} className="mt-0.5" />
-            {t(lang, "scaleBar")}
-          </motion.label>
-        )}
+        <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
+          <input type="checkbox" checked={scaleBar} onChange={(event) => setScaleBar(event.target.checked)} className="mt-0.5" />
+          {t(lang, "scaleBar")}
+        </label>
       </div>
 
       <AnimatePresence>
@@ -155,7 +158,7 @@ export function ExportPanel({
 
       <button
         type="button"
-        disabled={busy || !fileIds.length}
+        disabled={busy || !count}
         onClick={() => void run()}
         className="group inline-flex min-h-11 items-center justify-between rounded-xl bg-[var(--accent)] px-4 text-[13px] font-semibold text-white shadow-[0_10px_24px_var(--accent-glow)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] hover:shadow-[0_14px_30px_var(--accent-glow)] active:scale-[0.98] disabled:translate-y-0 disabled:opacity-40"
       >
@@ -170,7 +173,7 @@ export function ExportPanel({
           {busy ? t(lang, "jobRunning") : t(lang, "startExport")}
         </span>
         <span className="inline-flex items-center gap-2 font-mono text-[10px] font-normal text-white/72">
-          {fileIds.length} {t(lang, "nFiles")}
+          {count} {t(lang, "nFiles")}
           <ArrowRight size={13} className="transition-transform duration-300 group-hover:translate-x-0.5" />
         </span>
       </button>

@@ -66,6 +66,11 @@ export function Advanced() {
     if (fileId) select(fileId);
   }, [fileId, select]);
 
+  // LUTs belong to one file: carrying them over to another file can render it (and its export) black.
+  useEffect(() => {
+    setLuts([]);
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
     let cancel = false;

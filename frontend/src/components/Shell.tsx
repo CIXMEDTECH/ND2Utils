@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
   ClockCounterClockwise,
   GearSix,
   GridFour,
   Moon,
+  ShieldCheck,
+  SignOut,
   SlidersHorizontal,
   Sun,
   Translate,
@@ -28,6 +30,9 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
   const theme = useApp((s) => s.theme);
   const setLang = useApp((s) => s.setLang);
   const setTheme = useApp((s) => s.setTheme);
+  const user = useApp((s) => s.user);
+  const signOut = useApp((s) => s.signOut);
+  const navigate = useNavigate();
   const reduce = useReducedMotion();
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
@@ -87,6 +92,16 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
           </nav>
 
           <div className="flex items-center gap-1">
+            {user && (
+              <Link
+                to="/settings"
+                className="mr-1 hidden max-w-[11rem] items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11px] text-[var(--text-dim)] transition-colors hover:bg-[var(--bg-elev)] hover:text-[var(--text)] sm:inline-flex"
+                title={t(lang, "accountTitle")}
+              >
+                {user.role === "admin" && <ShieldCheck size={14} weight="fill" className="shrink-0 text-[var(--accent)]" />}
+                <span className="truncate">{user.label || t(lang, user.role === "admin" ? "roleAdmin" : "roleUser")}</span>
+              </Link>
+            )}
             <Magnetic>
               <button
                 type="button"
@@ -119,6 +134,17 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
                     {dark ? <Sun size={16} /> : <Moon size={16} />}
                   </motion.span>
                 </AnimatePresence>
+              </button>
+            </Magnetic>
+            <Magnetic>
+              <button
+                type="button"
+                onClick={() => void signOut().finally(() => navigate("/"))}
+                className="icon-action"
+                aria-label={t(lang, "signOut")}
+                title={t(lang, "signOut")}
+              >
+                <SignOut size={16} />
               </button>
             </Magnetic>
           </div>

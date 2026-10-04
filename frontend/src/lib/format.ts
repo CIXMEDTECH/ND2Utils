@@ -57,9 +57,45 @@ export function detailMessage(err: unknown, lang: Lang = "en"): string {
     not_ready: "errorNotReady",
     no_axis: "errorNoAxis",
     no_z: "errorNoAxis",
+    unauthorized: "errorUnauthorized",
+    forbidden: "errorForbidden",
+    bad_path: "errorBadPath",
+    exists: "errorExists",
+    empty: "errorEmpty",
+    bad_expiry: "errorBadExpiry",
+    invalid_code: "loginInvalid",
+    code_expired: "loginExpired",
+    code_disabled: "loginDisabled",
+    rate_limited: "loginRateLimited",
   };
   const normalized = code ?? (message === "network" || message.includes("Failed to fetch") ? "network" : "");
   if (normalized && keyByCode[normalized]) return t(lang, keyByCode[normalized]);
   if (lang === "en" && message) return message;
   return t(lang, "errorGeneric");
+}
+
+export function formatDateTime(seconds: number | null | undefined, lang: Lang): string {
+  if (!seconds) return "–";
+  return new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(seconds * 1000));
+}
+
+/** "a/b/c" -> "c"; "" -> "" */
+export function baseName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/** "a/b/c" -> "a/b"; "a" -> "" */
+export function parentPath(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i < 0 ? "" : path.slice(0, i);
+}
+
+export function joinPath(...parts: string[]): string {
+  return parts.flatMap((p) => p.split("/")).filter(Boolean).join("/");
 }

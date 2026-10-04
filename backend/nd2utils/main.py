@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import re
+import logging
 import secrets
 import shutil
 import time
@@ -13,11 +12,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from nd2utils import __version__
+from nd2utils import __version__, auth
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import new_job_id, run_export
 from nd2utils.models import ExportRequest, MeasureRequest
@@ -25,7 +25,6 @@ from nd2utils.nd2io import (
     Nd2Error,
     axis_size,
     close_all,
-    close_nd2,
     extract_channels,
     identify_path,
     open_nd2,
@@ -42,29 +41,54 @@ from nd2utils.render import (
     preview_rgb,
 )
 from nd2utils.store import (
-    delete_file_record,
-    file_dir,
+    PathError,
+    create_folder,
+    delete_file,
+    delete_folder,
+    delete_workspace,
+    files_in_folder,
+    find_file,
     get_owned_file,
     get_owned_job,
     list_files,
+    list_folders,
     list_jobs,
+    normalize_filename,
+    normalize_folder,
     purge_expired,
+    rename_folder,
     source_path,
+    update_file,
     upsert_file,
     upsert_job,
+    workspace_usage,
 )
 
 FRONTEND_DIST = repo_root() / "frontend" / "dist"
 SESSION_COOKIE = "nd2utils_session"
-SESSION_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
-_SESSION_TOKEN = re.compile(r"[A-Za-z0-9_-]{40,128}")
+log = logging.getLogger("nd2utils")
+
+# Reachable without logging in. Everything else under /api/ needs a valid session.
+_PUBLIC_API = {"/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/me", "/api/docs", "/api/openapi.json"}
+
+
+async def _purge_loop() -> None:
+    while True:
+        await asyncio.sleep(max(settings.purge_interval_seconds, 30))
+        try:
+            await asyncio.to_thread(purge_expired)
+        except Exception:  # keep the loop alive; the next round retries
+            log.exception("Scheduled cleanup failed")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_dirs()
+    auth.ensure_admin()
     purge_expired()
+    task = asyncio.create_task(_purge_loop())
     yield
+    task.cancel()
     close_all()
 
 
@@ -91,36 +115,45 @@ app.add_middleware(
 )
 
 
-def _owner_key(token: str) -> str:
-    return hashlib.sha256(token.encode("ascii")).hexdigest()
+def _unauthorized() -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"detail": {"code": "unauthorized", "message": "Log in with an access code."}},
+    )
 
 
 @app.middleware("http")
-async def browser_session(request: Request, call_next):
+async def require_login(request: Request, call_next):
     token = request.cookies.get(SESSION_COOKIE)
-    set_cookie = not token or _SESSION_TOKEN.fullmatch(token) is None
-    if set_cookie:
-        token = secrets.token_urlsafe(32)
-    request.state.owner_id = _owner_key(token)
-    response = await call_next(request)
-    if set_cookie:
-        response.set_cookie(
-            SESSION_COOKIE,
-            token,
-            max_age=SESSION_COOKIE_MAX_AGE,
-            httponly=True,
-            secure=request.url.scheme == "https",
-            samesite="lax",
-            path="/",
-        )
-    return response
+    user = await run_in_threadpool(auth.resolve_session, token) if token else None
+    request.state.user = user
+    path = request.url.path
+    if path.startswith("/api/") and path not in _PUBLIC_API and user is None:
+        return _unauthorized()
+    return await call_next(request)
 
 
-def _browser_owner(request: Request) -> str:
-    return request.state.owner_id
+def _current_user(request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Log in with an access code."})
+    return user
 
 
-BrowserOwner = Annotated[str, Depends(_browser_owner)]
+def _workspace_owner(user: Annotated[dict[str, Any], Depends(_current_user)]) -> str:
+    # One access code == one workspace.
+    return user["id"]
+
+
+def _admin_user(user: Annotated[dict[str, Any], Depends(_current_user)]) -> dict[str, Any]:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Administrator access required."})
+    return user
+
+
+CurrentUser = Annotated[dict[str, Any], Depends(_current_user)]
+Owner = Annotated[str, Depends(_workspace_owner)]
+AdminUser = Annotated[dict[str, Any], Depends(_admin_user)]
 
 
 def _public(record: dict[str, Any]) -> dict[str, Any]:
@@ -146,28 +179,62 @@ def _need(file_id: str, owner_id: str) -> dict[str, Any]:
     return rec
 
 
-def _ingest_file(src: Path, name: str, owner_id: str, size_bytes: int | None = None) -> dict[str, Any]:
+def _bad_path(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail={"code": "bad_path", "message": str(exc) or "Invalid path."})
+
+
+def _folder_arg(raw: str | None) -> str:
+    try:
+        return normalize_folder(raw)
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+
+
+def _nd2_name(raw: str | None) -> str:
+    try:
+        name = normalize_filename(raw or "upload.nd2")
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+    if not name.lower().endswith(".nd2"):
+        raise HTTPException(status_code=400, detail={"code": "not_nd2", "message": "Please upload a .nd2 file."})
+    return name
+
+
+def _ingest_file(
+    src: Path,
+    name: str,
+    owner_id: str,
+    size_bytes: int | None = None,
+    folder: str = "",
+) -> dict[str, Any]:
     file_id = uuid.uuid4().hex
     dest = source_path(file_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.resolve() != dest.resolve():
-        shutil.copy2(src, dest)
+        shutil.move(src, dest)
     size = size_bytes if size_bytes is not None else dest.stat().st_size
     if size > settings.max_upload_bytes:
-        dest.unlink(missing_ok=True)
+        delete_file(file_id, owner_id)
         raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
     created = time.time()
     try:
         rec = identify_path(dest, file_id, name, size, created)
     except Nd2Error as exc:
-        dest.unlink(missing_ok=True)
+        delete_file(file_id, owner_id)
         _raise_nd2(exc)
     rec["_owner"] = owner_id
+    rec["folder"] = folder
+    # Uploading the same file name into the same folder replaces the old copy, like a file system.
+    previous = find_file(owner_id, folder, name)
     upsert_file(rec)
+    if previous and previous["id"] != file_id:
+        delete_file(previous["id"], owner_id)
     return rec
 
 
 def _need_upload(upload_id: str, owner_id: str) -> tuple[Path, dict[str, Any]]:
+    if not upload_id.isalnum():
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
     dest_dir = settings.staging_dir / upload_id
     meta_path = dest_dir / "meta.json"
     if not meta_path.is_file():
@@ -185,46 +252,215 @@ def _need_upload(upload_id: str, owner_id: str) -> tuple[Path, dict[str, Any]]:
 class ChunkInit(BaseModel):
     filename: str
     size: int
+    folder: str = ""
+
+
+class LoginBody(BaseModel):
+    code: str
+
+
+class FolderBody(BaseModel):
+    path: str
+
+
+class FolderRename(BaseModel):
+    path: str
+    new_path: str
+
+
+class FilePatch(BaseModel):
+    name: str | None = None
+    folder: str | None = None
+
+
+class CodeCreate(BaseModel):
+    label: str = ""
+    kind: auth.Kind = "temporary"
+    expires_at: float | None = None
+
+
+class CodePatch(BaseModel):
+    label: str | None = None
+    kind: auth.Kind | None = None
+    expires_at: float | None = None
+    disabled: bool | None = None
+
+
+def _user_info(user: dict[str, Any]) -> dict[str, Any]:
+    info = auth.public_code(user)
+    info["usage"] = workspace_usage(user["id"])
+    return info
+
+
+def _auth_error(exc: auth.AuthError) -> HTTPException:
+    status = {
+        "rate_limited": 429,
+        "not_found": 404,
+        "forbidden": 403,
+    }.get(exc.code, 401)
+    return HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
 
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    return {"ok": True, "version": __version__}
+
+
+@app.post("/api/auth/login")
+def api_login(body: LoginBody, request: Request) -> JSONResponse:
+    client = request.client.host if request.client else ""
+    try:
+        token, user = auth.login(body.code, client)
+    except auth.AuthError as exc:
+        raise _auth_error(exc) from exc
+    response = JSONResponse({"authenticated": True, "user": _user_info(user)})
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=auth.SESSION_MAX_AGE,
+        httponly=True,
+        secure=https,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def api_logout(request: Request) -> JSONResponse:
+    auth.logout(request.cookies.get(SESSION_COOKIE))
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/auth/me")
+def api_me(request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "user", None)
+    if not user:
+        return {"authenticated": False, "user": None}
+    return {"authenticated": True, "user": _user_info(user)}
+
+
+@app.get("/api/settings")
+def get_settings(_user: CurrentUser) -> dict[str, Any]:
     return {
-        "ok": True,
         "version": __version__,
         "max_upload_bytes": settings.max_upload_bytes,
         "ttl_hours": settings.ttl_hours,
     }
 
 
-@app.get("/api/settings")
-def get_settings() -> dict[str, Any]:
+# --- admin: access codes ----------------------------------------------------
+
+
+def _admin_code_view(rec: dict[str, Any]) -> dict[str, Any]:
+    out = auth.public_code(rec, reveal=True)
+    out["usage"] = workspace_usage(rec["id"])
+    return out
+
+
+@app.get("/api/admin/codes")
+def api_admin_codes(_admin: AdminUser) -> dict[str, Any]:
     return {
-        "max_upload_bytes": settings.max_upload_bytes,
+        "codes": [_admin_code_view(rec) for rec in auth.list_codes()],
         "ttl_hours": settings.ttl_hours,
     }
 
 
-@app.get("/api/files")
-def api_list_files(owner_id: BrowserOwner) -> dict[str, Any]:
+@app.post("/api/admin/codes")
+def api_admin_create_code(body: CodeCreate, _admin: AdminUser) -> dict[str, Any]:
+    if body.expires_at is not None and body.expires_at <= time.time():
+        raise HTTPException(status_code=400, detail={"code": "bad_expiry", "message": "Expiry must be in the future."})
+    return _admin_code_view(auth.create_code(label=body.label, kind=body.kind, expires_at=body.expires_at))
+
+
+@app.patch("/api/admin/codes/{code_id}")
+def api_admin_update_code(code_id: str, body: CodePatch, _admin: AdminUser) -> dict[str, Any]:
+    # Only fields sent by the client change; an explicit `"expires_at": null` means "never expires".
+    changes = {field: getattr(body, field) for field in body.model_fields_set}
+    try:
+        rec = auth.update_code(code_id, changes)
+    except auth.AuthError as exc:
+        raise _auth_error(exc) from exc
     purge_expired()
-    items = list_files(owner_id)
-    summaries = []
-    for rec in items:
-        summaries.append({k: rec.get(k) for k in (
-            "id", "name", "size_bytes", "status", "error", "version", "dtype",
-            "shape", "axes", "width", "height", "channels", "voxel_um",
-            "objective", "magnification", "na", "acquired", "instrument",
-            "software", "bits_significant", "is_rgb", "created_at",
-        )})
-    return {"files": summaries}
+    return _admin_code_view(rec)
+
+
+@app.post("/api/admin/codes/{code_id}/regenerate")
+def api_admin_regenerate_code(code_id: str, _admin: AdminUser) -> dict[str, Any]:
+    try:
+        return _admin_code_view(auth.regenerate_code(code_id))
+    except auth.AuthError as exc:
+        raise _auth_error(exc) from exc
+
+
+@app.delete("/api/admin/codes/{code_id}")
+def api_admin_delete_code(code_id: str, _admin: AdminUser) -> dict[str, str]:
+    try:
+        auth.delete_code(code_id)
+    except auth.AuthError as exc:
+        raise _auth_error(exc) from exc
+    delete_workspace(code_id)
+    return {"id": code_id, "status": "deleted"}
+
+
+# --- workspace --------------------------------------------------------------
+
+_SUMMARY_KEYS = (
+    "id", "name", "folder", "size_bytes", "status", "error", "version", "dtype",
+    "shape", "axes", "width", "height", "channels", "voxel_um",
+    "objective", "magnification", "na", "acquired", "instrument",
+    "software", "bits_significant", "is_rgb", "created_at",
+)
+
+
+@app.get("/api/files")
+def api_list_files(owner_id: Owner) -> dict[str, Any]:
+    files = [{k: rec.get(k) for k in _SUMMARY_KEYS} for rec in list_files(owner_id)]
+    for item in files:
+        item["folder"] = item.get("folder") or ""
+    return {"files": files, "folders": list_folders(owner_id)}
+
+
+@app.post("/api/folders")
+def api_create_folder(body: FolderBody, owner_id: Owner) -> dict[str, str]:
+    try:
+        return {"path": create_folder(owner_id, body.path)}
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+
+
+@app.post("/api/folders/rename")
+def api_rename_folder(body: FolderRename, owner_id: Owner) -> dict[str, str]:
+    old = _folder_arg(body.path)
+    if old not in list_folders(owner_id):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Folder not found."})
+    try:
+        return {"path": rename_folder(owner_id, old, body.new_path)}
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail={"code": "exists", "message": "A folder with this name already exists."}) from exc
+
+
+@app.post("/api/folders/delete")
+def api_delete_folder(body: FolderBody, owner_id: Owner) -> dict[str, Any]:
+    folder = _folder_arg(body.path)
+    if folder not in list_folders(owner_id):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Folder not found."})
+    try:
+        removed = delete_folder(owner_id, folder)
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+    return {"path": folder, "removed_files": removed}
 
 
 @app.post("/api/files")
-async def api_upload(owner_id: BrowserOwner, file: UploadFile = File(...)) -> dict[str, Any]:
-    name = file.filename or "upload.nd2"
-    if not name.lower().endswith(".nd2"):
-        raise HTTPException(status_code=400, detail={"code": "not_nd2", "message": "Please upload a .nd2 file."})
+async def api_upload(owner_id: Owner, folder: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
+    name = _nd2_name(file.filename)
+    target = _folder_arg(folder)
     tmp = settings.staging_dir / f"{uuid.uuid4().hex}.nd2"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     size = 0
@@ -240,21 +476,23 @@ async def api_upload(owner_id: BrowserOwner, file: UploadFile = File(...)) -> di
                 raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
             fh.write(chunk)
     try:
-        rec = _ingest_file(tmp, name, owner_id, size)
+        rec = await run_in_threadpool(_ingest_file, tmp, name, owner_id, size, target)
     finally:
         tmp.unlink(missing_ok=True)
     return _public(rec)
 
 
 @app.post("/api/uploads/init")
-def api_chunk_init(body: ChunkInit, owner_id: BrowserOwner) -> dict[str, str]:
+def api_chunk_init(body: ChunkInit, owner_id: Owner) -> dict[str, str]:
+    name = _nd2_name(body.filename)
+    folder = _folder_arg(body.folder)
     if body.size > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
     upload_id = uuid.uuid4().hex
     dest = settings.staging_dir / upload_id
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "meta.json").write_text(
-        json.dumps({"filename": body.filename, "size": body.size, "_owner": owner_id}),
+        json.dumps({"filename": name, "folder": folder, "size": body.size, "_owner": owner_id}),
         encoding="utf-8",
     )
     (dest / "source.partial").touch()
@@ -264,7 +502,7 @@ def api_chunk_init(body: ChunkInit, owner_id: BrowserOwner) -> dict[str, str]:
 @app.put("/api/uploads/{upload_id}/chunk")
 async def api_chunk(
     upload_id: str,
-    owner_id: BrowserOwner,
+    owner_id: Owner,
     offset: int = 0,
     file: UploadFile = File(...),
 ) -> dict[str, int]:
@@ -272,6 +510,8 @@ async def api_chunk(
     dest = dest_dir / "source.partial"
     if not dest.is_file():
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
+    if offset < 0 or offset > settings.max_upload_bytes:
+        raise HTTPException(status_code=400, detail={"code": "bad_offset", "message": "Invalid chunk offset."})
     data = await file.read()
     with dest.open("r+b") as fh:
         if offset > dest.stat().st_size:
@@ -286,30 +526,41 @@ async def api_chunk(
 
 
 @app.post("/api/uploads/{upload_id}/complete")
-def api_chunk_complete(upload_id: str, owner_id: BrowserOwner) -> dict[str, Any]:
+def api_chunk_complete(upload_id: str, owner_id: Owner) -> dict[str, Any]:
     dest_dir, meta = _need_upload(upload_id, owner_id)
     partial = dest_dir / "source.partial"
     if not partial.exists():
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
-    name = meta.get("filename") or "upload.nd2"
-    rec = _ingest_file(partial, name, owner_id, partial.stat().st_size)
-    shutil.rmtree(dest_dir, ignore_errors=True)
+    name = _nd2_name(meta.get("filename"))
+    folder = _folder_arg(meta.get("folder"))
+    try:
+        rec = _ingest_file(partial, name, owner_id, partial.stat().st_size, folder)
+    finally:
+        shutil.rmtree(dest_dir, ignore_errors=True)
     return _public(rec)
 
 
 @app.get("/api/files/{file_id}")
-def api_file(file_id: str, owner_id: BrowserOwner) -> dict[str, Any]:
+def api_file(file_id: str, owner_id: Owner) -> dict[str, Any]:
     return _public(_need(file_id, owner_id))
 
 
+@app.patch("/api/files/{file_id}")
+def api_update_file(file_id: str, body: FilePatch, owner_id: Owner) -> dict[str, Any]:
+    rec = _owned_file(file_id, owner_id)
+    name = _nd2_name(body.name) if body.name is not None else rec.get("name")
+    folder = _folder_arg(body.folder) if body.folder is not None else rec.get("folder") or ""
+    clash = find_file(owner_id, folder, name)
+    if clash and clash["id"] != file_id:
+        raise HTTPException(status_code=409, detail={"code": "exists", "message": "A file with this name already exists here."})
+    updated = update_file(file_id, owner_id, {"name": name, "folder": folder})
+    return _public(updated or rec)
+
+
 @app.delete("/api/files/{file_id}")
-def api_delete(file_id: str, owner_id: BrowserOwner) -> dict[str, str]:
+def api_delete(file_id: str, owner_id: Owner) -> dict[str, str]:
     _owned_file(file_id, owner_id)
-    close_nd2(source_path(file_id))
-    shutil.rmtree(file_dir(file_id), ignore_errors=True)
-    cache = settings.cache_dir / file_id
-    shutil.rmtree(cache, ignore_errors=True)
-    delete_file_record(file_id, owner_id)
+    delete_file(file_id, owner_id)
     return {"id": file_id, "status": "deleted"}
 
 
@@ -323,7 +574,7 @@ def _planes(file_id: str, owner_id: str, t: int, z: int, p: int):
 @app.get("/api/files/{file_id}/preview")
 def api_preview(
     file_id: str,
-    owner_id: BrowserOwner,
+    owner_id: Owner,
     t: int = 0,
     z: int = 0,
     p: int = 0,
@@ -350,7 +601,7 @@ def api_preview(
 
 
 @app.get("/api/files/{file_id}/plane")
-def api_plane(file_id: str, owner_id: BrowserOwner, t: int = 0, z: int = 0, p: int = 0) -> Response:
+def api_plane(file_id: str, owner_id: Owner, t: int = 0, z: int = 0, p: int = 0) -> Response:
     rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
     payload = pack_planes(planes, rec.get("channels") or [])
     return Response(content=payload, media_type="application/octet-stream")
@@ -359,7 +610,7 @@ def api_plane(file_id: str, owner_id: BrowserOwner, t: int = 0, z: int = 0, p: i
 @app.get("/api/files/{file_id}/histogram")
 def api_histogram(
     file_id: str,
-    owner_id: BrowserOwner,
+    owner_id: Owner,
     t: int = 0,
     z: int = 0,
     p: int = 0,
@@ -373,7 +624,7 @@ def api_histogram(
 
 
 @app.get("/api/files/{file_id}/autoscale")
-def api_autoscale(file_id: str, owner_id: BrowserOwner, t: int = 0, z: int = 0, p: int = 0) -> dict[str, Any]:
+def api_autoscale(file_id: str, owner_id: Owner, t: int = 0, z: int = 0, p: int = 0) -> dict[str, Any]:
     rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
     items = []
     for i, plane in enumerate(planes):
@@ -394,7 +645,7 @@ def api_autoscale(file_id: str, owner_id: BrowserOwner, t: int = 0, z: int = 0, 
 @app.get("/api/files/{file_id}/projection")
 def api_projection(
     file_id: str,
-    owner_id: BrowserOwner,
+    owner_id: Owner,
     axis: str = "Z",
     mode: str = "max",
     t: int = 0,
@@ -423,7 +674,7 @@ def api_projection(
 @app.get("/api/files/{file_id}/tiles")
 def api_tiles(
     file_id: str,
-    owner_id: BrowserOwner,
+    owner_id: Owner,
     axis: str = "Z",
     t: int = 0,
     p: int = 0,
@@ -444,7 +695,7 @@ def api_tiles(
 
 
 @app.post("/api/files/{file_id}/measure")
-def api_measure(file_id: str, body: MeasureRequest, owner_id: BrowserOwner) -> dict[str, Any]:
+def api_measure(file_id: str, body: MeasureRequest, owner_id: Owner) -> dict[str, Any]:
     rec, _, planes, _ = _planes(file_id, owner_id, body.t, body.z, body.p)
     names = [c.get("name") or f"C{i}" for i, c in enumerate(rec.get("channels") or [])]
     voxel = rec.get("voxel_um") or [0, 0, 0]
@@ -472,7 +723,7 @@ def api_measure(file_id: str, body: MeasureRequest, owner_id: BrowserOwner) -> d
 @app.get("/api/files/{file_id}/orthogonal")
 def api_orthogonal(
     file_id: str,
-    owner_id: BrowserOwner,
+    owner_id: Owner,
     t: int = 0,
     z: int = 0,
     p: int = 0,
@@ -495,12 +746,29 @@ def api_orthogonal(
     return {"z": n_z, "x": cx, "y": cy, "width": w, "height": h}
 
 
-@app.post("/api/export")
-def api_export(body: ExportRequest, background: BackgroundTasks, owner_id: BrowserOwner) -> dict[str, Any]:
-    if not body.file_ids:
-        raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select at least one file."})
-    for fid in body.file_ids:
+def _resolve_export(body: ExportRequest, owner_id: str) -> tuple[list[str], str | None]:
+    ids: list[str] = []
+    label = body.label
+    for raw in body.folders:
+        folder = _folder_arg(raw)
+        if folder and folder not in list_folders(owner_id):
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Folder not found."})
+        ids.extend(rec["id"] for rec in files_in_folder(owner_id, folder))
+        if label is None and len(body.folders) == 1 and folder:
+            label = folder.rsplit("/", 1)[-1]
+    ids.extend(body.file_ids)
+    unique = list(dict.fromkeys(ids))
+    for fid in unique:
         _need(fid, owner_id)
+    return unique, label
+
+
+@app.post("/api/export")
+def api_export(body: ExportRequest, background: BackgroundTasks, owner_id: Owner) -> dict[str, Any]:
+    file_ids, label = _resolve_export(body, owner_id)
+    if not file_ids:
+        raise HTTPException(status_code=400, detail={"code": "empty", "message": "There are no ND2 files to export."})
+    body = body.model_copy(update={"file_ids": file_ids, "folders": [], "label": label})
     job_id = new_job_id()
     upsert_job(
         {
@@ -512,21 +780,22 @@ def api_export(body: ExportRequest, background: BackgroundTasks, owner_id: Brows
             "download_name": None,
             "error": None,
             "format": body.format,
-            "file_ids": body.file_ids,
+            "file_ids": file_ids,
+            "label": label,
             "_owner": owner_id,
         }
     )
     background.add_task(run_export, job_id, body, owner_id)
-    return {"id": job_id, "status": "queued"}
+    return {"id": job_id, "status": "queued", "file_count": len(file_ids)}
 
 
 @app.get("/api/jobs")
-def api_jobs(owner_id: BrowserOwner) -> dict[str, Any]:
+def api_jobs(owner_id: Owner) -> dict[str, Any]:
     return {"jobs": [_public(job) for job in list_jobs(owner_id)[:50]]}
 
 
 @app.get("/api/jobs/{job_id}")
-def api_job(job_id: str, owner_id: BrowserOwner) -> dict[str, Any]:
+def api_job(job_id: str, owner_id: Owner) -> dict[str, Any]:
     job = get_owned_job(job_id, owner_id)
     if not job:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Job not found."})
@@ -534,7 +803,7 @@ def api_job(job_id: str, owner_id: BrowserOwner) -> dict[str, Any]:
 
 
 @app.get("/api/jobs/{job_id}/events")
-async def api_job_events(job_id: str, owner_id: BrowserOwner) -> StreamingResponse:
+async def api_job_events(job_id: str, owner_id: Owner) -> StreamingResponse:
     if not get_owned_job(job_id, owner_id):
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Job not found."})
 
@@ -556,7 +825,7 @@ async def api_job_events(job_id: str, owner_id: BrowserOwner) -> StreamingRespon
 
 
 @app.get("/api/jobs/{job_id}/download")
-def api_job_download(job_id: str, owner_id: BrowserOwner) -> FileResponse:
+def api_job_download(job_id: str, owner_id: Owner) -> FileResponse:
     job = get_owned_job(job_id, owner_id)
     if not job:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Job not found."})

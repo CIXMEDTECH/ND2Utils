@@ -4,6 +4,7 @@ import numpy as np
 import tifffile
 
 from nd2utils.export_jobs import (
+    _archive_folder,
     _archive_name,
     _coord_tag,
     _export_filename,
@@ -61,6 +62,12 @@ def test_display_tiff_scales_normalized_float_rgb(tmp_path):
     assert int(saved[..., 0].max()) == 0
 
 
-def test_significant_bits_falls_back_to_nd2_attributes(sample_dir):
-    handle = open_nd2(sorted(sample_dir.glob("*.nd2"))[0])
+def test_significant_bits_falls_back_to_nd2_attributes(sample_files):
+    handle = open_nd2(sample_files[0])
     assert _significant_bits({"bits_significant": None}, handle) == 12
+
+
+def test_archive_folder_keeps_structure_with_portable_names():
+    assert _archive_folder("20260918H2/vector cheyao 6h") == "20260918H2/vector cheyao 6h"
+    assert _archive_folder("a:b/c?d/实验 1") == "a_b/c_d/实验 1"
+    assert _archive_folder("") == ""

@@ -1,4 +1,4 @@
-import type { FileDetail, FileSummary, JobInfo, MeasureResult } from "./types";
+import type { AccessCode, AccessUser, CodeKind, FileDetail, FileSummary, JobInfo, MeasureResult } from "./types";
 
 export class ApiError extends Error {
   readonly code?: string;
@@ -12,7 +12,15 @@ export class ApiError extends Error {
   }
 }
 
+let onUnauthorized: (() => void) | null = null;
+
+/** Called whenever the server reports that the session is gone (logged out, code expired…). */
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
 async function parseError(res: Response): Promise<Error> {
+  if (res.status === 401 && !res.url.includes("/api/auth/")) onUnauthorized?.();
   try {
     const body = (await res.json()) as { detail?: unknown };
     const detail = body.detail;
@@ -36,13 +44,73 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function health() {
-  return json<{ ok: boolean; max_upload_bytes: number; ttl_hours: number }>(await fetch("/api/health"));
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+function send(url: string, method: string, body?: unknown) {
+  return fetch(url, {
+    method,
+    headers: body === undefined ? undefined : JSON_HEADERS,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 }
 
-export async function listFiles(): Promise<FileSummary[]> {
-  const data = await json<{ files: FileSummary[] }>(await fetch("/api/files"));
-  return data.files;
+export async function serverSettings() {
+  return json<{ version: string; max_upload_bytes: number; ttl_hours: number }>(await fetch("/api/settings"));
+}
+
+export async function me() {
+  return json<{ authenticated: boolean; user: AccessUser | null }>(await fetch("/api/auth/me"));
+}
+
+export async function login(code: string) {
+  return json<{ authenticated: true; user: AccessUser }>(await send("/api/auth/login", "POST", { code }));
+}
+
+export async function logout() {
+  return json(await send("/api/auth/logout", "POST"));
+}
+
+export async function listCodes() {
+  return json<{ codes: AccessCode[]; ttl_hours: number }>(await fetch("/api/admin/codes"));
+}
+
+export async function createCode(body: { label: string; kind: CodeKind; expires_at: number | null }) {
+  return json<AccessCode>(await send("/api/admin/codes", "POST", body));
+}
+
+export async function updateCode(
+  id: string,
+  body: Partial<{ label: string; kind: CodeKind; expires_at: number | null; disabled: boolean }>,
+) {
+  return json<AccessCode>(await send(`/api/admin/codes/${id}`, "PATCH", body));
+}
+
+export async function regenerateCode(id: string) {
+  return json<AccessCode>(await send(`/api/admin/codes/${id}/regenerate`, "POST"));
+}
+
+export async function deleteCode(id: string) {
+  return json(await send(`/api/admin/codes/${id}`, "DELETE"));
+}
+
+export async function listWorkspace(): Promise<{ files: FileSummary[]; folders: string[] }> {
+  return json(await fetch("/api/files"));
+}
+
+export async function createFolder(path: string) {
+  return json<{ path: string }>(await send("/api/folders", "POST", { path }));
+}
+
+export async function renameFolder(path: string, newPath: string) {
+  return json<{ path: string }>(await send("/api/folders/rename", "POST", { path, new_path: newPath }));
+}
+
+export async function deleteFolder(path: string) {
+  return json<{ path: string; removed_files: string[] }>(await send("/api/folders/delete", "POST", { path }));
+}
+
+export async function updateFile(id: string, body: { name?: string; folder?: string }) {
+  return json<FileDetail>(await send(`/api/files/${id}`, "PATCH", body));
 }
 
 export async function getFile(id: string): Promise<FileDetail> {
@@ -106,7 +174,7 @@ export async function measure(
   return json(res);
 }
 
-export async function startExport(body: Record<string, unknown>): Promise<JobInfo> {
+export async function startExport(body: Record<string, unknown>): Promise<JobInfo & { file_count: number }> {
   return json(await fetch("/api/export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -129,6 +197,7 @@ export function jobDownloadUrl(id: string) {
 
 export async function uploadFile(
   file: File,
+  folder: string,
   onProgress?: (ratio: number) => void,
 ): Promise<FileDetail> {
   if (!file.name.toLowerCase().endsWith(".nd2")) {
@@ -141,7 +210,7 @@ export async function uploadFile(
     fd.append("file", file, file.name);
     const res = await new Promise<Response>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/files");
+      xhr.open("POST", `/api/files?${new URLSearchParams({ folder })}`);
       xhr.upload.onprogress = (ev) => {
         if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total);
       };
@@ -162,7 +231,7 @@ export async function uploadFile(
     await fetch("/api/uploads/init", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: file.name, size: file.size }),
+      body: JSON.stringify({ filename: file.name, size: file.size, folder }),
     }),
   );
   let offset = 0;

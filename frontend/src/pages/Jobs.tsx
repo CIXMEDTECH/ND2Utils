@@ -123,8 +123,14 @@ export function Jobs() {
                       {dateFormatter.format(new Date(job.created_at * 1000))}
                     </time>
                   </div>
+                  {(job.download_name || job.label) && (
+                    <p className="mt-1 truncate font-mono text-[11px] text-[var(--text)]" title={job.download_name ?? job.label ?? undefined}>
+                      {job.download_name ?? `/${job.label}`}
+                    </p>
+                  )}
                   <p className={`mt-1 text-[12px] ${job.status === "error" ? "text-[var(--danger)]" : "text-[var(--text-dim)]"}`}>
                     {job.status === "error" ? t(lang, "exportFailedHint") : t(lang, statusKey[job.status])}
+                    {job.status === "error" && job.error ? ` (${job.error})` : ""}
                   </p>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--line)]">
                     <motion.div

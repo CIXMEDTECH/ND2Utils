@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     bind_host: str = "127.0.0.1"
     port: int = 8080
     in_memory_limit_bytes: int = 256 * 1024 * 1024
+    purge_interval_seconds: int = 600
 
     @property
     def uploads_dir(self) -> Path:
@@ -42,6 +43,14 @@ class Settings(BaseSettings):
     @property
     def jobs_path(self) -> Path:
         return self.data_dir / "jobs.json"
+
+    @property
+    def auth_path(self) -> Path:
+        return self.data_dir / "auth.json"
+
+    @property
+    def folders_path(self) -> Path:
+        return self.data_dir / "folders.json"
 
 
 settings = Settings()

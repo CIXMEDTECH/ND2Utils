@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
@@ -10,14 +11,140 @@ import tifffile
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from conftest import admin_code, login
+from nd2utils import auth
+from nd2utils.config import settings
 from nd2utils.main import SESSION_COOKIE, app
 from nd2utils.nd2io import close_all, open_nd2
+from nd2utils.store import get_owned_file, list_files, purge_expired, update_file
 
 
-def test_health(client):
-    r = client.get("/api/health")
+def _upload(client, path: Path, folder: str = "") -> dict:
+    response = client.post(
+        "/api/files",
+        params={"folder": folder},
+        files={"file": (path.name, path.read_bytes(), "application/octet-stream")},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _upload_samples(client, samples: list[Path], folder: str = "") -> list[dict]:
+    return [_upload(client, path, folder) for path in samples]
+
+
+def _export(client, body: dict) -> tuple[dict, ZipFile]:
+    r = client.post("/api/export", json=body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["status"] == "done", job
+    dl = client.get(f"/api/jobs/{job_id}/download")
+    assert dl.status_code == 200
+    return job, ZipFile(BytesIO(dl.content))
+
+
+# --- auth ---------------------------------------------------------------------
+
+
+def test_health_is_public(anon):
+    r = anon.get("/api/health")
     assert r.status_code == 200
     assert r.json()["ok"] is True
+
+
+def test_api_requires_login(anon):
+    assert anon.get("/api/files").status_code == 401
+    assert anon.get("/api/jobs").status_code == 401
+    assert anon.post("/api/export", json={"file_ids": ["x"], "format": "png"}).status_code == 401
+    assert anon.get("/api/admin/codes").status_code == 401
+    assert anon.get("/api/auth/me").json() == {"authenticated": False, "user": None}
+    # The SPA itself (login screen) stays reachable.
+    assert anon.get("/").status_code == 200
+
+
+def test_admin_code_generated_once_and_logged(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    first = auth.ensure_admin()
+    assert first["code"] in capsys.readouterr().out
+    assert auth.ensure_admin()["id"] == first["id"]
+    assert first["code"] not in capsys.readouterr().out
+    assert not list(tmp_path.glob("*.txt"))
+
+
+def test_single_admin_code():
+    admins = [rec for rec in auth.list_codes() if rec["role"] == "admin"]
+    assert len(admins) == 1
+    assert admins[0]["kind"] == "permanent" and admins[0]["expires_at"] is None
+
+
+def test_login_logout_and_bad_code(anon):
+    assert anon.post("/api/auth/login", json={"code": "NOPE-NOPE"}).status_code == 401
+    code = admin_code()
+    r = anon.post("/api/auth/login", json={"code": code.lower().replace("-", " ")})
+    assert r.status_code == 200
+    assert "HttpOnly" in r.headers.get("set-cookie", "")
+    assert "SameSite=lax" in r.headers.get("set-cookie", "")
+    me = anon.get("/api/auth/me").json()
+    assert me["authenticated"] and me["user"]["role"] == "admin"
+    assert "code" not in me["user"]
+    assert anon.get("/api/files").status_code == 200
+    anon.post("/api/auth/logout")
+    assert anon.get("/api/files").status_code == 401
+
+
+def test_admin_issues_codes_with_expiry(admin):
+    r = admin.post("/api/admin/codes", json={"label": "Lab A", "kind": "permanent", "expires_at": None})
+    assert r.status_code == 200
+    issued = r.json()
+    assert issued["code"] and issued["kind"] == "permanent" and issued["status"] == "active"
+    past = admin.post("/api/admin/codes", json={"label": "x", "kind": "temporary", "expires_at": time.time() - 5})
+    assert past.status_code == 400
+
+    listed = admin.get("/api/admin/codes").json()["codes"]
+    assert listed[0]["role"] == "admin"
+    assert any(c["id"] == issued["id"] for c in listed)
+
+    with TestClient(app) as user:
+        login(user, issued["code"])
+        assert user.get("/api/auth/me").json()["user"]["kind"] == "permanent"
+        assert user.get("/api/admin/codes").status_code == 403
+
+        # Expiring the code ends the session and blocks new logins.
+        patched = admin.patch(f"/api/admin/codes/{issued['id']}", json={"expires_at": time.time() - 1})
+        assert patched.json()["status"] == "expired"
+        assert user.get("/api/files").status_code == 401
+        assert user.post("/api/auth/login", json={"code": issued["code"]}).status_code == 401
+
+        # Explicit null = never expires again.
+        assert admin.patch(f"/api/admin/codes/{issued['id']}", json={"expires_at": None}).json()["status"] == "active"
+        login(user, issued["code"])
+        admin.patch(f"/api/admin/codes/{issued['id']}", json={"disabled": True})
+        assert user.get("/api/files").status_code == 401
+
+    admin_id = listed[0]["id"]
+    assert admin.delete(f"/api/admin/codes/{admin_id}").status_code == 403
+    assert admin.patch(f"/api/admin/codes/{admin_id}", json={"expires_at": time.time() - 1}).json()["status"] == "active"
+    assert admin.delete(f"/api/admin/codes/{issued['id']}").status_code == 200
+
+
+def test_regenerate_code_invalidates_old_one(admin):
+    issued = admin.post("/api/admin/codes", json={"label": "rotate"}).json()
+    new = admin.post(f"/api/admin/codes/{issued['id']}/regenerate").json()
+    assert new["code"] != issued["code"]
+    with TestClient(app) as user:
+        assert user.post("/api/auth/login", json={"code": issued["code"]}).status_code == 401
+        login(user, new["code"])
+
+
+def test_login_rate_limit(anon):
+    for _ in range(10):
+        anon.post("/api/auth/login", json={"code": "WRONG-CODE"})
+    assert anon.post("/api/auth/login", json={"code": "WRONG-CODE"}).status_code == 429
+    auth._FAILURES.clear()
+
+
+# --- workspace ----------------------------------------------------------------
 
 
 def test_reject_non_nd2(client, tmp_path: Path):
@@ -26,15 +153,47 @@ def test_reject_non_nd2(client, tmp_path: Path):
     r = client.post("/api/files", files={"file": ("fake.nd2", png.read_bytes(), "application/octet-stream")})
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "not_nd2"
+    assert client.get("/api/files").json()["files"] == []
 
 
-def test_reject_wrong_extension(client):
+def test_reject_wrong_extension_and_bad_folder(client):
     r = client.post("/api/files", files={"file": ("photo.png", b"abc", "image/png")})
     assert r.status_code == 400
+    r = client.post("/api/files", params={"folder": "../etc"}, files={"file": ("a.nd2", b"abc", "image/png")})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "bad_path"
 
 
-def test_open_cache_is_thread_safe(sample_dir: Path):
-    path = sorted(sample_dir.glob("*.nd2"))[0]
+def test_folders_create_rename_delete(client, sample_files):
+    assert client.post("/api/folders", json={"path": "empty/inner"}).status_code == 200
+    rec = _upload(client, sample_files[0], "exp 1/day 0")
+    listing = client.get("/api/files").json()
+    assert listing["folders"] == ["empty", "empty/inner", "exp 1", "exp 1/day 0"]
+    assert listing["files"][0]["folder"] == "exp 1/day 0"
+
+    # Same name into the same folder replaces the previous copy.
+    again = _upload(client, sample_files[0], "exp 1/day 0")
+    assert [f["id"] for f in client.get("/api/files").json()["files"]] == [again["id"]]
+    assert client.get(f"/api/files/{rec['id']}").status_code == 404
+
+    assert client.post("/api/folders/rename", json={"path": "exp 1", "new_path": "empty"}).status_code == 409
+    assert client.post("/api/folders/rename", json={"path": "exp 1", "new_path": "exp 1/x"}).status_code == 400
+    r = client.post("/api/folders/rename", json={"path": "exp 1", "new_path": "Experiment"})
+    assert r.status_code == 200
+    listing = client.get("/api/files").json()
+    assert listing["files"][0]["folder"] == "Experiment/day 0"
+    assert "exp 1" not in listing["folders"]
+
+    moved = client.patch(f"/api/files/{again['id']}", json={"folder": "empty", "name": "renamed.nd2"}).json()
+    assert moved["folder"] == "empty" and moved["name"] == "renamed.nd2"
+
+    r = client.post("/api/folders/delete", json={"path": "empty"})
+    assert r.json()["removed_files"] == [again["id"]]
+    assert client.get("/api/files").json() == {"files": [], "folders": ["Experiment", "Experiment/day 0"]}
+
+
+def test_open_cache_is_thread_safe(sample_files):
+    path = sample_files[0]
     close_all()
     with ThreadPoolExecutor(max_workers=6) as pool:
         handles = list(pool.map(open_nd2, [path] * 6))
@@ -42,47 +201,27 @@ def test_open_cache_is_thread_safe(sample_dir: Path):
     close_all()
 
 
-def _upload_samples(client, sample_dir: Path) -> list[dict]:
-    records = []
-    for path in sorted(sample_dir.glob("*.nd2")):
-        response = client.post(
-            "/api/files",
-            files={"file": (path.name, path.read_bytes(), "application/octet-stream")},
-        )
-        assert response.status_code == 200, response.text
-        records.append(response.json())
-    assert len(records) == 3
-    return records
-
-
-def test_identify_samples(client, sample_dir: Path):
-    files = _upload_samples(client, sample_dir)
-    names = {f["name"] for f in files}
-    assert names == {"MB2310343.nd2", "MB2310344.nd2", "MB2310345.nd2"}
+def test_identify_samples(client, sample_files):
+    files = _upload_samples(client, sample_files)
+    assert {f["name"] for f in files} == {p.name for p in sample_files}
     for rec in files:
         assert rec["status"] == "ready"
         assert rec["version"][:2] == [3, 0]
-        assert rec["width"] == 512
-        assert rec["height"] == 512
-        ch_names = [c["name"] for c in rec["channels"]]
-        assert ch_names == ["DAPI", "FITC", "TRITC"]
-        assert rec["objective"] and "100x" in rec["objective"]
+        assert rec["width"] >= 256 and rec["height"] >= 256
+        assert [c["name"] for c in rec["channels"]] == ["DAPI", "TRITC"]
         assert rec["dtype"] == "uint16"
+        assert rec["bits_significant"] == 12
         detail = client.get(f"/api/files/{rec['id']}")
         assert detail.status_code == 200
-        body = detail.json()
-        assert "text_info" in body
-        assert "DAPI" in body["text_info"].get("description", "")
+        assert "text_info" in detail.json()
 
 
-def test_preview_and_plane(client, sample_dir: Path):
-    files = _upload_samples(client, sample_dir)
-    fid = files[0]["id"]
+def test_preview_and_plane(client, sample_files):
+    fid = _upload(client, sample_files[0])["id"]
     preview = client.get(f"/api/files/{fid}/preview")
     assert preview.status_code == 200
     assert preview.headers["content-type"] == "image/jpeg"
     img = Image.open(BytesIO(preview.content))
-    assert img.size[0] >= 512
     assert img.mode in ("RGB", "YCbCr")
     plane = client.get(f"/api/files/{fid}/plane")
     assert plane.status_code == 200
@@ -92,209 +231,216 @@ def test_preview_and_plane(client, sample_dir: Path):
     assert hist.json()["max"] > 0
 
 
-def test_preview_overlay_split_scale_and_visible(client, sample_dir: Path):
-    files = _upload_samples(client, sample_dir)
-    fid = files[0]["id"]
-    overlay = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false")
-    split = client.get(f"/api/files/{fid}/preview?composite=false&scale_bar=false")
-    assert overlay.status_code == 200
-    assert split.status_code == 200
-    overlay_img = Image.open(BytesIO(overlay.content))
-    split_img = Image.open(BytesIO(split.content))
-    assert overlay_img.size == (512, 512)
-    assert split_img.size[0] > 512 or split_img.size[1] > 512
+def test_preview_overlay_split_scale_and_visible(client, sample_files):
+    rec = _upload(client, sample_files[0])
+    fid = rec["id"]
+    overlay = Image.open(BytesIO(client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false").content))
+    split = Image.open(BytesIO(client.get(f"/api/files/{fid}/preview?composite=false&scale_bar=false").content))
+    assert overlay.size == (rec["width"], rec["height"])
+    assert split.size[0] > rec["width"] or split.size[1] > rec["height"]
 
     with_bar = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=true")
     without_bar = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false")
     assert with_bar.content != without_bar.content
 
-    one = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false&visible=1,0,0")
-    all_ch = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false&visible=1,1,1")
-    assert one.status_code == 200
-    assert all_ch.status_code == 200
-    assert one.content != all_ch.content
+    one = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false&visible=1,0")
+    both = client.get(f"/api/files/{fid}/preview?composite=true&scale_bar=false&visible=1,1")
+    assert one.content != both.content
 
 
-def test_measure_rect(client, sample_dir: Path):
-    files = _upload_samples(client, sample_dir)
-    fid = files[0]["id"]
-    r = client.post(
-        f"/api/files/{fid}/measure",
-        json={"tool": "rect", "points": [[10, 10], [200, 200]]},
-    )
+def test_measure_rect(client, sample_files):
+    fid = _upload(client, sample_files[0])["id"]
+    r = client.post(f"/api/files/{fid}/measure", json={"tool": "rect", "points": [[10, 10], [200, 200]]})
     assert r.status_code == 200
     body = r.json()
     assert body["area_px"] > 0
-    assert len(body["channels"]) == 3
-    assert body["channels"][0]["mean"] >= 0
+    assert len(body["channels"]) == 2
 
 
-def test_export_ome_tiff_and_png_batch(client, sample_dir: Path):
-    files = _upload_samples(client, sample_dir)
-    ids = [f["id"] for f in files]
-    r = client.post(
-        "/api/export",
-        json={"file_ids": ids, "format": "ome-tiff", "scope": "current", "channels_mode": "composite"},
-    )
-    assert r.status_code == 200
-    job_id = r.json()["id"]
-    job = client.get(f"/api/jobs/{job_id}")
-    assert job.status_code == 200
-    body = job.json()
-    assert body["status"] == "done"
-    assert "OME-TIFF" in (body.get("download_name") or "")
-    assert "MB2310343" in (body.get("download_name") or "")
-    dl = client.get(f"/api/jobs/{job_id}/download")
-    assert dl.status_code == 200
-    zf = ZipFile(BytesIO(dl.content))
+def test_projection_without_z(client, sample_files):
+    fid = _upload(client, sample_files[0])["id"]
+    r = client.get(f"/api/files/{fid}/projection?axis=Z")
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "no_axis"
+
+
+# --- export -------------------------------------------------------------------
+
+
+def test_export_folder_mirrors_workspace_structure(client, sample_files):
+    a = _upload(client, sample_files[0], "20260918H2/vector 6h")
+    b = _upload(client, sample_files[1], "20260918H2/CDC6 12h")
+    _upload(client, sample_files[2], "other")
+    job, zf = _export(client, {"folders": ["20260918H2"], "format": "png", "channels_mode": "both"})
+    assert job["download_name"].startswith("20260918H2_PNG_")
+    assert sorted(job["file_ids"]) == sorted([a["id"], b["id"]])
     names = zf.namelist()
-    assert any(n.endswith(".ome.tif") for n in names)
-    joined = " ".join(names)
-    assert "MB2310343" in joined
-    assert "MB2310344" in joined
-    assert "MB2310345" in joined
-    tif_name = next(n for n in names if n.endswith(".ome.tif"))
-    with tifffile.TiffFile(zf.open(tif_name)) as tif:
-        arr = tif.asarray()
+    stem_a = Path(a["name"]).stem
+    stem_b = Path(b["name"]).stem
+    assert f"20260918H2/vector 6h/{stem_a}_composite.png" in names
+    assert f"20260918H2/vector 6h/{stem_a}_DAPI.png" in names
+    assert f"20260918H2/vector 6h/{stem_a}_TRITC.png" in names
+    assert f"20260918H2/vector 6h/{stem_a}_metadata.json" in names
+    assert f"20260918H2/CDC6 12h/{stem_b}_TRITC.png" in names
+    assert not any(n.startswith("other/") for n in names)
+
+    # A single file keeps its folder too.
+    _, zf = _export(client, {"file_ids": [a["id"]], "format": "jpeg", "channels_mode": "split"})
+    assert sorted(zf.namelist()) == sorted(
+        f"20260918H2/vector 6h/{stem_a}_{suffix}"
+        for suffix in ("DAPI.jpg", "TRITC.jpg", "metadata.json")
+    )
+
+
+def test_export_channel_files_are_not_black(client, sample_files):
+    rec = _upload(client, sample_files[0])
+    for fmt, ext in (("png", ".png"), ("jpeg", ".jpg"), ("tiff", ".tif")):
+        _, zf = _export(
+            client,
+            {"file_ids": [rec["id"]], "format": fmt, "channels_mode": "split", "scale_bar": False},
+        )
+        channel_files = [n for n in zf.namelist() if n.endswith(ext)]
+        assert len(channel_files) == 2
+        for name in channel_files:
+            data = zf.read(name)
+            arr = tifffile.imread(BytesIO(data)) if ext == ".tif" else np.asarray(Image.open(BytesIO(data)))
+            assert arr.dtype == np.uint8 and arr.shape[-1] == 3
+            assert int(arr.max()) > 200, name
+            assert float((arr.max(axis=-1) > 40).mean()) > 0.01, name
+
+
+def test_export_ome_tiff_raw_plus_viewable(client, sample_files):
+    rec = _upload(client, sample_files[0])
+    stem = Path(rec["name"]).stem
+    job, zf = _export(client, {"file_ids": [rec["id"]], "format": "ome-tiff", "channels_mode": "both"})
+    assert "OME-TIFF" in job["download_name"] and stem in job["download_name"]
+    names = set(zf.namelist())
+    for base in ("composite", "DAPI", "TRITC"):
+        assert f"{stem}_{base}.ome.tif" in names
+        assert f"{stem}_{base}.tif" in names
+    assert "README_EXPORT.txt" in names
+
+    with tifffile.TiffFile(zf.open(f"{stem}_composite.ome.tif")) as tif:
+        raw = tif.asarray()
         assert tif.ome_metadata and 'SignificantBits="12"' in tif.ome_metadata
-    assert arr.dtype == np.uint16
-    assert arr.ndim in (2, 3)
-    if arr.ndim == 3:
-        assert arr.shape[0] == 3
-    assert int(arr.max()) > 0
-    display_name = next(n for n in names if n.endswith("_DISPLAY.tif"))
-    display = tifffile.imread(zf.open(display_name))
-    assert display.dtype == np.uint8
-    assert display.ndim == 3 and display.shape[-1] == 3
-    assert int(display.max()) > 40
-    assert float(display.mean()) > 1.0
-    assert any(n.endswith("README_DISPLAY_FILES.txt") for n in names)
+    assert raw.dtype == np.uint16 and raw.shape[0] == 2
+    with tifffile.TiffFile(zf.open(f"{stem}_DAPI.ome.tif")) as tif:
+        dapi_raw = tif.asarray()
+        assert 'Name="DAPI"' in tif.ome_metadata
+    assert np.array_equal(dapi_raw, raw[0])
 
-    r2 = client.post(
-        "/api/export",
-        json={"file_ids": ids[:1], "format": "png", "scope": "current", "channels_mode": "composite", "scale_bar": True},
+    for base in ("composite", "DAPI", "TRITC"):
+        view = tifffile.imread(zf.open(f"{stem}_{base}.tif"))
+        assert view.dtype == np.uint8 and view.shape[-1] == 3
+        assert int(view.max()) > 200
+
+
+def test_export_skips_hidden_channels(client, sample_files):
+    rec = _upload(client, sample_files[0])
+    _, zf = _export(
+        client,
+        {"file_ids": [rec["id"]], "format": "png", "channels_mode": "split", "visible": [True, False]},
     )
-    job2 = client.get(f"/api/jobs/{r2.json()['id']}").json()
-    assert job2["status"] == "done"
-    assert "PNG" in (job2.get("download_name") or "")
-    dl2 = client.get(f"/api/jobs/{job2['id']}/download")
-    z2 = ZipFile(BytesIO(dl2.content))
-    png_name = next(n for n in z2.namelist() if n.endswith(".png"))
-    img = Image.open(z2.open(png_name))
-    assert img.mode in ("RGB", "P", "RGBA")
-    assert img.size[0] >= 512
+    pngs = [n for n in zf.namelist() if n.endswith(".png")]
+    assert len(pngs) == 1 and pngs[0].endswith("_DAPI.png")
 
 
-def test_export_tiff_is_viewable_rgb(client, sample_dir: Path):
-    files = _upload_samples(client, sample_dir)
-    fid = files[0]["id"]
-    r = client.post(
-        "/api/export",
-        json={
-            "file_ids": [fid],
-            "format": "tiff",
-            "scope": "current",
-            "channels_mode": "both",
-            "scale_bar": False,
-            "include_metadata": True,
-        },
+def test_export_tiff_is_viewable_rgb(client, sample_files):
+    rec = _upload(client, sample_files[0])
+    _, zf = _export(
+        client,
+        {"file_ids": [rec["id"]], "format": "tiff", "channels_mode": "both", "scale_bar": False},
     )
-    assert r.status_code == 200
-    job = client.get(f"/api/jobs/{r.json()['id']}").json()
-    assert job["status"] == "done"
-    assert "TIFF" in (job.get("download_name") or "")
-    assert Path(files[0]["name"]).stem in (job.get("download_name") or "")
-    dl = client.get(f"/api/jobs/{job['id']}/download")
-    zf = ZipFile(BytesIO(dl.content))
-    names = zf.namelist()
-    tifs = [n for n in names if n.endswith(".tif") and not n.endswith(".ome.tif")]
-    assert any(n.endswith("_composite.tif") for n in tifs)
-    assert any("_DAPI.tif" in n for n in tifs)
-    assert any("_FITC.tif" in n for n in tifs)
-    assert any("_TRITC.tif" in n for n in tifs)
-    assert any(n.endswith("_metadata.json") for n in names)
-    composite = next(n for n in tifs if n.endswith("_composite.tif"))
-    arr = tifffile.imread(zf.open(composite))
-    assert arr.dtype == np.uint8
-    assert arr.ndim == 3
-    assert arr.shape[-1] == 3
-    assert arr.max() > 40
-    assert float(arr.mean()) > 1.0
+    composite = next(n for n in zf.namelist() if n.endswith("_composite.tif"))
     with tifffile.TiffFile(zf.open(composite)) as tif:
         page = tif.pages[0]
         assert page.photometric == 2
         assert page.bitspersample in (8, (8, 8, 8))
 
 
-def test_projection_without_z(client, sample_dir: Path):
-    files = _upload_samples(client, sample_dir)
-    r = client.get(f"/api/files/{files[0]['id']}/projection?axis=Z")
+def test_export_empty_folder_is_rejected(client):
+    client.post("/api/folders", json={"path": "nothing"})
+    r = client.post("/api/export", json={"folders": ["nothing"], "format": "png"})
     assert r.status_code == 400
-    assert r.json()["detail"]["code"] == "no_axis"
+    assert client.post("/api/export", json={"folders": ["missing"], "format": "png"}).status_code == 404
 
 
-def test_browser_sessions_isolate_uploads_files_and_jobs(client, sample_dir: Path):
-    sample = sorted(sample_dir.glob("*.nd2"))[0]
-    uploaded = client.post(
-        "/api/files",
-        files={"file": (sample.name, sample.read_bytes(), "application/octet-stream")},
-    )
-    assert uploaded.status_code == 200
-    assert "_owner" not in uploaded.json()
-    file_id = uploaded.json()["id"]
-    owner_cookie = client.cookies.get(SESSION_COOKIE)
-    assert owner_cookie
-    assert "HttpOnly" in uploaded.headers.get("set-cookie", "")
-    assert "SameSite=lax" in uploaded.headers.get("set-cookie", "")
+# --- isolation & retention ----------------------------------------------------
 
-    export = client.post(
+
+def test_access_codes_isolate_workspaces(client, sample_files):
+    uploaded = _upload(client, sample_files[0], "mine")
+    file_id = uploaded["id"]
+    assert "_owner" not in uploaded
+    job_id = client.post(
         "/api/export",
         json={"file_ids": [file_id], "format": "tiff", "scope": "current", "channels_mode": "composite"},
-    )
-    assert export.status_code == 200
-    job_id = export.json()["id"]
-    owner_job = client.get(f"/api/jobs/{job_id}")
-    assert owner_job.status_code == 200
-    assert "_owner" not in owner_job.json()
-    assert client.get(f"/api/jobs/{job_id}/download").status_code == 200
+    ).json()["id"]
+    upload_id = client.post("/api/uploads/init", json={"filename": "large.nd2", "size": 3}).json()["upload_id"]
 
-    chunk_init = client.post("/api/uploads/init", json={"filename": "large.nd2", "size": 3})
-    assert chunk_init.status_code == 200
-    upload_id = chunk_init.json()["upload_id"]
-
+    other_rec = auth.create_code(label="other", kind="temporary", expires_at=None)
     with TestClient(app) as other:
-        assert other.get("/api/health").status_code == 200
-        assert other.cookies.get(SESSION_COOKIE)
-        assert other.cookies.get(SESSION_COOKIE) != owner_cookie
-        assert other.get("/api/files").json()["files"] == []
+        login(other, other_rec["code"])
+        assert other.cookies.get(SESSION_COOKIE) != client.cookies.get(SESSION_COOKIE)
+        assert other.get("/api/files").json() == {"files": [], "folders": []}
         assert other.get(f"/api/files/{file_id}").status_code == 404
         for suffix in ("preview", "plane", "histogram", "autoscale", "projection", "tiles", "orthogonal"):
             assert other.get(f"/api/files/{file_id}/{suffix}").status_code == 404
-        assert other.post(
-            f"/api/files/{file_id}/measure",
-            json={"tool": "point", "points": [[0, 0]]},
-        ).status_code == 404
+        assert other.post(f"/api/files/{file_id}/measure", json={"tool": "point", "points": [[0, 0]]}).status_code == 404
         assert other.delete(f"/api/files/{file_id}").status_code == 404
-        denied_export = other.post(
-            "/api/export",
-            json={"file_ids": [file_id], "format": "tiff", "scope": "current", "channels_mode": "composite"},
-        )
-        assert denied_export.status_code == 404
+        assert other.patch(f"/api/files/{file_id}", json={"name": "x.nd2"}).status_code == 404
+        assert other.post("/api/export", json={"file_ids": [file_id], "format": "tiff"}).status_code == 404
+        assert other.post("/api/export", json={"folders": ["mine"], "format": "tiff"}).status_code == 404
+        assert other.post("/api/folders/delete", json={"path": "mine"}).status_code == 404
         assert other.get("/api/jobs").json()["jobs"] == []
-        assert other.get(f"/api/jobs/{job_id}").status_code == 404
-        assert other.get(f"/api/jobs/{job_id}/events").status_code == 404
-        assert other.get(f"/api/jobs/{job_id}/download").status_code == 404
-        denied_chunk = other.put(
+        for suffix in ("", "/events", "/download"):
+            assert other.get(f"/api/jobs/{job_id}{suffix}").status_code == 404
+        denied = other.put(
             f"/api/uploads/{upload_id}/chunk?offset=0",
             files={"file": ("chunk", b"abc", "application/octet-stream")},
         )
-        assert denied_chunk.status_code == 404
+        assert denied.status_code == 404
         assert other.post(f"/api/uploads/{upload_id}/complete").status_code == 404
 
     assert [item["id"] for item in client.get("/api/files").json()["files"]] == [file_id]
     assert [item["id"] for item in client.get("/api/jobs").json()["jobs"]] == [job_id]
-    accepted_chunk = client.put(
-        f"/api/uploads/{upload_id}/chunk?offset=0",
-        files={"file": ("chunk", b"abc", "application/octet-stream")},
-    )
-    assert accepted_chunk.status_code == 200
+
+
+def test_same_code_shares_workspace_across_browsers(client, sample_files):
+    rec = _upload(client, sample_files[0])
+    code = auth.get_code(client.code_id)["code"]
+    with TestClient(app) as second:
+        login(second, code)
+        assert [f["id"] for f in second.get("/api/files").json()["files"]] == [rec["id"]]
+
+
+def test_retention_temporary_vs_permanent(admin, sample_files):
+    temp = auth.create_code(label="temp", kind="temporary", expires_at=None)
+    perm = auth.create_code(label="perm", kind="permanent", expires_at=None)
+    ids = {}
+    for rec in (temp, perm):
+        with TestClient(app) as c:
+            login(c, rec["code"])
+            ids[rec["id"]] = _upload(c, sample_files[0])["id"]
+    old = time.time() - settings.ttl_hours * 3600 - 10
+    for owner, fid in ids.items():
+        update_file(fid, owner, {"created_at": old})
+
+    purge_expired()
+    assert get_owned_file(ids[temp["id"]], temp["id"]) is None
+    assert get_owned_file(ids[perm["id"]], perm["id"]) is not None
+
+    # A permanent code that expires keeps its data; a temporary one loses it.
+    temp2 = auth.create_code(label="temp2", kind="temporary", expires_at=None)
+    with TestClient(app) as c:
+        login(c, temp2["code"])
+        fid = _upload(c, sample_files[0])["id"]
+    admin.patch(f"/api/admin/codes/{temp2['id']}", json={"expires_at": time.time() - 1})
+    admin.patch(f"/api/admin/codes/{perm['id']}", json={"expires_at": time.time() - 1})
+    assert list_files(temp2["id"]) == []
+    assert get_owned_file(fid, temp2["id"]) is None
+    assert get_owned_file(ids[perm["id"]], perm["id"]) is not None
+
+    # Deleting a code removes its workspace immediately.
+    admin.delete(f"/api/admin/codes/{perm['id']}")
+    assert list_files(perm["id"]) == []

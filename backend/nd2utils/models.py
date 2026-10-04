@@ -86,7 +86,10 @@ class MeasureRequest(Coord):
 
 
 class ExportRequest(BaseModel):
-    file_ids: list[str]
+    file_ids: list[str] = []
+    # Workspace folders to export recursively; resolved to file_ids by the API.
+    folders: list[str] = []
+    label: str | None = None
     format: Literal["ome-tiff", "tiff", "png", "jpeg"]
     scope: Literal["current", "all"] = "current"
     channels_mode: Literal["composite", "split", "both"] = "composite"
@@ -109,3 +112,4 @@ class JobInfo(BaseModel):
     error: str | None = None
     format: str | None = None
     file_ids: list[str] = []
+    label: str | None = None

@@ -1,18 +1,35 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, Copy, File as FileIcon, MagnifyingGlass, Trash, X } from "@phosphor-icons/react";
+import {
+  Check,
+  Copy,
+  Export as ExportIcon,
+  Eye,
+  File as FileIcon,
+  FolderPlus,
+  FolderSimplePlus,
+  MagnifyingGlass,
+  PencilSimple,
+  SlidersHorizontal,
+  Trash,
+  UploadSimple,
+  X,
+} from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChannelToggles } from "../components/ChannelToggles";
-import { DropZone } from "../components/DropZone";
+import { ContextMenu, type MenuItem, type MenuState } from "../components/ContextMenu";
+import { DropZone, folderInputId } from "../components/DropZone";
 import { ExportPanel } from "../components/ExportPanel";
+import { countFilesIn, FileTree, type TreeTarget } from "../components/FileTree";
+import { ConfirmDialog, Modal, NameDialog } from "../components/Modal";
 import { Glass } from "../components/Glass";
 import { Shell } from "../components/Shell";
 import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
-import { deleteFile, fetchPlane, getFile } from "../lib/api";
-import { axisSize, detailMessage, formatBytes, formatUm, rgbCss } from "../lib/format";
+import { createFolder, deleteFile, deleteFolder, fetchPlane, getFile, renameFolder, updateFile } from "../lib/api";
+import { axisSize, baseName, detailMessage, formatUm, joinPath, parentPath } from "../lib/format";
 import { autoscaleLimits, createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
-import type { LutSetting, PackedPlane } from "../lib/types";
+import type { ExportTarget, FileSummary, LutSetting, PackedPlane } from "../lib/types";
 import { useApp } from "../store";
 
 type WorkspaceTab = "identify" | "metadata" | "export";
@@ -22,6 +39,15 @@ interface LocalPreview {
   dimensions: Pick<PackedPlane, "width" | "height">;
   layers: ReturnType<typeof createPreviewLayers>;
 }
+
+type NameAction =
+  | { mode: "newFolder"; parent: string }
+  | { mode: "renameFolder"; path: string }
+  | { mode: "renameFile"; file: FileSummary };
+
+type DeleteAction = { type: "folder"; path: string } | { type: "file"; file: FileSummary };
+
+const UPLOAD_INPUT = "workspace-nd2-upload";
 
 const WORKSPACE_TABS: { key: WorkspaceTab; label: WorkspaceTab }[] = [
   { key: "identify", label: "identify" },
@@ -38,8 +64,8 @@ export function Workspace() {
   const select = useApp((s) => s.select);
   const setDetail = useApp((s) => s.setDetail);
   const refreshFiles = useApp((s) => s.refreshFiles);
-  const toggleChecked = useApp((s) => s.toggleChecked);
   const checkAll = useApp((s) => s.checkAll);
+  const setCurrentFolder = useApp((s) => s.setCurrentFolder);
   const nav = useNavigate();
   const reduce = useReducedMotion();
   const [tab, setTab] = useState<WorkspaceTab>("identify");
@@ -53,7 +79,12 @@ export function Workspace() {
   const [localPreview, setLocalPreview] = useState<LocalPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [exportTarget, setExportTarget] = useState<ExportTarget | null>(null);
+  const [nameAction, setNameAction] = useState<NameAction | null>(null);
+  const [deleteAction, setDeleteAction] = useState<DeleteAction | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   useEffect(() => {
     void refreshFiles().catch((err) => setError(detailMessage(err, lang)));
@@ -208,6 +239,91 @@ export function Workspace() {
     });
   }
 
+  function uploadInto(folder: string, pickFolder: boolean) {
+    setCurrentFolder(folder);
+    document.getElementById(pickFolder ? folderInputId(UPLOAD_INPUT) : UPLOAD_INPUT)?.click();
+  }
+
+  function exportFolder(path: string) {
+    setExportTarget({ fileIds: [], folders: [path], label: path || t(lang, "workspaceRoot") });
+  }
+
+  function exportFiles(list: FileSummary[]) {
+    setExportTarget({
+      fileIds: list.map((f) => f.id),
+      folders: [],
+      label: list.length === 1 ? joinPath(list[0].folder, list[0].name) : `${list.length} ${t(lang, "nFiles")}`,
+    });
+  }
+
+  function openMenu(target: TreeTarget, x: number, y: number) {
+    const items: MenuItem[] = [];
+    if (target.type === "folder") {
+      const path = target.path;
+      const count = countFilesIn(files, path);
+      items.push(
+        { key: "export", label: t(lang, "exportEllipsis"), icon: <ExportIcon size={15} />, disabled: count === 0, onSelect: () => exportFolder(path) },
+        { key: "upload", label: t(lang, "uploadFilesHere"), icon: <UploadSimple size={15} />, separated: true, onSelect: () => uploadInto(path, false) },
+        { key: "upload-dir", label: t(lang, "uploadFolderHere"), icon: <FolderSimplePlus size={15} />, onSelect: () => uploadInto(path, true) },
+        { key: "mkdir", label: t(lang, "newFolder"), icon: <FolderPlus size={15} />, onSelect: () => setNameAction({ mode: "newFolder", parent: path }) },
+      );
+      if (path) {
+        items.push(
+          { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, separated: true, onSelect: () => setNameAction({ mode: "renameFolder", path }) },
+          { key: "delete", label: t(lang, "deleteFolder"), icon: <Trash size={15} />, danger: true, onSelect: () => setDeleteAction({ type: "folder", path }) },
+        );
+      }
+      setMenu({ x, y, title: path || t(lang, "workspaceRoot"), items });
+      return;
+    }
+    const file = target.file;
+    const checkedFiles = files.filter((f) => checked[f.id]);
+    const exportChecked = checked[file.id] && checkedFiles.length > 1;
+    items.push(
+      { key: "open", label: t(lang, "open"), icon: <Eye size={15} />, onSelect: () => select(file.id) },
+      { key: "advanced", label: t(lang, "openAdvanced"), icon: <SlidersHorizontal size={15} />, onSelect: () => nav(`/advanced/${file.id}`) },
+      {
+        key: "export",
+        label: exportChecked ? `${t(lang, "exportSelected")} (${checkedFiles.length})` : t(lang, "exportEllipsis"),
+        icon: <ExportIcon size={15} />,
+        separated: true,
+        onSelect: () => exportFiles(exportChecked ? checkedFiles : [file]),
+      },
+      { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, separated: true, onSelect: () => setNameAction({ mode: "renameFile", file }) },
+      { key: "delete", label: t(lang, "delete"), icon: <Trash size={15} />, danger: true, onSelect: () => setDeleteAction({ type: "file", file }) },
+    );
+    setMenu({ x, y, title: joinPath(file.folder, file.name), items });
+  }
+
+  async function submitName(value: string) {
+    if (!nameAction) return;
+    if (nameAction.mode === "newFolder") {
+      const created = await createFolder(joinPath(nameAction.parent, value));
+      setCurrentFolder(created.path);
+    } else if (nameAction.mode === "renameFolder") {
+      const renamed = await renameFolder(nameAction.path, joinPath(parentPath(nameAction.path), value));
+      const current = useApp.getState().currentFolder;
+      if (current === nameAction.path || current.startsWith(`${nameAction.path}/`)) {
+        setCurrentFolder(renamed.path + current.slice(nameAction.path.length));
+      }
+    } else {
+      const name = value.toLowerCase().endsWith(".nd2") ? value : `${value}.nd2`;
+      await updateFile(nameAction.file.id, { name });
+    }
+    await refreshFiles();
+  }
+
+  async function submitDelete() {
+    if (!deleteAction) return;
+    if (deleteAction.type === "folder") {
+      await deleteFolder(deleteAction.path);
+      if (useApp.getState().currentFolder.startsWith(deleteAction.path)) setCurrentFolder(parentPath(deleteAction.path));
+    } else {
+      await deleteFile(deleteAction.file.id);
+    }
+    await refreshFiles();
+  }
+
   async function confirmDelete() {
     if (!selected) return;
     try {
@@ -223,24 +339,35 @@ export function Workspace() {
   return (
     <Shell dense>
       <div className="grid min-h-[calc(100dvh-4rem)] grid-cols-1 lg:h-[calc(100dvh-4rem)] lg:min-h-0 lg:grid-cols-[272px_minmax(0,1fr)_352px]">
-        <Glass as="aside" shape="panel" className="min-h-0 border-b lg:border-b-0">
-          <div className="flex items-center justify-between px-4 py-3 text-[12px] text-[var(--text-dim)]">
+        <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-b lg:border-b-0">
+          <div className="flex items-center justify-between gap-2 px-4 py-3 text-[12px] text-[var(--text-dim)]">
             <span className="inline-flex items-center gap-2">
               {t(lang, "files")}
               <span className="font-mono text-[10px]">{files.length}</span>
             </span>
-            {files.length > 0 && (
+            <span className="flex items-center gap-0.5">
+              {files.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => checkAll(!allChecked)}
+                  className="rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                >
+                  {t(lang, allChecked ? "clearSelection" : "selectAll")}
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => checkAll(!allChecked)}
-                className="rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                onClick={() => setNameAction({ mode: "newFolder", parent: useApp.getState().currentFolder })}
+                className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                aria-label={t(lang, "newFolder")}
+                title={t(lang, "newFolder")}
               >
-                {t(lang, allChecked ? "clearSelection" : "selectAll")}
+                <FolderPlus size={16} />
               </button>
-            )}
+            </span>
           </div>
           <div className="px-3 pb-3">
-            <DropZone compact inputId="workspace-nd2-upload" />
+            <DropZone compact inputId={UPLOAD_INPUT} />
           </div>
 
           <AnimatePresence>
@@ -257,64 +384,16 @@ export function Workspace() {
             )}
           </AnimatePresence>
 
-          <motion.ul layout className="max-h-[calc(100dvh-15rem)] overflow-auto">
+          <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--line)] max-lg:max-h-[50dvh]">
+            <FileTree onMenu={openMenu} />
             {files.length === 0 && (
-              <li className="mx-3 rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[13px] leading-5 text-[var(--text-dim)]">
-                <FileIcon size={22} weight="duotone" className="mx-auto mb-3 text-[var(--accent)]" />
+              <p className="mx-3 mb-3 rounded-xl border border-dashed border-[var(--line)] px-4 py-6 text-center text-[12px] leading-5 text-[var(--text-dim)]">
+                <FileIcon size={22} weight="duotone" className="mx-auto mb-2 text-[var(--accent)]" />
                 {t(lang, "emptyFiles")}
-              </li>
+              </p>
             )}
-            <AnimatePresence initial={false}>
-              {files.map((file) => {
-                const active = selectedId === file.id;
-                return (
-                  <motion.li
-                    layout
-                    key={file.id}
-                    initial={reduce ? false : { opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={reduce ? undefined : { opacity: 0, x: -12 }}
-                    className="relative border-t border-[var(--line)]"
-                  >
-                    {active && (
-                      <motion.span
-                        layoutId="selected-file"
-                        className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-[var(--accent)]"
-                        transition={{ type: "spring", stiffness: 420, damping: 34 }}
-                      />
-                    )}
-                    <div className={`flex items-start gap-2 px-3 py-3 transition-colors ${active ? "bg-[var(--accent-soft)]" : "hover:bg-[var(--bg)]"}`}>
-                      <label className="mt-0.5 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg hover:bg-black/5">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(checked[file.id])}
-                          aria-label={`${t(lang, "selectFile")} ${file.name}`}
-                          onChange={(event) => toggleChecked(file.id, event.target.checked)}
-                        />
-                      </label>
-                      <button type="button" onClick={() => select(file.id)} className="min-w-0 flex-1 text-left">
-                        <span className="block truncate text-[13px] font-semibold tracking-[-0.01em]">{file.name}</span>
-                        <span className="mt-1.5 flex flex-wrap gap-1">
-                          {file.channels?.map((channel) => (
-                            <span
-                              key={channel.index}
-                              className="rounded-md px-1.5 py-0.5 font-mono text-[9px] font-medium text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
-                              style={{ background: rgbCss(channel.color) }}
-                            >
-                              {channel.name}
-                            </span>
-                          ))}
-                        </span>
-                        <span className="mt-1.5 block font-mono text-[10px] text-[var(--text-dim)]">
-                          {file.width ?? "–"}×{file.height ?? "–"} · {formatBytes(file.size_bytes, lang)}
-                        </span>
-                      </button>
-                    </div>
-                  </motion.li>
-                );
-              })}
-            </AnimatePresence>
-          </motion.ul>
+          </div>
+          <p className="border-t border-[var(--line)] px-4 py-2.5 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, "treeHint")}</p>
         </Glass>
 
         <main className="min-h-[430px] bg-[var(--well)]">
@@ -525,7 +604,16 @@ export function Workspace() {
                     </div>
                   )}
 
-                  {tab === "export" && <ExportPanel fileIds={exportIds} />}
+                  {tab === "export" && (
+                    <>
+                      <p className="mb-3 truncate text-[12px] text-[var(--text-dim)]" title={exportIds.length === 1 ? joinPath(selected.folder, selected.name) : undefined}>
+                        {selectedIds.length
+                          ? `${t(lang, "checkedCount")} ${selectedIds.length} ${t(lang, "nFiles")}`
+                          : joinPath(selected.folder, selected.name)}
+                      </p>
+                      <ExportPanel fileIds={exportIds} />
+                    </>
+                  )}
                 </motion.div>
               </AnimatePresence>
             )}
@@ -538,6 +626,65 @@ export function Workspace() {
           )}
         </Glass>
       </div>
+
+      <ContextMenu menu={menu} onClose={closeMenu} />
+
+      <Modal
+        open={Boolean(exportTarget)}
+        title={exportTarget?.folders.length ? t(lang, "exportTargetFolder") : t(lang, "exportTargetFiles")}
+        subtitle={
+          exportTarget && (
+            <>
+              <span className="block truncate font-mono text-[11px] text-[var(--text)]">/{exportTarget.label}</span>
+              {t(lang, "exportStructureHint")}
+            </>
+          )
+        }
+        onClose={() => setExportTarget(null)}
+        width={460}
+      >
+        {exportTarget && (
+          <ExportPanel
+            fileIds={exportTarget.fileIds}
+            folders={exportTarget.folders}
+            fileCount={exportTarget.folders.reduce((sum, f) => sum + countFilesIn(files, f), exportTarget.fileIds.length)}
+          />
+        )}
+      </Modal>
+
+      <NameDialog
+        open={Boolean(nameAction)}
+        title={t(lang, nameAction?.mode === "newFolder" ? "newFolder" : "rename")}
+        label={t(lang, nameAction?.mode === "renameFile" ? "fileName" : "folderName")}
+        initial={
+          nameAction?.mode === "renameFolder"
+            ? baseName(nameAction.path)
+            : nameAction?.mode === "renameFile"
+              ? nameAction.file.name
+              : ""
+        }
+        onSubmit={submitName}
+        onClose={() => setNameAction(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deleteAction)}
+        title={t(lang, deleteAction?.type === "folder" ? "deleteFolder" : "delete")}
+        body={
+          deleteAction && (
+            <>
+              <span className="mb-1 block truncate font-mono text-[11px] text-[var(--text)]">
+                /{deleteAction.type === "folder" ? deleteAction.path : joinPath(deleteAction.file.folder, deleteAction.file.name)}
+              </span>
+              {t(lang, deleteAction.type === "folder" ? "deleteFolderHint" : "deleteHint")}
+              {deleteAction.type === "folder" && ` (${countFilesIn(files, deleteAction.path)} ${t(lang, "nFiles")})`}
+            </>
+          )
+        }
+        confirmLabel={t(lang, "confirmDelete")}
+        onConfirm={submitDelete}
+        onClose={() => setDeleteAction(null)}
+      />
     </Shell>
   );
 }

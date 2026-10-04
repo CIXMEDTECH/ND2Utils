@@ -23,6 +23,8 @@ export interface AxisInfo {
 export interface FileSummary {
   id: string;
   name: string;
+  /** Workspace folder path, "" for the root, e.g. "20260918H2/vector 6h". */
+  folder: string;
   size_bytes: number;
   status: string;
   error?: string | null;
@@ -72,6 +74,34 @@ export interface JobInfo {
   error?: string | null;
   format?: string | null;
   file_ids: string[];
+  label?: string | null;
+}
+
+export type CodeKind = "permanent" | "temporary";
+export type CodeStatus = "active" | "expired" | "disabled";
+
+export interface AccessUser {
+  id: string;
+  label: string;
+  role: "admin" | "user";
+  kind: CodeKind;
+  expires_at: number | null;
+  created_at: number | null;
+  last_login_at: number | null;
+  disabled: boolean;
+  status: CodeStatus;
+  usage: { files: number; bytes: number };
+}
+
+export interface AccessCode extends AccessUser {
+  code: string;
+}
+
+/** What an export targets: a set of files and/or whole folders (recursive). */
+export interface ExportTarget {
+  fileIds: string[];
+  folders: string[];
+  label: string;
 }
 
 export type Tool = "pan" | "probe" | "line" | "rect" | "ellipse" | "polygon";

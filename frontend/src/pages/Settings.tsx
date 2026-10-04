@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Database, MoonStars, Translate } from "@phosphor-icons/react";
+import { Database, IdentificationCard, MoonStars, Translate } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AdminCodes } from "../components/AdminCodes";
 import { Glass } from "../components/Glass";
 import { Shell } from "../components/Shell";
 import { t } from "../i18n";
-import { health } from "../lib/api";
-import { detailMessage, formatBytes } from "../lib/format";
+import { serverSettings } from "../lib/api";
+import { detailMessage, formatBytes, formatDateTime } from "../lib/format";
 import { useApp } from "../store";
 
 export function Settings() {
@@ -13,13 +14,14 @@ export function Settings() {
   const theme = useApp((s) => s.theme);
   const setLang = useApp((s) => s.setLang);
   const setTheme = useApp((s) => s.setTheme);
+  const user = useApp((s) => s.user);
   const reduce = useReducedMotion();
   const [info, setInfo] = useState<{ max_upload_bytes: number; ttl_hours: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void health()
+    void serverSettings()
       .then((next) => {
         if (!cancelled) setInfo(next);
       })
@@ -41,6 +43,43 @@ export function Settings() {
         </div>
 
         <div className="mt-7 grid gap-4">
+          {user && (
+            <motion.div
+              initial={reduce ? false : { opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: "spring", bounce: 0.12, duration: 0.55 }}
+            >
+              <Glass as="section" shape="card" className="p-5 sm:p-6">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                    <IdentificationCard size={18} weight="duotone" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-[14px] font-semibold">{t(lang, "accountTitle")}</h2>
+                    <dl className="mt-4 grid gap-2 rounded-xl bg-[var(--bg)]/50 p-3 text-[12px]">
+                      {[
+                        [t(lang, "codeLabel"), user.label || "—"],
+                        [t(lang, "codeKind"), `${t(lang, user.role === "admin" ? "roleAdmin" : "roleUser")} · ${t(lang, user.kind === "permanent" ? "kindPermanent" : "kindTemporary")}`],
+                        [t(lang, "expiresAt"), user.expires_at ? formatDateTime(user.expires_at, lang) : t(lang, "expiresNever")],
+                        [t(lang, "usage"), `${user.usage.files} ${t(lang, "nFiles")} · ${formatBytes(user.usage.bytes, lang)}`],
+                      ].map(([k, v]) => (
+                        <div key={k} className="flex items-center justify-between gap-4">
+                          <dt className="text-[var(--text-dim)]">{k}</dt>
+                          <dd className="truncate text-right font-mono text-[11px] tabular-nums">{v}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <p className="mt-3 text-[12px] leading-5 text-[var(--text-dim)]">
+                      {user.kind === "permanent"
+                        ? t(lang, "permanentNote")
+                        : `${t(lang, "temporaryNote")} ${info?.ttl_hours ?? "…"} ${t(lang, "temporaryNoteTail")}`}
+                    </p>
+                  </div>
+                </div>
+              </Glass>
+            </motion.div>
+          )}
+
           <motion.div
             initial={reduce ? false : { opacity: 0, y: 14 }}
             animate={{ opacity: 1, y: 0 }}
@@ -151,6 +190,16 @@ export function Settings() {
               </div>
             </Glass>
           </motion.div>
+
+          {user?.role === "admin" && (
+            <motion.div
+              initial={reduce ? false : { opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: "spring", bounce: 0.12, duration: 0.55, delay: 0.18 }}
+            >
+              <AdminCodes />
+            </motion.div>
+          )}
         </div>
 
         <AnimatePresence>
