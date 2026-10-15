@@ -15,6 +15,7 @@ from nd2utils import auth, jsoncache
 from nd2utils.config import ensure_dirs, settings
 from nd2utils.nd2io import close_nd2
 from nd2utils.ometiff import close_slide
+from nd2utils.slide_render import forget as forget_rendered
 
 
 OWNER_FIELD = "_owner"
@@ -207,6 +208,7 @@ def remove_file_data(file_id: str) -> None:
     path = settings.uploads_dir / file_id
     close_nd2(path / "source.nd2")
     close_slide(path / "source.nd2")
+    forget_rendered(file_id)
     shutil.rmtree(path, ignore_errors=True)
     shutil.rmtree(settings.cache_dir / file_id, ignore_errors=True)
 

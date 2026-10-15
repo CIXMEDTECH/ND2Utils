@@ -355,6 +355,31 @@ def open_slide(path: Path, cache_key: str | None = None) -> Slide:
         return slide
 
 
+def open_count() -> int:
+    return len(_OPEN)
+
+
+def set_limits(*, segment_bytes: int | None = None, max_open: int | None = None) -> None:
+    """Resize the decoded-segment cache and the open-file cache (performance settings)."""
+    global _SEG_LIMIT, _MAX_OPEN, _SEG_BYTES
+    if max_open is not None:
+        _MAX_OPEN = max(1, int(max_open))
+        with _OPEN_LOCK:
+            while len(_OPEN) > _MAX_OPEN:
+                _, old = _OPEN.popitem(last=False)
+                old.close()
+    if segment_bytes is not None:
+        _SEG_LIMIT = max(0, int(segment_bytes))
+        with _SEG_LOCK:
+            while _SEG_BYTES > _SEG_LIMIT and _SEGMENTS:
+                _, seg = _SEGMENTS.popitem(last=False)
+                _SEG_BYTES -= seg.nbytes
+
+
+def segment_cache_bytes() -> int:
+    return _SEG_BYTES
+
+
 def close_slide(path: Path) -> None:
     prefix = f"{path.resolve()}|"
     with _OPEN_LOCK:

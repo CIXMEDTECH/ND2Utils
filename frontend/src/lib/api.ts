@@ -8,6 +8,9 @@ import type {
   JobInfo,
   LutSetting,
   MeasureResult,
+  PerformanceValues,
+  PerformanceView,
+  RenderModeSetting,
   SlideExportFormat,
   SlideInfo,
 } from "./types";
@@ -66,8 +69,45 @@ function send(url: string, method: string, body?: unknown) {
   });
 }
 
-export async function serverSettings() {
-  return json<{ version: string; max_upload_bytes: number; ttl_hours: number }>(await fetch("/api/settings"));
+export interface ServerSettings {
+  version: string;
+  max_upload_bytes: number;
+  ttl_hours: number;
+  render_mode: RenderModeSetting;
+  raster_max_pixels: number;
+}
+
+export async function serverSettings(): Promise<ServerSettings> {
+  return json<ServerSettings>(await fetch("/api/settings"));
+}
+
+let cachedSettings: Promise<ServerSettings> | null = null;
+
+/** Server settings, fetched once per page load (refreshed after an admin changes them). */
+export function clientSettings(refresh = false): Promise<ServerSettings> {
+  if (!cachedSettings || refresh) {
+    cachedSettings = serverSettings();
+    cachedSettings.catch(() => {
+      cachedSettings = null;
+    });
+  }
+  return cachedSettings;
+}
+
+export async function getPerformance(): Promise<PerformanceView> {
+  return json(await fetch("/api/admin/performance"));
+}
+
+export async function updatePerformance(values: Partial<PerformanceValues>): Promise<PerformanceView> {
+  const view = await json<PerformanceView>(await send("/api/admin/performance", "PUT", values));
+  void clientSettings(true).catch(() => undefined);
+  return view;
+}
+
+export async function resetPerformance(): Promise<PerformanceView> {
+  const view = await json<PerformanceView>(await send("/api/admin/performance/reset", "POST"));
+  void clientSettings(true).catch(() => undefined);
+  return view;
 }
 
 export async function me() {

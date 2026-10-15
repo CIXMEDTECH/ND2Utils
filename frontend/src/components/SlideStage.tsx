@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { CornersOut, MagnifyingGlassMinus, MagnifyingGlassPlus } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { t } from "../i18n";
+import { clientSettings } from "../lib/api";
 import { detailMessage } from "../lib/format";
-import { MAX_SCALE, SlideViewer, type ChannelDisplay, type Rect, type ViewState } from "../lib/slide";
+import { MAX_SCALE, SlideViewer, type ChannelDisplay, type Rect, type RenderMode, type ViewState } from "../lib/slide";
 import { readPref } from "../lib/storage";
 import type { SlideInfo } from "../lib/types";
 import { useApp } from "../store";
@@ -49,6 +50,43 @@ export function loadDisplay(info: SlideInfo): ChannelDisplay[] {
   return defaultDisplay(info);
 }
 
+let gpuProbe: boolean | null = null;
+
+/** WebGL2 backed by real graphics hardware (software renderers such as SwiftShader don't count). */
+export function hasGpu(): boolean {
+  if (gpuProbe !== null) return gpuProbe;
+  try {
+    const gl = document.createElement("canvas").getContext("webgl2");
+    if (!gl) return (gpuProbe = false);
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
+    gpuProbe = !/swiftshader|llvmpipe|softpipe|software|basic render/i.test(renderer);
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+  } catch {
+    gpuProbe = false;
+  }
+  return gpuProbe;
+}
+
+/** The render mode for this browser: the administrator's setting, "auto" = GPU if present. */
+export function useRenderMode(): RenderMode | null {
+  const [mode, setMode] = useState<RenderMode | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void clientSettings()
+      .then((s) => s.render_mode)
+      .catch(() => "auto" as const)
+      .then((setting) => {
+        if (cancelled) return;
+        setMode(setting === "server" ? "server" : setting === "browser" ? "browser" : hasGpu() ? "browser" : "server");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return mode;
+}
+
 function isControl(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("button, a, input, select, textarea, label, [data-no-pan]"));
 }
@@ -86,6 +124,7 @@ export function SlideStage({
   children?: ReactNode;
 }) {
   const lang = useApp((s) => s.lang);
+  const mode = useRenderMode();
   const hostRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<SlideViewer | null>(null);
@@ -96,8 +135,8 @@ export function SlideStage({
 
   useLayoutEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
-    const engine = new SlideViewer(host, info, display);
+    if (!host || !mode) return;
+    const engine = new SlideViewer(host, info, display, { mode });
     engine.onError = (err) => setError(detailMessage(err, useApp.getState().lang));
     setViewer(engine);
     setError(null);
@@ -109,9 +148,9 @@ export function SlideStage({
       callbacks.current.onViewer?.(null);
       setViewer(null);
     };
-    // A new engine only for a new slide; display/plane changes are pushed below.
+    // A new engine only for a new slide (or render mode); display/plane changes are pushed below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info]);
+  }, [info, mode]);
 
   useEffect(() => {
     viewer?.setDisplay(display);

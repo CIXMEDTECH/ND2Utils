@@ -63,6 +63,10 @@ const COMPOSITE_LIMIT = 220;
 const MAX_INFLIGHT = 6;
 const COMPOSE_BUDGET_MS = 12;
 export const MAX_SCALE = 20;
+/** "browser": channels composited on the client (GPU when available); "server": the server
+ *  sends finished JPEG tiles (Settings → Performance → render mode). */
+export type RenderMode = "browser" | "server";
+const SERVER_TILE_LIMIT = 320;
 const MAX_CANVAS_PIXELS = 16_000_000;
 
 /** Decode the server's packed planes ("ND2P"), keeping native typed arrays. */
@@ -180,6 +184,11 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, width: number, heigh
   ctx.textAlign = "right";
   ctx.fillText(label, x1, y - 8 * k);
   ctx.restore();
+}
+
+/** Compact, stable number text for URLs (slider values carry float noise). */
+function short(v: number): string {
+  return String(Number(v.toPrecision(6)));
 }
 
 function tileKey(t: number, z: number, ref: TileRef): string {
@@ -442,8 +451,15 @@ export class SlideViewer {
   scaleBar = true;
   selection: Rect | null = null;
   onError: ((err: unknown) => void) | null = null;
+  readonly mode: RenderMode;
+  /** Server-rendered tiles by `${tile}|${display}`; `latest` remembers each tile's newest one,
+   *  shown while the tile for new display settings is on its way. */
+  private served = new Map<string, ImageBitmap>();
+  private latest = new Map<string, string>();
+  private displayKey = "";
 
-  constructor(container: HTMLElement, info: SlideInfo, display: ChannelDisplay[]) {
+  constructor(container: HTMLElement, info: SlideInfo, display: ChannelDisplay[], options: { mode?: RenderMode } = {}) {
+    this.mode = options.mode ?? "browser";
     this.container = container;
     this.info = info;
     this.fileId = info.id;
@@ -460,7 +476,10 @@ export class SlideViewer {
     const octx = this.overlay.getContext("2d");
     if (!octx) throw new Error("Canvas 2D is not available");
     this.octx = octx;
-    const gl = this.base.getContext("webgl2", { alpha: false, antialias: false, depth: true, premultipliedAlpha: false });
+    const gl =
+      this.mode === "browser"
+        ? this.base.getContext("webgl2", { alpha: false, antialias: false, depth: true, premultipliedAlpha: false })
+        : null;
     if (gl) {
       try {
         this.gl = new GlRenderer(gl);
@@ -469,7 +488,7 @@ export class SlideViewer {
       }
     }
     if (!this.gl) {
-      // No WebGL2 (or it failed to initialise): composite on the CPU instead.
+      // Server tiles, or no WebGL2 (or it failed to initialise): a plain 2D canvas.
       const fallback = document.createElement("canvas");
       fallback.style.cssText = this.base.style.cssText;
       container.replaceChild(fallback, this.base);
@@ -485,8 +504,8 @@ export class SlideViewer {
     this.resize();
   }
 
-  get renderer(): "webgl" | "canvas" {
-    return this.gl ? "webgl" : "canvas";
+  get renderer(): "webgl" | "canvas" | "server" {
+    return this.mode === "server" ? "server" : this.gl ? "webgl" : "canvas";
   }
 
   private onContextLost = (event: Event) => {
@@ -514,6 +533,9 @@ export class SlideViewer {
     this.loading.clear();
     this.raw.clear();
     this.composites.clear();
+    for (const bitmap of this.served.values()) bitmap.close();
+    this.served.clear();
+    this.latest.clear();
     this.listeners.clear();
     this.gl?.dispose();
     this.base.removeEventListener("webglcontextlost", this.onContextLost);
@@ -697,6 +719,10 @@ export class SlideViewer {
         const n = this.display[i];
         return d.visible === n.visible && d.min === n.min && d.max === n.max && d.gamma === n.gamma && d.color.join() === n.color.join();
       });
+    this.displayKey = this.display
+      .map((d, i) => (d.visible ? `${i},${short(d.min)},${short(d.max)},${short(d.gamma)},${d.color.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}` : ""))
+      .filter(Boolean)
+      .join(";");
     if (!same) {
       this.version += 1;
       this.render();
@@ -786,12 +812,74 @@ export class SlideViewer {
     return tiles;
   }
 
+  private servedKey(ref: TileRef, display = this.displayKey, t = this.t, z = this.z): string {
+    return `${tileKey(t, z, ref)}|${display}`;
+  }
+
+  /** A tile composited by the server for the given display settings. */
+  async fetchRendered(
+    ref: TileRef,
+    display = this.displayKey,
+    t = this.t,
+    z = this.z,
+    signal?: AbortSignal,
+    keep = true,
+  ): Promise<ImageBitmap> {
+    const q = new URLSearchParams({ level: String(ref.level), x: String(ref.x), y: String(ref.y), d: display, t: String(t), z: String(z) });
+    const res = await fetch(`/api/files/${this.fileId}/slide/render?${q}`, { signal });
+    if (!res.ok) throw new Error(`tile ${res.status}`);
+    const bitmap = await createImageBitmap(await res.blob());
+    if (!keep) return bitmap;
+    const key = this.servedKey(ref, display, t, z);
+    if (this.destroyed) {
+      bitmap.close();
+      return bitmap;
+    }
+    this.served.get(key)?.close();
+    this.served.delete(key);
+    this.served.set(key, bitmap);
+    // Keep only the newest bitmap per tile (+ LRU across tiles).
+    const tile = tileKey(t, z, ref);
+    const previous = this.latest.get(tile);
+    if (previous && previous !== key) {
+      this.served.get(previous)?.close();
+      this.served.delete(previous);
+    }
+    this.latest.set(tile, key);
+    while (this.served.size > SERVER_TILE_LIMIT) {
+      const [oldest, old] = this.served.entries().next().value as [string, ImageBitmap];
+      old.close();
+      this.served.delete(oldest);
+      const owner = oldest.slice(0, oldest.indexOf("|"));
+      if (this.latest.get(owner) === oldest) this.latest.delete(owner);
+    }
+    return bitmap;
+  }
+
   /** Start queued downloads. In-flight downloads are never cancelled by panning or zooming:
    *  they finish into the cache and serve as fallback (cancelling made fast zooming load nothing). */
   private pump(): void {
     while (this.inflight.size < MAX_INFLIGHT && this.wanted.length) {
       const job = this.wanted.shift();
       if (!job) break;
+      if (this.mode === "server") {
+        if (this.loading.has(job.key)) continue;
+        const controller = new AbortController();
+        const id = `${job.key}#${performance.now()}`;
+        this.inflight.set(id, controller);
+        this.loading.add(job.key);
+        const { t, z, displayKey } = this;
+        void this.fetchRendered(job.ref, displayKey, t, z, controller.signal)
+          .catch((err) => {
+            if (!(err instanceof DOMException && err.name === "AbortError")) this.onError?.(err);
+          })
+          .finally(() => {
+            this.inflight.delete(id);
+            this.loading.delete(job.key);
+            if (!this.destroyed) this.render();
+          });
+        continue;
+      }
       const keys = job.channels.map((c) => this.rawKey(this.t, this.z, job.ref, c));
       if (keys.some((k) => this.loading.has(k))) continue;
       const controller = new AbortController();
@@ -877,7 +965,17 @@ export class SlideViewer {
     const coarsest = this.info.levels.length - 1;
     const steps = [coarsest, Math.min(target + 2, coarsest), target].filter((v, i, all) => all.indexOf(v) === i);
     const wanted: typeof this.wanted = [];
-    if (channels.length) {
+    if (channels.length && this.mode === "server") {
+      steps.forEach((level, rank) => {
+        for (const ref of this.tilesFor(level, rect)) {
+          const key = this.servedKey(ref);
+          if (this.served.has(key) || this.loading.has(key)) continue;
+          const r = this.tileRect(ref);
+          const dist = Math.hypot(r.x + r.w / 2 - this.cx, r.y + r.h / 2 - this.cy);
+          wanted.push({ key, ref, channels, priority: rank * 1e12 + dist });
+        }
+      });
+    } else if (channels.length) {
       steps.forEach((level, rank) => {
         for (const ref of this.tilesFor(level, rect)) {
           const missing = channels.filter((c) => {
@@ -903,7 +1001,12 @@ export class SlideViewer {
     const target = this.levelFor(this.scale);
     const channels = this.visibleChannels();
     this.plan(rect, target, channels);
-    const pending = this.gl ? this.drawGl(rect, target, channels) : this.draw2d(rect, target, channels, now);
+    const pending =
+      this.mode === "server"
+        ? this.drawServed(rect, target, channels)
+        : this.gl
+          ? this.drawGl(rect, target, channels)
+          : this.draw2d(rect, target, channels, now);
     this.drawOverlays();
     this.notify();
     if (animating || pending) this.render();
@@ -958,6 +1061,32 @@ export class SlideViewer {
       }
     }
     return pending;
+  }
+
+  /** Server mode: finished tiles, coarse first and finer ones painted over them. */
+  private drawServed(rect: Rect, target: number, channels: number[]): boolean {
+    const ctx = this.ctx;
+    if (!ctx) return false;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#050607";
+    ctx.fillRect(0, 0, this.base.width, this.base.height);
+    const [bx0, by0, bx1, by1] = this.toDevice({ x: 0, y: 0, w: this.info.width, h: this.info.height });
+    ctx.fillStyle = "#000";
+    ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+    if (!channels.length) return false;
+    const coarsest = this.info.levels.length - 1;
+    for (let level = coarsest; level >= target; level--) {
+      const lv = this.info.levels[level];
+      ctx.imageSmoothingEnabled = (this.dpr * this.scale * this.info.width) / lv.width < 2.5;
+      for (const ref of this.tilesFor(level, rect)) {
+        const current = this.served.get(this.servedKey(ref));
+        const fallback = current ?? (level === target || level === coarsest ? this.served.get(this.latest.get(tileKey(this.t, this.z, ref)) ?? "") : undefined);
+        if (!fallback) continue;
+        const [x0, y0, x1, y1] = this.toDevice(this.tileRect(ref)).map(Math.round);
+        ctx.drawImage(fallback, x0, y0, x1 - x0, y1 - y0);
+      }
+    }
+    return false;
   }
 
   private draw2d(rect: Rect, target: number, channels: number[], now: number): boolean {
@@ -1023,6 +1152,7 @@ export class SlideViewer {
 
   /** Native values of the visible channels at an image point, from the best loaded level. */
   probe(x: number, y: number): { level: number; values: (number | null)[] } | null {
+    if (this.mode === "server") return null; // only finished RGB tiles reach the browser
     if (x < 0 || y < 0 || x >= this.info.width || y >= this.info.height) return null;
     const size = this.info.tile_size;
     for (let level = this.levelFor(this.scale); level < this.info.levels.length; level++) {
@@ -1100,7 +1230,26 @@ export class SlideViewer {
     // Each tile is composited as soon as its channels are there, so a large render never
     // depends on everything fitting in the tile cache at once.
     const queue = [...refs];
+    const display = this.displayKey;
+    const place = (ref: TileRef, image: CanvasImageSource) => {
+      const r = this.tileRect(ref);
+      const x0 = Math.round((r.x - clip.x) * outScale);
+      const y0 = Math.round((r.y - clip.y) * outScale);
+      const x1 = Math.round((r.x + r.w - clip.x) * outScale);
+      const y1 = Math.round((r.y + r.h - clip.y) * outScale);
+      ctx.drawImage(image, x0, y0, x1 - x0, y1 - y0);
+    };
+    const serverWorker = async () => {
+      for (let ref = queue.shift(); ref; ref = queue.shift()) {
+        if (!channels.length) continue;
+        const cached = this.served.get(this.servedKey(ref, display, t, z));
+        const bitmap = cached ?? (await this.fetchRendered(ref, display, t, z, undefined, false));
+        place(ref, bitmap);
+        if (!cached) bitmap.close();
+      }
+    };
     const worker = async () => {
+      if (this.mode === "server") return serverWorker();
       const scratch = document.createElement("canvas");
       const sctx = scratch.getContext("2d");
       if (!sctx) throw new Error("Canvas 2D is not available");

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Database, IdentificationCard, MoonStars, Translate } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { AdminCodes } from "../components/AdminCodes";
+import { AdminPerformance } from "../components/AdminPerformance";
 import { Glass } from "../components/Glass";
 import { Shell } from "../components/Shell";
 import { t } from "../i18n";
@@ -198,6 +199,16 @@ export function Settings() {
               transition={{ type: "spring", bounce: 0.12, duration: 0.55, delay: 0.18 }}
             >
               <AdminCodes />
+            </motion.div>
+          )}
+
+          {user?.role === "admin" && (
+            <motion.div
+              initial={reduce ? false : { opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: "spring", bounce: 0.12, duration: 0.55, delay: 0.24 }}
+            >
+              <AdminPerformance />
             </motion.div>
           )}
         </div>

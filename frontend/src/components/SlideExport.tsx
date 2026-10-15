@@ -3,7 +3,7 @@ import { ArrowRight, DownloadSimple, WarningCircle } from "@phosphor-icons/react
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import { t, type MsgKey } from "../i18n";
-import { ApiError, getJob, jobDownloadUrl, startSlideExport } from "../lib/api";
+import { ApiError, clientSettings, getJob, jobDownloadUrl, startSlideExport } from "../lib/api";
 import { detailMessage, rgbCss } from "../lib/format";
 import type { ChannelDisplay, Rect } from "../lib/slide";
 import type { JobInfo, SlideExportFormat, SlideInfo } from "../lib/types";
@@ -12,7 +12,6 @@ import { Guide } from "./Guide";
 
 type RegionMode = "view" | "selection" | "full";
 
-const MAX_RASTER_PIXELS = 64_000_000;
 const HINTS: Record<SlideExportFormat, MsgKey> = {
   "ome-tiff": "slideOmeHint",
   tiff: "slideTiffHint",
@@ -68,6 +67,13 @@ export function SlideExport({
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rasterLimit, setRasterLimit] = useState(64_000_000);
+
+  useEffect(() => {
+    void clientSettings()
+      .then((s) => setRasterLimit(s.raster_max_pixels))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (selection) setMode("selection");
@@ -84,7 +90,7 @@ export function SlideExport({
   const raster = format === "png" || format === "jpeg";
   const composite = format !== "ome-tiff";
   const pixels = size.w * size.h;
-  const tooLarge = raster && (pixels > MAX_RASTER_PIXELS || (format === "jpeg" && Math.max(size.w, size.h) > 65500));
+  const tooLarge = raster && (pixels > rasterLimit || (format === "jpeg" && Math.max(size.w, size.h) > 65500));
   const chosen = channels.map((on, i) => (on ? i : -1)).filter((i) => i >= 0);
   const blocked = busy || !chosen.length || !size.w || !size.h || tooLarge || (mode === "selection" && !selection);
 

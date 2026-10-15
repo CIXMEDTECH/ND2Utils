@@ -190,7 +190,7 @@ def test_export_composite_png_and_tiff(client, pyramid_file, tmp_path: Path):
 def test_export_rejects_huge_png(client, pyramid_file, monkeypatch):
     from nd2utils import slide_export
 
-    monkeypatch.setattr(slide_export, "MAX_RASTER_PIXELS", 1000)
+    monkeypatch.setattr(slide_export, "max_raster_pixels", lambda: 1000)
     path, _ = pyramid_file
     rec = _upload(client, path)
     r = client.post(f"/api/files/{rec['id']}/slide/export", json={"format": "png"})
@@ -223,3 +223,72 @@ def test_real_whole_slide_sample():
     assert not ometiff.needs_pyramid(slide)
     tile = ometiff.tile_planes(slide, 0, 30, 60, [0, 4])
     assert tile[0].shape == (512, 512) and tile[0].dtype == np.uint8
+
+
+def test_server_rendered_tiles(client, pyramid_file):
+    path, data = pyramid_file
+    rec = _upload(client, path)
+    d = "0,0,4000,1,ff0000;2,0,4000,1,0000ff"
+    r = client.get(f"/api/files/{rec['id']}/slide/render", params={"level": 0, "x": 1, "y": 1, "d": d})
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    img = np.asarray(Image.open(BytesIO(r.content)))
+    assert img.shape == (512, 512, 3)
+    # Red follows channel 0, blue channel 2, green stays empty (JPEG is lossy: compare loosely).
+    expect_r = np.clip(data[0, 512:1024, 512:1024] / 4000 * 255, 0, 255)
+    assert np.abs(img[..., 0].astype(float) - expect_r).mean() < 12
+    assert img[..., 1].mean() < 12
+    assert client.get(f"/api/files/{rec['id']}/slide/render", params={"level": 0, "x": 0, "y": 0, "d": "9,0,1,1,ffffff"}).status_code == 400
+    assert client.get(f"/api/files/{rec['id']}/slide/render", params={"level": 0, "x": 0, "y": 0, "d": "junk"}).status_code == 400
+
+
+def test_admin_performance_settings(admin, client):
+    from nd2utils import ometiff, prepare
+
+    view = admin.get("/api/admin/performance").json()
+    assert view["values"]["render_mode"] == "auto"
+    assert view["schema"]["tile_cache_mb"]["min"] == 32
+    assert view["status"]["cpu_count"] >= 1
+    r = admin.put("/api/admin/performance", json={"render_mode": "server", "tile_cache_mb": 64, "prepare_workers": 3, "raster_max_mpx": 10})
+    assert r.status_code == 200, r.text
+    assert r.json()["values"]["tile_cache_mb"] == 64
+    # Applied at runtime and visible to every user.
+    assert ometiff._SEG_LIMIT == 64 * 1024 * 1024
+    assert prepare._WORKERS == 3
+    settings = client.get("/api/settings").json()
+    assert settings["render_mode"] == "server" and settings["raster_max_pixels"] == 10_000_000
+    assert admin.put("/api/admin/performance", json={"tile_cache_mb": 1}).status_code == 400
+    assert admin.put("/api/admin/performance", json={"render_mode": "gpu"}).status_code == 400
+    assert admin.put("/api/admin/performance", json={"nope": 1}).status_code == 400
+    # Only administrators may change it.
+    assert client.get("/api/admin/performance").status_code == 403
+    assert client.put("/api/admin/performance", json={"render_mode": "browser"}).status_code == 403
+    assert admin.post("/api/admin/performance/reset").json()["values"]["render_mode"] == "auto"
+    assert ometiff._SEG_LIMIT == 192 * 1024 * 1024
+
+
+def test_export_gate_limits_concurrency():
+    import threading
+    import time as _time
+
+    from nd2utils import perf
+
+    perf._GATE.set_limit(1)
+    active, peak = [0], [0]
+    lock = threading.Lock()
+
+    def job():
+        with perf.export_slot():
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            _time.sleep(0.05)
+            with lock:
+                active[0] -= 1
+
+    threads = [threading.Thread(target=job) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert peak[0] == 1
+    perf._GATE.set_limit(perf.DEFAULTS["export_workers"])

@@ -57,6 +57,10 @@ docker compose up -d
    - 导出（后台任务）：范围可选当前视野 / 框选区域 / 整张切片，可选分辨率层级与通道；
      OME-TIFF 保留原始像素值（分块、金字塔），TIFF/PNG/JPEG 为 8 位合成图。
    - 文件自带的金字塔层级会直接使用；没有金字塔的大图在导入后台准备时自动生成缩略层级（缓存在 `data/cache`）。
+6. 性能设置（仅管理员，“设置 → 性能设置”）：保存后立即生效，无需重启。
+   - 切片渲染方式：**自动**（用户电脑有显卡时在浏览器中用 GPU 合成，否则由服务器合成）、**用户浏览器**、**服务器**（服务器合成好 JPEG 图块再发送，适合用户电脑性能弱；服务器不需要显卡）。
+   - 瓦片解码缓存、服务器合成缓存、JPEG 质量、同时打开的文件数、后台准备线程数、同时运行的导出任务数（超出的排队）、PNG/JPEG 导出像素上限。
+   - 卡片上方实时显示服务器 CPU 核心数、内存、缓存占用和导出任务情况。参数保存在 `data/performance.json`。
 
 TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF：
 `*.ome.tif` 保留原始像素值（12 位数据存放在 16 位文件中，普通看图软件里会很暗），供 Fiji / QuPath / napari 分析；
@@ -82,6 +86,7 @@ On first start an admin access code is generated and printed to the server log (
 
 - Large files are read plane-by-plane. Do not expect the whole T×Z cube in RAM.
 - OME-TIFF (`.ome.tif` / `.ome.tiff`, plain `.tif` too) opens in the slide viewer: tiled multi-resolution browsing (wheel/pinch zoom, pan, overview map, scale bar), per-channel visibility / color / range / gamma, view snapshots (PNG), and background exports of the current view, a selected region or the whole slide at any pyramid level — raw OME-TIFF (tiled, pyramidal) for the chosen channels or an 8-bit TIFF / PNG / JPEG composite. Existing pyramid levels are used as is; large images without one get generated overview levels during background preparation.
+- Administrators tune performance under Settings → Performance (applied immediately, stored in `data/performance.json`): slide rendering (automatic / user's browser GPU / server-rendered JPEG tiles — the server needs no GPU), tile and composite cache sizes, JPEG quality, open files, preparation threads, concurrent exports (others queue), and the PNG/JPEG export size limit, next to live CPU / memory / cache figures.
 - Every page and API call requires an access code. Each code owns one workspace. Codes have an optional expiry and are either *temporary* (files removed after `TTL_HOURS` and when the code expires) or *permanent* (never cleaned up automatically). Export archives are kept for `TTL_HOURS` for everyone.
 - Upload files or whole folders; the workspace keeps the folder tree. Right-click a file or folder to export it — exported files land in the same folders as their ND2 source inside the zip.
 - Every imported file is prepared in the background (auto-contrast and an 8-bit preview cached in `data/cache`), so opening it later is immediate.

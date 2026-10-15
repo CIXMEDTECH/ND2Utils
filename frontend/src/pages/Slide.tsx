@@ -288,6 +288,7 @@ export function Slide() {
             )}
             {view && info && (
               <span className="ml-auto">
+                {viewer && <span className="mr-2 text-white/40">{t(lang, viewer.renderer === "server" ? "renderServer" : viewer.renderer === "webgl" ? "renderGpu" : "renderCpu")} ·</span>}
                 L{view.level}/{info.levels.length - 1}
                 {view.loading > 0 ? " · …" : ""}
               </span>

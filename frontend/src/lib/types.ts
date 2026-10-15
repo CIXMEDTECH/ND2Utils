@@ -172,3 +172,31 @@ export interface SlideInfo {
 }
 
 export type SlideExportFormat = "ome-tiff" | "tiff" | "png" | "jpeg";
+
+export type RenderModeSetting = "auto" | "browser" | "server";
+
+export interface PerformanceValues {
+  render_mode: RenderModeSetting;
+  tile_cache_mb: number;
+  render_cache_mb: number;
+  server_tile_quality: number;
+  max_open_files: number;
+  prepare_workers: number;
+  export_workers: number;
+  raster_max_mpx: number;
+}
+
+export interface PerformanceView {
+  values: PerformanceValues;
+  schema: Record<keyof PerformanceValues, { type: "int" | "choice"; min?: number; max?: number; default: number | string; choices?: string[] }>;
+  status: {
+    cpu_count: number | null;
+    memory_total: number | null;
+    memory_available: number | null;
+    tile_cache_bytes: number;
+    render_cache_bytes: number;
+    open_slides: number;
+    exports_running: number;
+    exports_waiting: number;
+  };
+}

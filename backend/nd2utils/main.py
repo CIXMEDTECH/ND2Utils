@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from nd2utils import __version__, auth, ometiff, prepare
+from nd2utils import __version__, auth, ometiff, perf, prepare, slide_render
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import new_job_id, run_export
 from nd2utils.models import ExportRequest, MeasureRequest
@@ -92,6 +92,7 @@ async def lifespan(_app: FastAPI):
     ensure_dirs()
     auth.ensure_admin()
     migrate_index()
+    perf.apply()
     purge_expired()
     # Files imported before background preparation existed (or interrupted by a restart).
     prepare.schedule_missing()
@@ -396,7 +397,43 @@ def get_settings(_user: CurrentUser) -> dict[str, Any]:
         "version": __version__,
         "max_upload_bytes": settings.max_upload_bytes,
         "ttl_hours": settings.ttl_hours,
+        # How slide tiles are composited: in the browser (GPU), on the server, or decided per browser.
+        "render_mode": perf.value("render_mode"),
+        "raster_max_pixels": perf.value("raster_max_mpx") * 1_000_000,
     }
+
+
+# --- admin: performance -----------------------------------------------------------
+
+
+def _performance_view() -> dict[str, Any]:
+    return {"values": perf.get(), "schema": perf.schema(), "status": perf.status()}
+
+
+@app.get("/api/admin/performance")
+def api_admin_performance(_admin: AdminUser) -> dict[str, Any]:
+    return _performance_view()
+
+
+@app.put("/api/admin/performance")
+def api_admin_update_performance(body: dict[str, Any], _admin: AdminUser) -> dict[str, Any]:
+    try:
+        perf.update(body)
+    except perf.PerfError as exc:
+        raise HTTPException(status_code=400, detail={"code": "bad_setting", "message": str(exc)}) from exc
+    return _performance_view()
+
+
+@app.post("/api/admin/performance/reset")
+def api_admin_reset_performance(_admin: AdminUser) -> dict[str, Any]:
+    perf.reset()
+    return _performance_view()
+
+
+def _gated(job, *args) -> None:
+    """Run an export job once the export gate (Settings → Performance) lets it."""
+    with perf.export_slot():
+        job(*args)
 
 
 # --- admin: access codes ----------------------------------------------------
@@ -919,6 +956,38 @@ def api_slide_tile(
     return response
 
 
+@app.get("/api/files/{file_id}/slide/render")
+def api_slide_render(
+    file_id: str,
+    owner_id: Owner,
+    level: int,
+    x: int,
+    y: int,
+    d: str = "",
+    t: int = 0,
+    z: int = 0,
+) -> Response:
+    """A viewer tile composited on the server (render mode "server"), as JPEG.
+
+    `d` lists the visible channels as `channel,min,max,gamma,rrggbb` separated by `;`."""
+    _need_slide(file_id, owner_id)
+    slide = prepare.ensure_slide(file_id, source_path(file_id))
+    if not 0 <= level < len(slide.levels):
+        raise HTTPException(status_code=400, detail={"code": "bad_level", "message": "Resolution level out of range."})
+    try:
+        layers = slide_render.parse_layers(d, slide.n_channels)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "bad_display", "message": "Malformed display settings."}) from exc
+    try:
+        body = slide_render.render_tile(
+            file_id, slide, level, x, y, layers, t=t, z=z, quality=perf.value("server_tile_quality")
+        )
+    except SlideError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)}) from exc
+    # The URL carries the display settings, so a tile at a URL never changes.
+    return Response(content=body, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
 @app.post("/api/files/{file_id}/slide/export")
 def api_slide_export(
     file_id: str,
@@ -948,7 +1017,7 @@ def api_slide_export(
             "_owner": owner_id,
         }
     )
-    background.add_task(run_slide_export, job_id, file_id, body, owner_id)
+    background.add_task(_gated, run_slide_export, job_id, file_id, body, owner_id)
     return {"id": job_id, "status": "queued", "width": planned.width, "height": planned.height}
 
 
@@ -992,7 +1061,7 @@ def api_export(body: ExportRequest, background: BackgroundTasks, owner_id: Owner
             "_owner": owner_id,
         }
     )
-    background.add_task(run_export, job_id, body, owner_id)
+    background.add_task(_gated, run_export, job_id, body, owner_id)
     return {"id": job_id, "status": "queued", "file_count": len(file_ids)}
 
 

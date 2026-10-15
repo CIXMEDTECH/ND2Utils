@@ -121,6 +121,15 @@ _MAX_OPEN = 6
 _OPEN_LOCK = RLock()
 
 
+def set_max_open(limit: int) -> None:
+    global _MAX_OPEN
+    _MAX_OPEN = max(1, int(limit))
+    with _OPEN_LOCK:
+        while len(_OPEN) > _MAX_OPEN:
+            _, old = _OPEN.popitem(last=False)
+            old.close()
+
+
 def open_nd2(path: Path) -> OpenNd2:
     key = str(path.resolve())
     with _OPEN_LOCK:

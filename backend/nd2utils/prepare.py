@@ -42,14 +42,28 @@ _GUARD = Lock()
 _FILE_LOCKS: dict[str, RLock] = {}
 _QUEUED: dict[str, Future] = {}
 _EXECUTOR: ThreadPoolExecutor | None = None
+_WORKERS = 2
 
 
 def _executor() -> ThreadPoolExecutor:
     global _EXECUTOR
     with _GUARD:
         if _EXECUTOR is None:
-            _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="nd2-prepare")
+            _EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="nd2-prepare")
         return _EXECUTOR
+
+
+def set_workers(count: int) -> None:
+    """New pool size (performance settings). Work already queued finishes on the old pool."""
+    global _EXECUTOR, _WORKERS
+    with _GUARD:
+        count = max(1, int(count))
+        if count == _WORKERS:
+            return
+        _WORKERS = count
+        old, _EXECUTOR = _EXECUTOR, None
+    if old:
+        old.shutdown(wait=False)
 
 
 def shutdown() -> None:

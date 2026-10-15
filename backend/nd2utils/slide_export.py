@@ -3,7 +3,8 @@
 - ome-tiff: native pixel values of the chosen channels, tiled, pyramidal, BigTIFF. Streamed
   tile by tile, so even a full-resolution whole slide never sits in memory.
 - tiff: 8-bit RGB composite with the viewer's channel colors and ranges, tiled BigTIFF (streamed).
-- png / jpeg: 8-bit RGB composite, built in memory, therefore limited to MAX_RASTER_PIXELS.
+- png / jpeg: 8-bit RGB composite, built in memory, therefore limited in size
+  (Settings → Performance → raster_max_mpx).
 """
 
 from __future__ import annotations
@@ -24,7 +25,12 @@ from nd2utils.ometiff import TILE, Slide, iter_tiles, open_slide, read_region
 from nd2utils.render import _font, apply_lut, nice_scale_um
 from nd2utils.store import get_file_detail, get_owned_job, source_path, upsert_job
 
-MAX_RASTER_PIXELS = 64_000_000
+
+def max_raster_pixels() -> int:
+    from nd2utils import perf
+
+    return int(perf.value("raster_max_mpx")) * 1_000_000
+
 MAX_JPEG_EDGE = 65_500
 SlideFormat = Literal["ome-tiff", "tiff", "png", "jpeg"]
 
@@ -82,7 +88,7 @@ def plan(slide: Slide, req: SlideExportRequest, voxel_um: list[float] | None) ->
     if lw <= 0 or lh <= 0:
         raise SlideExportError("The selected region is empty.", "empty_region")
     if req.format in ("png", "jpeg"):
-        if lw * lh > MAX_RASTER_PIXELS:
+        if lw * lh > max_raster_pixels():
             raise SlideExportError(
                 f"{lw} × {lh} px is too large for {req.format.upper()}; choose a lower resolution, a smaller region, or TIFF.",
                 "too_large",
