@@ -343,6 +343,7 @@ const dict = {
     equivalentMag: "等效物镜倍数",
     cursorValue: "光标处数值",
     fileSize: "文件大小",
+    slideChannelHint: "点击通道名显示或隐藏；右侧按钮可调颜色、黑场 / 白场与 Gamma。",
     errorGeneric: "操作未完成，请重试。",
   },
   en: {
@@ -687,6 +688,7 @@ const dict = {
     equivalentMag: "Equivalent objective",
     cursorValue: "Value at cursor",
     fileSize: "File size",
+    slideChannelHint: "Click a channel to show or hide it; the button on the right adjusts color, black / white point and gamma.",
     errorGeneric: "The action could not be completed. Please try again.",
   },
 } as const;

@@ -2,9 +2,9 @@
  * Tiled, multi-resolution, multi-channel slide viewer engine (no React).
  *
  * The server sends native-value channel tiles (u8/u16/f32) for one resolution level; the browser
- * maps every channel through its own LUT (color, range, gamma) and adds them up. Changing a
- * channel's color or range therefore never re-downloads anything, and switching a channel on only
- * fetches that channel.
+ * maps every channel through its own LUT (color, range, gamma) and adds them up — on the GPU
+ * (WebGL2) when available, otherwise on the CPU. Changing a channel's color or range therefore
+ * never re-downloads anything, and switching a channel on only fetches that channel.
  *
  * Coordinates: "image" = full-resolution (level 0) pixels; the view is a center in image pixels
  * plus a scale in CSS pixels per image pixel.
@@ -58,7 +58,7 @@ interface TileRef {
   y: number;
 }
 
-const RAW_LIMIT_BYTES = 384 * 1024 * 1024;
+const RAW_LIMIT_BYTES = 256 * 1024 * 1024;
 const COMPOSITE_LIMIT = 220;
 const MAX_INFLIGHT = 6;
 const COMPOSE_BUDGET_MS = 12;
@@ -186,10 +186,231 @@ function tileKey(t: number, z: number, ref: TileRef): string {
   return `${t}/${z}/${ref.level}/${ref.x}/${ref.y}`;
 }
 
+// --- WebGL2 renderer ----------------------------------------------------------------
+//
+// Every channel tile is a single-channel texture. A tile is drawn once per visible channel with
+// additive blending (the GPU clamps the sum at 1, like the CPU path), the LUT applied in the
+// fragment shader: changing a color or range is just new uniforms, nothing is recomputed.
+// Finer levels are drawn first and write depth, so the coarser fallback tiles drawn after them
+// only show where the finer tiles are still missing.
+
+const VERT = `#version 300 es
+in vec2 a_pos;
+uniform vec4 u_rect;
+uniform float u_depth;
+out vec2 v_uv;
+void main() {
+  v_uv = a_pos;
+  gl_Position = vec4(mix(u_rect.xy, u_rect.zw, a_pos), u_depth, 1.0);
+}`;
+
+const FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform int u_solid;
+uniform float u_scale;
+uniform float u_min;
+uniform float u_span;
+uniform float u_invGamma;
+uniform vec3 u_color;
+out vec4 outColor;
+void main() {
+  if (u_solid == 1) {
+    outColor = vec4(u_color, 1.0);
+    return;
+  }
+  float v = texture(u_tex, v_uv).r * u_scale;
+  float y = clamp((v - u_min) / u_span, 0.0, 1.0);
+  outColor = vec4(u_color * pow(y, u_invGamma), 1.0);
+}`;
+
+const R16_EXT = 0x822a;
+const TEXTURE_LIMIT_BYTES = 320 * 1024 * 1024;
+const UPLOADS_PER_FRAME = 48;
+
+interface GpuTexture {
+  tex: WebGLTexture;
+  bytes: number;
+  /** Texture value -> native pixel value. */
+  scale: number;
+  /** Float texture (linear filtering needs an extension). */
+  float: boolean;
+}
+
+class GlRenderer {
+  readonly gl: WebGL2RenderingContext;
+  private program!: WebGLProgram;
+  private vao!: WebGLVertexArrayObject;
+  private samplerLinear!: WebGLSampler;
+  private samplerNearest!: WebGLSampler;
+  private uniforms: Record<string, WebGLUniformLocation | null> = {};
+  private textures = new Map<string, GpuTexture>();
+  private textureBytes = 0;
+  private norm16 = false;
+  private floatLinear = false;
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.init();
+  }
+
+  init(): void {
+    const { gl } = this;
+    this.textures.clear();
+    this.textureBytes = 0;
+    this.norm16 = Boolean(gl.getExtension("EXT_texture_norm16"));
+    this.floatLinear = Boolean(gl.getExtension("OES_texture_float_linear"));
+    const compile = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) throw new Error("WebGL shader");
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader) ?? "shader");
+      return shader;
+    };
+    const program = gl.createProgram();
+    if (!program) throw new Error("WebGL program");
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
+    gl.bindAttribLocation(program, 0, "a_pos");
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? "link");
+    this.program = program;
+    for (const name of ["u_rect", "u_depth", "u_tex", "u_solid", "u_scale", "u_min", "u_span", "u_invGamma", "u_color"]) {
+      this.uniforms[name] = gl.getUniformLocation(program, name);
+    }
+    const vao = gl.createVertexArray();
+    const buffer = gl.createBuffer();
+    if (!vao || !buffer) throw new Error("WebGL buffers");
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    this.vao = vao;
+    const sampler = (filter: number) => {
+      const s = gl.createSampler();
+      if (!s) throw new Error("WebGL sampler");
+      gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, filter);
+      gl.samplerParameteri(s, gl.TEXTURE_MAG_FILTER, filter);
+      gl.samplerParameteri(s, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.samplerParameteri(s, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return s;
+    };
+    this.samplerLinear = sampler(gl.LINEAR);
+    this.samplerNearest = sampler(gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  }
+
+  dispose(): void {
+    for (const { tex } of this.textures.values()) this.gl.deleteTexture(tex);
+    this.textures.clear();
+    this.textureBytes = 0;
+  }
+
+  has(key: string): boolean {
+    return this.textures.has(key);
+  }
+
+  texture(key: string): GpuTexture | null {
+    const hit = this.textures.get(key);
+    if (!hit) return null;
+    this.textures.delete(key);
+    this.textures.set(key, hit);
+    return hit;
+  }
+
+  upload(key: string, tile: RawTile): GpuTexture | null {
+    const { gl } = this;
+    const tex = gl.createTexture();
+    if (!tex) return null;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    const { data } = tile;
+    let entry: GpuTexture;
+    if (data instanceof Uint8Array) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, tile.w, tile.h, 0, gl.RED, gl.UNSIGNED_BYTE, data);
+      entry = { tex, bytes: tile.w * tile.h, scale: 255, float: false };
+    } else if (data instanceof Uint16Array && this.norm16) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, R16_EXT, tile.w, tile.h, 0, gl.RED, gl.UNSIGNED_SHORT, data);
+      entry = { tex, bytes: tile.w * tile.h * 2, scale: 65535, float: false };
+    } else {
+      const floats = data instanceof Float32Array ? data : Float32Array.from(data);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, tile.w, tile.h, 0, gl.RED, gl.FLOAT, floats);
+      entry = { tex, bytes: tile.w * tile.h * 4, scale: 1, float: true };
+    }
+    const bytes = entry.bytes;
+    this.textures.set(key, entry);
+    this.textureBytes += bytes;
+    for (const [k, value] of this.textures) {
+      if (this.textureBytes <= TEXTURE_LIMIT_BYTES) break;
+      gl.deleteTexture(value.tex);
+      this.textures.delete(k);
+      this.textureBytes -= value.bytes;
+    }
+    return entry;
+  }
+
+  begin(width: number, height: number, backdrop: [number, number, number, number]): void {
+    const { gl } = this;
+    gl.viewport(0, 0, width, height);
+    gl.clearColor(0.02, 0.024, 0.027, 1);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(this.program);
+    gl.bindVertexArray(this.vao);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    // The image area is drawn black (furthest back) so its outline stays visible.
+    gl.disable(gl.BLEND);
+    gl.uniform1i(this.uniforms.u_solid, 1);
+    gl.uniform3f(this.uniforms.u_color, 0, 0, 0);
+    gl.uniform4f(this.uniforms.u_rect, ...backdrop);
+    gl.uniform1f(this.uniforms.u_depth, 0.95);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.enable(gl.BLEND);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.uniform1i(this.uniforms.u_solid, 0);
+    gl.uniform1i(this.uniforms.u_tex, 0);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  drawTile(
+    rect: [number, number, number, number],
+    depth: number,
+    nearest: boolean,
+    layers: { gpu: GpuTexture; display: ChannelDisplay }[],
+  ): void {
+    const { gl, uniforms } = this;
+    gl.uniform4f(uniforms.u_rect, ...rect);
+    gl.uniform1f(uniforms.u_depth, depth);
+    for (const layer of layers) {
+      const linear = !nearest && (!layer.gpu.float || this.floatLinear);
+      gl.bindSampler(0, linear ? this.samplerLinear : this.samplerNearest);
+      gl.bindTexture(gl.TEXTURE_2D, layer.gpu.tex);
+      const d = layer.display;
+      gl.uniform1f(uniforms.u_scale, layer.gpu.scale);
+      gl.uniform1f(uniforms.u_min, d.min);
+      gl.uniform1f(uniforms.u_span, Math.max(d.max - d.min, 1e-6));
+      gl.uniform1f(uniforms.u_invGamma, 1 / (d.gamma || 1));
+      gl.uniform3f(uniforms.u_color, d.color[0] / 255, d.color[1] / 255, d.color[2] / 255);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+  }
+}
+
+// --- viewer -------------------------------------------------------------------------
+
 export class SlideViewer {
   readonly info: SlideInfo;
-  private readonly canvas: HTMLCanvasElement;
-  private readonly ctx: CanvasRenderingContext2D;
+  private readonly container: HTMLElement;
+  private base: HTMLCanvasElement;
+  private readonly overlay: HTMLCanvasElement;
+  private readonly octx: CanvasRenderingContext2D;
+  private gl: GlRenderer | null = null;
+  private ctx: CanvasRenderingContext2D | null = null;
   private readonly fileId: string;
   private display: ChannelDisplay[] = [];
   private luts: ChannelLut[] = [];
@@ -202,47 +423,122 @@ export class SlideViewer {
   private cssW = 1;
   private cssH = 1;
   private dpr = 1;
+  /** Set once the user pans or zooms; until then the view keeps fitting the window. */
+  private userMoved = false;
   private raw = new Map<string, RawTile>();
   private rawBytes = 0;
   private composites = new Map<string, Composite>();
   private inflight = new Map<string, AbortController>();
+  /** Raw keys (tile + channel) currently being downloaded. */
+  private loading = new Set<string>();
   private wanted: { key: string; ref: TileRef; channels: number[]; priority: number }[] = [];
   private frame = 0;
   private destroyed = false;
   private animation: { from: [number, number, number]; to: [number, number, number]; start: number } | null = null;
   private listeners = new Set<(state: ViewState) => void>();
+  private notifyTimer = 0;
+  private lastNotify = 0;
+  private resizeObserver: ResizeObserver;
   scaleBar = true;
   selection: Rect | null = null;
   onError: ((err: unknown) => void) | null = null;
 
-  constructor(canvas: HTMLCanvasElement, info: SlideInfo, display: ChannelDisplay[]) {
-    this.canvas = canvas;
-    const ctx = canvas.getContext("2d", { alpha: false });
-    if (!ctx) throw new Error("Canvas 2D is not available");
-    this.ctx = ctx;
+  constructor(container: HTMLElement, info: SlideInfo, display: ChannelDisplay[]) {
+    this.container = container;
     this.info = info;
     this.fileId = info.id;
     this.cx = info.width / 2;
     this.cy = info.height / 2;
+    const layer = () => {
+      const canvas = document.createElement("canvas");
+      canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none";
+      container.appendChild(canvas);
+      return canvas;
+    };
+    this.base = layer();
+    this.overlay = layer();
+    const octx = this.overlay.getContext("2d");
+    if (!octx) throw new Error("Canvas 2D is not available");
+    this.octx = octx;
+    const gl = this.base.getContext("webgl2", { alpha: false, antialias: false, depth: true, premultipliedAlpha: false });
+    if (gl) {
+      try {
+        this.gl = new GlRenderer(gl);
+      } catch {
+        this.gl = null;
+      }
+    }
+    if (!this.gl) {
+      // No WebGL2 (or it failed to initialise): composite on the CPU instead.
+      const fallback = document.createElement("canvas");
+      fallback.style.cssText = this.base.style.cssText;
+      container.replaceChild(fallback, this.base);
+      this.base = fallback;
+      this.ctx = fallback.getContext("2d", { alpha: false });
+    } else {
+      this.base.addEventListener("webglcontextlost", this.onContextLost);
+      this.base.addEventListener("webglcontextrestored", this.onContextRestored);
+    }
     this.setDisplay(display);
+    this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.resizeObserver.observe(container);
     this.resize();
-    this.fit(false);
   }
+
+  get renderer(): "webgl" | "canvas" {
+    return this.gl ? "webgl" : "canvas";
+  }
+
+  private onContextLost = (event: Event) => {
+    event.preventDefault();
+    cancelAnimationFrame(this.frame);
+    this.frame = 0;
+  };
+
+  private onContextRestored = () => {
+    try {
+      this.gl?.init();
+    } catch (err) {
+      this.onError?.(err);
+    }
+    this.render();
+  };
 
   destroy(): void {
     this.destroyed = true;
     cancelAnimationFrame(this.frame);
+    window.clearTimeout(this.notifyTimer);
+    this.resizeObserver.disconnect();
     for (const controller of this.inflight.values()) controller.abort();
     this.inflight.clear();
+    this.loading.clear();
     this.raw.clear();
     this.composites.clear();
     this.listeners.clear();
+    this.gl?.dispose();
+    this.base.removeEventListener("webglcontextlost", this.onContextLost);
+    this.base.removeEventListener("webglcontextrestored", this.onContextRestored);
+    this.base.remove();
+    this.overlay.remove();
   }
 
   subscribe(listener: (state: ViewState) => void): () => void {
     this.listeners.add(listener);
     listener(this.state());
     return () => this.listeners.delete(listener);
+  }
+
+  /** Listeners (React state) are told about view changes at most ~12 times per second. */
+  private notify(): void {
+    if (!this.listeners.size || this.notifyTimer) return;
+    const wait = Math.max(0, 80 - (performance.now() - this.lastNotify));
+    this.notifyTimer = window.setTimeout(() => {
+      this.notifyTimer = 0;
+      this.lastNotify = performance.now();
+      if (this.destroyed) return;
+      const state = this.state();
+      for (const listener of this.listeners) listener(state);
+    }, wait);
   }
 
   // --- view -------------------------------------------------------------------
@@ -264,7 +560,7 @@ export class SlideViewer {
       rect: this.viewRect(),
       width: this.cssW,
       height: this.cssH,
-      loading: this.inflight.size + this.wanted.length,
+      loading: this.loading.size + this.wanted.length,
     };
   }
 
@@ -275,14 +571,27 @@ export class SlideViewer {
   }
 
   resize(): void {
-    const box = this.canvas.getBoundingClientRect();
+    if (this.destroyed) return;
+    const box = this.container.getBoundingClientRect();
+    if (box.width < 2 || box.height < 2) return; // not laid out yet (hidden / collapsing)
     this.dpr = Math.min(window.devicePixelRatio || 1, 3);
-    this.cssW = Math.max(1, box.width);
-    this.cssH = Math.max(1, box.height);
-    const w = Math.round(this.cssW * this.dpr);
-    const h = Math.round(this.cssH * this.dpr);
-    if (this.canvas.width !== w) this.canvas.width = w;
-    if (this.canvas.height !== h) this.canvas.height = h;
+    this.cssW = box.width;
+    this.cssH = box.height;
+    for (const canvas of [this.base, this.overlay]) {
+      const w = Math.round(this.cssW * this.dpr);
+      const h = Math.round(this.cssH * this.dpr);
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+    }
+    if (!this.userMoved) {
+      this.animation = null;
+      this.cx = this.info.width / 2;
+      this.cy = this.info.height / 2;
+      this.scale = this.fitScale();
+    } else {
+      this.scale = this.clampScale(this.scale);
+      this.clampCenter();
+    }
     this.render();
   }
 
@@ -292,12 +601,13 @@ export class SlideViewer {
 
   private clampCenter(): void {
     // Keep at least part of the image on screen.
-    const margin = Math.min(this.cssW, this.cssH) * 0.25 / this.scale;
+    const margin = (Math.min(this.cssW, this.cssH) * 0.25) / this.scale;
     this.cx = Math.min(this.info.width + this.cssW / 2 / this.scale - margin, Math.max(-this.cssW / 2 / this.scale + margin, this.cx));
     this.cy = Math.min(this.info.height + this.cssH / 2 / this.scale - margin, Math.max(-this.cssH / 2 / this.scale + margin, this.cy));
   }
 
   private setView(cx: number, cy: number, scale: number, animate: boolean): void {
+    this.userMoved = true;
     scale = this.clampScale(scale);
     if (animate && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       this.animation = { from: [this.cx, this.cy, this.scale], to: [cx, cy, scale], start: performance.now() };
@@ -313,15 +623,17 @@ export class SlideViewer {
 
   fit(animate = true): void {
     this.setView(this.info.width / 2, this.info.height / 2, this.fitScale(), animate);
+    this.userMoved = false;
   }
 
   zoomTo(scale: number, anchor?: { x: number; y: number }, animate = true): void {
     const target = this.clampScale(scale);
     if (!anchor) {
-      this.setView(this.cx, this.cy, target, animate);
+      const [cx, cy] = this.animation ? [this.animation.to[0], this.animation.to[1]] : [this.cx, this.cy];
+      this.setView(cx, cy, target, animate);
       return;
     }
-    // Keep the image point under the anchor (CSS px in the canvas) fixed.
+    // Keep the image point under the anchor (CSS px in the stage) fixed.
     const ix = this.cx + (anchor.x - this.cssW / 2) / this.scale;
     const iy = this.cy + (anchor.y - this.cssH / 2) / this.scale;
     const cx = ix - (anchor.x - this.cssW / 2) / target;
@@ -335,6 +647,7 @@ export class SlideViewer {
   }
 
   panBy(dx: number, dy: number): void {
+    this.userMoved = true;
     this.animation = null;
     this.cx -= dx / this.scale;
     this.cy -= dy / this.scale;
@@ -360,12 +673,12 @@ export class SlideViewer {
     return { x: (x - this.cx) * this.scale + this.cssW / 2, y: (y - this.cy) * this.scale + this.cssH / 2 };
   }
 
-  /** The coarsest level that still has at least one pixel per device pixel. */
+  /** The coarsest level that still has about one pixel per device pixel. */
   levelFor(scale: number, dpr = this.dpr): number {
     const needed = 1 / (scale * dpr);
     let best = 0;
     this.info.levels.forEach((level, index) => {
-      if (level.downsample <= needed * 1.15) best = index;
+      if (level.downsample <= needed * 1.3) best = index;
     });
     return best;
   }
@@ -432,10 +745,6 @@ export class SlideViewer {
     return `${tileKey(t, z, ref)}/${channel}`;
   }
 
-  private missingChannels(ref: TileRef, channels: number[]): number[] {
-    return channels.filter((c) => !this.raw.has(this.rawKey(this.t, this.z, ref, c)));
-  }
-
   private storeRaw(key: string, tile: RawTile): void {
     const old = this.raw.get(key);
     if (old) {
@@ -477,19 +786,26 @@ export class SlideViewer {
     return tiles;
   }
 
+  /** Start queued downloads. In-flight downloads are never cancelled by panning or zooming:
+   *  they finish into the cache and serve as fallback (cancelling made fast zooming load nothing). */
   private pump(): void {
     while (this.inflight.size < MAX_INFLIGHT && this.wanted.length) {
       const job = this.wanted.shift();
-      if (!job || this.inflight.has(job.key)) continue;
+      if (!job) break;
+      const keys = job.channels.map((c) => this.rawKey(this.t, this.z, job.ref, c));
+      if (keys.some((k) => this.loading.has(k))) continue;
       const controller = new AbortController();
-      this.inflight.set(job.key, controller);
+      const id = `${job.key}#${performance.now()}`;
+      this.inflight.set(id, controller);
+      keys.forEach((k) => this.loading.add(k));
       const { t, z } = this;
       void this.fetchTile(job.ref, job.channels, t, z, controller.signal)
         .catch((err) => {
           if (!(err instanceof DOMException && err.name === "AbortError")) this.onError?.(err);
         })
         .finally(() => {
-          if (this.inflight.get(job.key) === controller) this.inflight.delete(job.key);
+          this.inflight.delete(id);
+          keys.forEach((k) => this.loading.delete(k));
           if (!this.destroyed) this.render();
         });
     }
@@ -510,10 +826,6 @@ export class SlideViewer {
     }
     let entry = this.composites.get(key);
     if (!entry) {
-      const rect = this.tileRect(ref);
-      const lv = this.info.levels[ref.level];
-      w = w || Math.round(rect.w / (this.info.width / lv.width));
-      h = h || Math.round(rect.h / (this.info.height / lv.height));
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, w);
       canvas.height = Math.max(1, h);
@@ -549,10 +861,9 @@ export class SlideViewer {
     const p = Math.min(1, (now - anim.start) / 220);
     const e = 1 - Math.pow(1 - p, 3);
     // Interpolate zoom geometrically so it feels uniform.
-    const scale = anim.from[2] * Math.pow(anim.to[2] / anim.from[2], e);
+    this.scale = anim.from[2] * Math.pow(anim.to[2] / anim.from[2], e);
     this.cx = anim.from[0] + (anim.to[0] - anim.from[0]) * e;
     this.cy = anim.from[1] + (anim.to[1] - anim.from[1]) * e;
-    this.scale = scale;
     if (p >= 1) {
       this.animation = null;
       this.clampCenter();
@@ -560,99 +871,136 @@ export class SlideViewer {
     return p < 1;
   }
 
+  /** Decide what to download: coarsest level first (instant overview), then a level two steps
+   *  coarser than needed (quick fill while zooming), then the needed level, nearest the center first. */
+  private plan(rect: Rect, target: number, channels: number[]): void {
+    const coarsest = this.info.levels.length - 1;
+    const steps = [coarsest, Math.min(target + 2, coarsest), target].filter((v, i, all) => all.indexOf(v) === i);
+    const wanted: typeof this.wanted = [];
+    if (channels.length) {
+      steps.forEach((level, rank) => {
+        for (const ref of this.tilesFor(level, rect)) {
+          const missing = channels.filter((c) => {
+            const key = this.rawKey(this.t, this.z, ref, c);
+            return !this.raw.has(key) && !this.loading.has(key) && !this.gl?.has(key);
+          });
+          if (!missing.length) continue;
+          const r = this.tileRect(ref);
+          const dist = Math.hypot(r.x + r.w / 2 - this.cx, r.y + r.h / 2 - this.cy);
+          wanted.push({ key: tileKey(this.t, this.z, ref), ref, channels: missing, priority: rank * 1e12 + dist });
+        }
+      });
+    }
+    wanted.sort((a, b) => a.priority - b.priority);
+    this.wanted = wanted;
+    this.pump();
+  }
+
   private draw(): void {
     const now = performance.now();
     const animating = this.stepAnimation(now);
-    const { ctx, dpr } = this;
     const rect = this.viewRect();
     const target = this.levelFor(this.scale);
-    const coarsest = this.info.levels.length - 1;
     const channels = this.visibleChannels();
+    this.plan(rect, target, channels);
+    const pending = this.gl ? this.drawGl(rect, target, channels) : this.draw2d(rect, target, channels, now);
+    this.drawOverlays();
+    this.notify();
+    if (animating || pending) this.render();
+  }
 
+  /** Device-pixel transform of an image rectangle: [x0, y0, x1, y1]. */
+  private toDevice(r: Rect): [number, number, number, number] {
+    const k = this.dpr * this.scale;
+    const ox = this.dpr * (this.cssW / 2 - this.cx * this.scale);
+    const oy = this.dpr * (this.cssH / 2 - this.cy * this.scale);
+    return [r.x * k + ox, r.y * k + oy, (r.x + r.w) * k + ox, (r.y + r.h) * k + oy];
+  }
+
+  private toClip(r: Rect): [number, number, number, number] {
+    const [x0, y0, x1, y1] = this.toDevice(r);
+    const W = this.base.width;
+    const H = this.base.height;
+    return [(x0 / W) * 2 - 1, 1 - (y0 / H) * 2, (x1 / W) * 2 - 1, 1 - (y1 / H) * 2];
+  }
+
+  private drawGl(rect: Rect, target: number, channels: number[]): boolean {
+    const gl = this.gl;
+    if (!gl || gl.gl.isContextLost()) return false;
+    gl.begin(this.base.width, this.base.height, this.toClip({ x: 0, y: 0, w: this.info.width, h: this.info.height }));
+    const coarsest = this.info.levels.length - 1;
+    let uploads = 0;
+    let pending = false;
+    if (!channels.length) return false;
+    for (let level = target; level <= coarsest; level++) {
+      // Finer levels are nearer: coarser tiles only fill the gaps.
+      const depth = -0.9 + (1.7 * level) / Math.max(coarsest, 1);
+      const lv = this.info.levels[level];
+      const nearest = (this.dpr * this.scale * this.info.width) / lv.width > 2.5;
+      for (const ref of this.tilesFor(level, rect)) {
+        const layers: { gpu: GpuTexture; display: ChannelDisplay }[] = [];
+        for (const c of channels) {
+          const key = this.rawKey(this.t, this.z, ref, c);
+          let gpu = gl.texture(key);
+          if (!gpu) {
+            const raw = this.raw.get(key);
+            if (raw && uploads < UPLOADS_PER_FRAME) {
+              gpu = gl.upload(key, raw);
+              uploads += 1;
+            } else if (raw) {
+              pending = true;
+            }
+          }
+          if (!gpu) break;
+          layers.push({ gpu, display: this.display[c] });
+        }
+        if (layers.length === channels.length) gl.drawTile(this.toClip(this.tileRect(ref)), depth, nearest, layers);
+      }
+    }
+    return pending;
+  }
+
+  private draw2d(rect: Rect, target: number, channels: number[], now: number): boolean {
+    const ctx = this.ctx;
+    if (!ctx) return false;
+    const { dpr } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#050607";
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.setTransform(dpr * this.scale, 0, 0, dpr * this.scale, dpr * (this.cssW / 2 - this.cx * this.scale), dpr * (this.cssH / 2 - this.cy * this.scale));
-
-    // Image backdrop so empty (zero) regions and the image bounds stay readable.
+    ctx.fillRect(0, 0, this.base.width, this.base.height);
+    const [bx0, by0, bx1, by1] = this.toDevice({ x: 0, y: 0, w: this.info.width, h: this.info.height });
     ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, this.info.width, this.info.height);
-
-    const wanted: typeof this.wanted = [];
-    const stale: TileRef[] = [];
+    ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+    if (!channels.length) return false;
     const deadline = now + COMPOSE_BUDGET_MS;
-    const centerX = this.cx;
-    const centerY = this.cy;
-
-    // Coarse levels first as fallback, then the target level on top.
-    const levels: number[] = [];
-    for (let level = coarsest; level >= target; level--) levels.push(level);
-    for (const level of levels) {
-      const refs = this.tilesFor(level, rect);
-      // Intermediate levels are only drawn where something is cached; never fetched.
-      const fetchHere = level === target || level === coarsest;
-      for (const ref of refs) {
-        const key = tileKey(this.t, this.z, ref);
-        let comp = this.composites.get(key) ?? null;
-        if (channels.length && (!comp || comp.version !== this.version)) {
-          const missing = this.missingChannels(ref, channels);
-          if (missing.length === 0) {
-            // A bounded amount of compositing per frame keeps panning smooth; the rest follows.
+    let pending = false;
+    const coarsest = this.info.levels.length - 1;
+    for (let level = coarsest; level >= target; level--) {
+      const lv = this.info.levels[level];
+      ctx.imageSmoothingEnabled = (dpr * this.scale * this.info.width) / lv.width < 2.5;
+      for (const ref of this.tilesFor(level, rect)) {
+        let comp = this.composites.get(tileKey(this.t, this.z, ref)) ?? null;
+        if (!comp || comp.version !== this.version) {
+          const ready = channels.every((c) => this.raw.has(this.rawKey(this.t, this.z, ref, c)));
+          if (ready) {
             if (performance.now() < deadline) comp = this.composite(ref) ?? comp;
-            else stale.push(ref);
-          } else if (fetchHere) {
-            const r = this.tileRect(ref);
-            const dist = Math.hypot(r.x + r.w / 2 - centerX, r.y + r.h / 2 - centerY);
-            wanted.push({ key: `${key}/${missing.join(",")}`, ref, channels: missing, priority: (level === target ? 0 : -1e12) + dist });
+            else pending = true;
           }
+          // A stale composite would show the old channel set: only draw up-to-date ones.
+          if (comp && comp.version !== this.version) comp = null;
         }
-        if (comp) {
-          const r = this.tileRect(ref);
-          // Snap tile edges to device pixels so neighbouring tiles do not show hairline seams.
-          const k = dpr * this.scale;
-          const ox = dpr * (this.cssW / 2 - this.cx * this.scale);
-          const oy = dpr * (this.cssH / 2 - this.cy * this.scale);
-          const x0 = Math.round(r.x * k + ox);
-          const y0 = Math.round(r.y * k + oy);
-          const x1 = Math.round((r.x + r.w) * k + ox);
-          const y1 = Math.round((r.y + r.h) * k + oy);
-          ctx.save();
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          const lv = this.info.levels[ref.level];
-          const pixelsPerTexel = (k * this.info.width) / lv.width;
-          ctx.imageSmoothingEnabled = pixelsPerTexel < 2.5;
-          ctx.imageSmoothingQuality = "high";
-          ctx.drawImage(comp.canvas, x0, y0, x1 - x0, y1 - y0);
-          ctx.restore();
-        }
+        if (!comp) continue;
+        const [x0, y0, x1, y1] = this.toDevice(this.tileRect(ref)).map(Math.round);
+        ctx.drawImage(comp.canvas, x0, y0, x1 - x0, y1 - y0);
       }
     }
-    if (!channels.length) {
-      wanted.length = 0;
-    }
-
-    // Requests that are no longer needed (panned away) are dropped from the queue;
-    // in-flight ones whose tile left the screen are aborted.
-    wanted.sort((a, b) => a.priority - b.priority);
-    this.wanted = wanted.filter((job) => !this.inflight.has(job.key));
-    const keep = new Set(wanted.map((job) => job.key));
-    for (const [key, controller] of this.inflight) {
-      if (!keep.has(key) && !animating) {
-        controller.abort();
-        this.inflight.delete(key);
-      }
-    }
-    this.pump();
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.drawOverlays();
-
-    for (const listener of this.listeners) listener(this.state());
-    if (animating || stale.length) this.render();
+    return pending;
   }
 
   private drawOverlays(): void {
-    const { ctx } = this;
+    const ctx = this.octx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     if (this.selection) {
       const a = this.imageToScreen(this.selection.x, this.selection.y);
       const b = this.imageToScreen(this.selection.x + this.selection.w, this.selection.y + this.selection.h);

@@ -29,13 +29,15 @@ import { Guide } from "../components/Guide";
 import { Shell } from "../components/Shell";
 import { TransferDialog, type TransferSeed } from "../components/TransferDialog";
 import { UploadBar } from "../components/UploadBar";
+import { SlideLoading, SlideStage, SlideZoomControls, loadDisplay } from "../components/SlideStage";
 import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
-import { createFolder, deleteFile, deleteFolder, fetchDisplay, getFile, prefetchDisplay, renameFolder, updateFile } from "../lib/api";
+import { createFolder, deleteFile, deleteFolder, fetchDisplay, getFile, prefetchDisplay, renameFolder, slideInfo, updateFile } from "../lib/api";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
 import { createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
 import { readPref, writePref } from "../lib/storage";
-import type { ExportTarget, FileSummary, LutSetting, PackedPlane } from "../lib/types";
+import type { SlideViewer, ViewState } from "../lib/slide";
+import type { ExportTarget, FileSummary, LutSetting, PackedPlane, SlideInfo } from "../lib/types";
 import { useApp } from "../store";
 
 type WorkspaceTab = "identify" | "metadata" | "export";
@@ -102,6 +104,9 @@ export function Workspace() {
   const [transferSeed, setTransferSeed] = useState<TransferSeed | null>(null);
   const [treeWidth, setTreeWidth] = useState(() => clampTreeWidth(Number(readPref(TREE_WIDTH_KEY)) || TREE_WIDTH_DEFAULT));
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [slide, setSlide] = useState<SlideInfo | null>(null);
+  const [slideViewer, setSlideViewer] = useState<SlideViewer | null>(null);
+  const [slideView, setSlideView] = useState<ViewState | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
 
   useEffect(() => {
@@ -152,9 +157,33 @@ export function Workspace() {
     [selected, visible],
   );
   const previewReady = Boolean(selected && localPreview?.fileId === selected.id);
+  const selectedIsSlide = isSlide(selected);
+  const slideReady = Boolean(selected && selectedIsSlide && slide?.id === selected.id && selected.prepare !== "pending");
+
+  // Slides are shown with the tiled viewer, zoomable down to full resolution.
+  useEffect(() => {
+    if (!selected || !selectedIsSlide || selected.prepare === "pending") return;
+    if (slide?.id === selected.id) return;
+    let cancelled = false;
+    void slideInfo(selected.id)
+      .then((next) => {
+        if (!cancelled) setSlide(next);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(detailMessage(err, lang));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lang, selected, selectedIsSlide, slide?.id]);
+
+  const slideDisplay = useMemo(
+    () => (slideReady && slide ? loadDisplay(slide).map((d, i) => ({ ...d, visible: channelVisible[i] ?? true })) : []),
+    [channelVisible, slide, slideReady],
+  );
 
   useEffect(() => {
-    if (!selected) {
+    if (!selected || isSlide(selected)) {
       setLocalPreview(null);
       setLoadingPreview(false);
       return;
@@ -505,6 +534,47 @@ export function Workspace() {
         </Glass>
 
         <main className="min-h-[430px] bg-[var(--well)]">
+          {selected && selectedIsSlide ? (
+            <div className="flex h-full min-h-[430px] flex-col">
+              <div className="flex min-h-11 items-center gap-1 border-b border-white/[0.06] bg-black/20 px-3 text-[11px] text-white/58">
+                <SlideZoomControls viewer={slideViewer} view={slideReady ? slideView : null} />
+                <button
+                  type="button"
+                  onClick={() => nav(`/slide/${selected.id}`)}
+                  className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-lg px-2 transition-colors hover:bg-white/10 hover:text-white"
+                >
+                  <Stack size={14} /> {t(lang, "openSlide")}
+                </button>
+              </div>
+              {slideReady && slide && slideDisplay.length === slide.channels.length ? (
+                <SlideStage
+                  info={slide}
+                  display={slideDisplay}
+                  scaleBar={scaleBar}
+                  onViewer={setSlideViewer}
+                  onView={setSlideView}
+                >
+                  <Glass tone="dark" shape="chip" className="absolute left-3 top-3 z-20 flex gap-1 overflow-visible p-1">
+                    <button
+                      type="button"
+                      onClick={() => setScaleBar((value) => !value)}
+                      aria-pressed={scaleBar}
+                      className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] transition-all duration-200 ${scaleBar ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
+                    >
+                      {t(lang, "scaleBar")}
+                    </button>
+                  </Glass>
+                  {selected.channels.length > 0 && (
+                    <Glass tone="dark" shape="chip" className="absolute bottom-3 left-3 z-20 max-w-[min(100%-10rem,32rem)] overflow-visible p-1">
+                      <ChannelToggles channels={selected.channels} visible={channelVisible} onToggle={toggleChannel} />
+                    </Glass>
+                  )}
+                </SlideStage>
+              ) : (
+                <SlideLoading preparing={selected.prepare === "pending"} />
+              )}
+            </div>
+          ) : (
           <ZoomStage
             src={null}
             alt={t(lang, "previewAlt")}
@@ -542,6 +612,7 @@ export function Workspace() {
               </Glass>
             )}
           </ZoomStage>
+          )}
         </main>
 
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-t lg:border-l lg:border-t-0">
