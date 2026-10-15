@@ -1,5 +1,33 @@
 import { t, type MsgKey } from "../i18n";
-import type { Lang } from "./types";
+import type { FileSummary, Lang } from "./types";
+
+const SLIDE_SUFFIXES = [".ome.tif", ".ome.tiff", ".tif", ".tiff"];
+
+/** OME-TIFF / TIFF file names (opened in the whole-slide viewer). */
+export function isSlideName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return SLIDE_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+}
+
+export function isSupportedName(name: string): boolean {
+  return name.toLowerCase().endsWith(".nd2") || isSlideName(name);
+}
+
+export function isSlide(file: Pick<FileSummary, "format" | "name"> | null | undefined): boolean {
+  if (!file) return false;
+  return file.format ? file.format !== "nd2" : isSlideName(file.name);
+}
+
+/** "a.ome.tiff" -> ".ome.tiff", "b.nd2" -> ".nd2" */
+export function fileExtension(name: string): string {
+  const lower = name.toLowerCase();
+  const slide = SLIDE_SUFFIXES.find((suffix) => lower.endsWith(suffix) && suffix.startsWith(".ome"));
+  if (slide) return name.slice(name.length - slide.length);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot) : "";
+}
+
+export const UPLOAD_ACCEPT = ".nd2,.tif,.tiff";
 
 export function formatBytes(n: number, lang: Lang = "en"): string {
   if (n < 1024) return `${n} B`;
@@ -48,6 +76,9 @@ export function detailMessage(err: unknown, lang: Lang = "en"): string {
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const keyByCode: Record<string, MsgKey> = {
     not_nd2: "errorNotNd2",
+    not_tiff: "errorNotNd2",
+    slide_error: "errorNotNd2",
+    not_slide: "slideNotSlide",
     parse_failed: "errorNotNd2",
     nd2_error: "errorNotNd2",
     too_large: "errorTooLarge",

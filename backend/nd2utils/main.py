@@ -18,12 +18,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from nd2utils import __version__, auth, prepare
+from nd2utils import __version__, auth, ometiff, prepare
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import new_job_id, run_export
 from nd2utils.models import ExportRequest, MeasureRequest
 from nd2utils.nd2io import (
     Nd2Error,
+    pack_planes,
     axis_size,
     close_all,
     extract_channels,
@@ -31,6 +32,7 @@ from nd2utils.nd2io import (
     open_nd2,
     projection,
 )
+from nd2utils.ometiff import SlideError
 from nd2utils.render import (
     encode_image,
     histogram,
@@ -39,6 +41,8 @@ from nd2utils.render import (
     parse_visible_mask,
     preview_rgb,
 )
+from nd2utils.slide_export import SlideExportError, SlideExportRequest, run_slide_export
+from nd2utils.slide_export import plan as plan_slide_export
 from nd2utils.store import (
     PathError,
     create_folder,
@@ -96,6 +100,7 @@ async def lifespan(_app: FastAPI):
     task.cancel()
     prepare.shutdown()
     close_all()
+    ometiff.close_all()
 
 
 app = FastAPI(
@@ -171,8 +176,8 @@ def _public(record: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if not key.startswith("_")}
 
 
-def _raise_nd2(exc: Nd2Error) -> None:
-    status = 400 if exc.code in {"not_nd2", "parse_failed", "empty"} else 500
+def _raise_nd2(exc: Nd2Error | SlideError) -> None:
+    status = 400 if exc.code in {"not_nd2", "not_tiff", "parse_failed", "empty"} else 500
     raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
 
 
@@ -190,6 +195,23 @@ def _need(file_id: str, owner_id: str) -> dict[str, Any]:
     return rec
 
 
+def _need_nd2(file_id: str, owner_id: str) -> dict[str, Any]:
+    rec = _need(file_id, owner_id)
+    if prepare.is_slide(rec):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "slide_file", "message": "This is an OME-TIFF slide; open it in the slide viewer."},
+        )
+    return rec
+
+
+def _need_slide(file_id: str, owner_id: str) -> dict[str, Any]:
+    rec = _need(file_id, owner_id)
+    if not prepare.is_slide(rec):
+        raise HTTPException(status_code=400, detail={"code": "not_slide", "message": "This file is not an OME-TIFF slide."})
+    return rec
+
+
 def _bad_path(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": "bad_path", "message": str(exc) or "Invalid path."})
 
@@ -201,14 +223,25 @@ def _folder_arg(raw: str | None) -> str:
         raise _bad_path(exc) from exc
 
 
-def _nd2_name(raw: str | None) -> str:
+def _source_name(raw: str | None) -> str:
     try:
         name = normalize_filename(raw or "upload.nd2")
     except PathError as exc:
         raise _bad_path(exc) from exc
-    if not name.lower().endswith(".nd2"):
-        raise HTTPException(status_code=400, detail={"code": "not_nd2", "message": "Please upload a .nd2 file."})
+    if not (name.lower().endswith(".nd2") or ometiff.is_tiff_name(name)):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "not_nd2", "message": "Please upload a .nd2 or OME-TIFF (.ome.tif / .ome.tiff) file."},
+        )
     return name
+
+
+def _identify(path: Path, file_id: str, name: str, size: int, created: float) -> dict[str, Any]:
+    if ometiff.is_tiff_name(name):
+        return ometiff.identify_path(path, file_id, name, size, created)
+    rec = identify_path(path, file_id, name, size, created)
+    rec["format"] = "nd2"
+    return rec
 
 
 def _ingest_file(
@@ -229,8 +262,8 @@ def _ingest_file(
         raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
     created = time.time()
     try:
-        rec = identify_path(dest, file_id, name, size, created)
-    except Nd2Error as exc:
+        rec = _identify(dest, file_id, name, size, created)
+    except (Nd2Error, SlideError) as exc:
         delete_file(file_id, owner_id)
         _raise_nd2(exc)
     rec["_owner"] = owner_id
@@ -473,7 +506,7 @@ def api_admin_transfer(body: TransferBody, _admin: AdminUser) -> dict[str, Any]:
 # --- workspace --------------------------------------------------------------
 
 _SUMMARY_KEYS = (
-    "id", "name", "folder", "size_bytes", "status", "error", "version", "dtype",
+    "id", "name", "folder", "format", "levels", "size_bytes", "status", "error", "version", "dtype",
     "shape", "axes", "width", "height", "channels", "voxel_um",
     "objective", "magnification", "na", "acquired", "instrument",
     "software", "bits_significant", "is_rgb", "created_at", "prepare",
@@ -527,7 +560,7 @@ def api_delete_folder(body: FolderBody, owner_id: Owner) -> dict[str, Any]:
 
 @app.post("/api/files")
 async def api_upload(owner_id: Owner, folder: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
-    name = _nd2_name(file.filename)
+    name = _source_name(file.filename)
     target = _folder_arg(folder)
     tmp = settings.staging_dir / f"{uuid.uuid4().hex}.nd2"
     tmp.parent.mkdir(parents=True, exist_ok=True)
@@ -552,7 +585,7 @@ async def api_upload(owner_id: Owner, folder: str = "", file: UploadFile = File(
 
 @app.post("/api/uploads/init")
 def api_chunk_init(body: ChunkInit, owner_id: Owner) -> dict[str, str]:
-    name = _nd2_name(body.filename)
+    name = _source_name(body.filename)
     folder = _folder_arg(body.folder)
     if body.size > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
@@ -599,7 +632,7 @@ def api_chunk_complete(upload_id: str, owner_id: Owner) -> dict[str, Any]:
     partial = dest_dir / "source.partial"
     if not partial.exists():
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
-    name = _nd2_name(meta.get("filename"))
+    name = _source_name(meta.get("filename"))
     folder = _folder_arg(meta.get("folder"))
     try:
         rec = _ingest_file(partial, name, owner_id, partial.stat().st_size, folder)
@@ -617,7 +650,9 @@ def api_file(file_id: str, owner_id: Owner) -> dict[str, Any]:
 @app.patch("/api/files/{file_id}")
 def api_update_file(file_id: str, body: FilePatch, owner_id: Owner) -> dict[str, Any]:
     rec = _owned_file(file_id, owner_id)
-    name = _nd2_name(body.name) if body.name is not None else rec.get("name")
+    name = _source_name(body.name) if body.name is not None else rec.get("name")
+    if ometiff.is_tiff_name(name) != prepare.is_slide(rec):
+        raise HTTPException(status_code=400, detail={"code": "bad_extension", "message": "Keep the file extension when renaming."})
     folder = _folder_arg(body.folder) if body.folder is not None else rec.get("folder") or ""
     clash = find_file(owner_id, folder, name)
     if clash and clash["id"] != file_id:
@@ -634,7 +669,7 @@ def api_delete(file_id: str, owner_id: Owner) -> dict[str, str]:
 
 
 def _planes(file_id: str, owner_id: str, t: int, z: int, p: int):
-    rec = _need(file_id, owner_id)
+    rec = _need_nd2(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     planes, sizes = extract_channels(handle, t=t, z=z, p=p)
     return rec, handle, planes, sizes
@@ -653,7 +688,11 @@ def api_preview(
     quality: int = 88,
     visible: str | None = None,
 ) -> Response:
-    rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
+    rec = _need(file_id, owner_id)
+    if prepare.is_slide(rec):
+        planes = ometiff.overview_planes(prepare.ensure_slide(file_id, source_path(file_id)), t=t, z=z)
+    else:
+        rec, _, planes, _ = _planes(file_id, owner_id, t, z, p)
     vis = parse_visible_mask(visible, len(planes))
     rgb = preview_rgb(
         planes,
@@ -728,7 +767,7 @@ def api_projection(
     p: int = 0,
     scale_bar: bool = True,
 ) -> Response:
-    rec = _need(file_id, owner_id)
+    rec = _need_nd2(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     if axis_size(handle.sizes, axis.upper()) <= 1:
         raise HTTPException(
@@ -755,7 +794,7 @@ def api_tiles(
     p: int = 0,
     max_tiles: int = 24,
 ) -> dict[str, Any]:
-    rec = _need(file_id, owner_id)
+    rec = _need_nd2(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     n = axis_size(handle.sizes, axis.upper())
     step = max(1, n // max_tiles)
@@ -805,7 +844,7 @@ def api_orthogonal(
     x: int | None = None,
     y: int | None = None,
 ) -> dict[str, Any]:
-    rec = _need(file_id, owner_id)
+    rec = _need_nd2(file_id, owner_id)
     handle = open_nd2(source_path(file_id))
     sizes = handle.sizes
     n_z = axis_size(sizes, "Z")
@@ -821,6 +860,98 @@ def api_orthogonal(
     return {"z": n_z, "x": cx, "y": cy, "width": w, "height": h}
 
 
+# --- whole-slide (OME-TIFF) viewer --------------------------------------------------
+
+
+@app.get("/api/files/{file_id}/slide")
+def api_slide(file_id: str, owner_id: Owner) -> dict[str, Any]:
+    """Resolution levels and tile grid for the slide viewer (builds missing pyramid levels first)."""
+    rec = _need_slide(file_id, owner_id)
+    slide = prepare.ensure_slide(file_id, source_path(file_id))
+    limits = _prepared(file_id, owner_id, "autoscale", 0, 0, 0)
+    return {
+        "id": file_id,
+        "width": slide.width,
+        "height": slide.height,
+        "tile_size": ometiff.TILE,
+        "dtype": str(slide.dtype),
+        "levels": ometiff.describe_levels(slide),
+        "sizes": {"T": slide.axis_len("T"), "Z": slide.axis_len("Z"), "C": slide.n_channels},
+        "channels": rec.get("channels") or [],
+        "autoscale": limits.get("channels") or [],
+        "um_per_px": (rec.get("voxel_um") or [None])[0],
+        "magnification": rec.get("magnification"),
+    }
+
+
+@app.get("/api/files/{file_id}/slide/tile")
+def api_slide_tile(
+    file_id: str,
+    request: Request,
+    owner_id: Owner,
+    level: int,
+    x: int,
+    y: int,
+    c: str = "",
+    t: int = 0,
+    z: int = 0,
+) -> Response:
+    """Native-value channels of one TILE x TILE viewer tile (packed planes, gzip)."""
+    rec = _need_slide(file_id, owner_id)
+    slide = prepare.ensure_slide(file_id, source_path(file_id))
+    if not 0 <= level < len(slide.levels):
+        raise HTTPException(status_code=400, detail={"code": "bad_level", "message": "Resolution level out of range."})
+    try:
+        channels = [int(v) for v in c.split(",") if v.strip()] if c else list(range(slide.n_channels))
+    except ValueError:
+        channels = []
+    if not channels or any(ch < 0 or ch >= slide.n_channels for ch in channels):
+        raise HTTPException(status_code=400, detail={"code": "bad_channel", "message": "Channel index out of range."})
+    try:
+        planes = ometiff.tile_planes(slide, level, x, y, channels, t=t, z=z)
+    except SlideError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)}) from exc
+    meta = rec.get("channels") or []
+    body = gzip.compress(pack_planes(planes, [meta[ch] if ch < len(meta) else {} for ch in channels]), compresslevel=1)
+    response = _gzip_response(request, body)
+    # Tiles of an uploaded file never change: let the browser keep them for the session.
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
+
+
+@app.post("/api/files/{file_id}/slide/export")
+def api_slide_export(
+    file_id: str,
+    body: SlideExportRequest,
+    background: BackgroundTasks,
+    owner_id: Owner,
+) -> dict[str, Any]:
+    rec = _need_slide(file_id, owner_id)
+    slide = prepare.ensure_slide(file_id, source_path(file_id))
+    try:
+        planned = plan_slide_export(slide, body, rec.get("voxel_um"))
+    except SlideExportError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)}) from exc
+    job_id = new_job_id()
+    upsert_job(
+        {
+            "id": job_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "Queued",
+            "created_at": time.time(),
+            "download_name": None,
+            "error": None,
+            "format": f"slide · {body.format}",
+            "file_ids": [file_id],
+            "label": rec.get("name"),
+            "_owner": owner_id,
+        }
+    )
+    background.add_task(run_slide_export, job_id, file_id, body, owner_id)
+    return {"id": job_id, "status": "queued", "width": planned.width, "height": planned.height}
+
+
 def _resolve_export(body: ExportRequest, owner_id: str) -> tuple[list[str], str | None]:
     ids: list[str] = []
     label = body.label
@@ -828,13 +959,14 @@ def _resolve_export(body: ExportRequest, owner_id: str) -> tuple[list[str], str 
         folder = _folder_arg(raw)
         if folder and folder not in list_folders(owner_id):
             raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Folder not found."})
-        ids.extend(rec["id"] for rec in files_in_folder(owner_id, folder))
+        # Slides are exported region by region from the slide viewer, not in batches.
+        ids.extend(rec["id"] for rec in files_in_folder(owner_id, folder) if not prepare.is_slide(rec))
         if label is None and len(body.folders) == 1 and folder:
             label = folder.rsplit("/", 1)[-1]
     ids.extend(body.file_ids)
     unique = list(dict.fromkeys(ids))
     for fid in unique:
-        _need(fid, owner_id)
+        _need_nd2(fid, owner_id)
     return unique, label
 
 
@@ -909,7 +1041,11 @@ def api_job_download(job_id: str, owner_id: Owner) -> FileResponse:
     zip_path = Path(job.get("zip_path") or (settings.exports_dir / (job.get("download_name") or "")))
     if not zip_path.exists():
         raise HTTPException(status_code=404, detail={"code": "missing", "message": "Export file missing."})
-    return FileResponse(zip_path, filename=job.get("download_name") or zip_path.name, media_type="application/zip")
+    name = job.get("download_name") or zip_path.name
+    return FileResponse(zip_path, filename=name, media_type=_DOWNLOAD_TYPES.get(Path(name).suffix.lower(), "application/octet-stream"))
+
+
+_DOWNLOAD_TYPES = {".zip": "application/zip", ".tif": "image/tiff", ".png": "image/png", ".jpg": "image/jpeg"}
 
 
 # Vite puts content-hashed bundles under /assets: their URL changes whenever their content does.

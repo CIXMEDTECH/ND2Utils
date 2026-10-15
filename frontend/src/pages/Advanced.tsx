@@ -16,7 +16,7 @@ import { Glass } from "../components/Glass";
 import { Guide } from "../components/Guide";
 import { t } from "../i18n";
 import { autoscale, fetchPlane, measure, projectionUrl } from "../lib/api";
-import { axisSize, detailMessage, formatUm, rgbCss } from "../lib/format";
+import { axisSize, detailMessage, formatUm, isSlide, rgbCss } from "../lib/format";
 import { histogram, renderComposite, unpackPlane } from "../lib/plane";
 import type { LutSetting, MeasureResult, PackedPlane, Tool } from "../lib/types";
 import { readPref, writePref } from "../lib/storage";
@@ -66,6 +66,11 @@ export function Advanced() {
   useEffect(() => {
     if (fileId) select(fileId);
   }, [fileId, select]);
+
+  // OME-TIFF slides are far too large for whole-plane tools: they open in the slide viewer.
+  useEffect(() => {
+    if (file && isSlide(file)) nav(`/slide/${file.id}`, { replace: true });
+  }, [file, nav]);
 
   // LUTs belong to one file: carrying them over to another file can render it (and its export) black.
   useEffect(() => {

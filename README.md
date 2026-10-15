@@ -1,6 +1,6 @@
 # ND2Utils
 
-Self-hosted web tool for Nikon NIS-Elements `.nd2` files: identify, preview, inspect metadata, and batch-export to OME-TIFF / TIFF / PNG / JPEG. An Advanced workspace covers NIS-Elements Viewer-style LUTs, ND dimensions, scale bar, projections, and measurements.
+Self-hosted web tool for Nikon NIS-Elements `.nd2` files: identify, preview, inspect metadata, and batch-export to OME-TIFF / TIFF / PNG / JPEG. An Advanced workspace covers NIS-Elements Viewer-style LUTs, ND dimensions, scale bar, projections, and measurements. Multi-channel (whole-slide) OME-TIFF files open in a tiled slide viewer.
 
 ND2Utils is not affiliated with Nikon or Laboratory Imaging.
 
@@ -50,6 +50,13 @@ docker compose up -d
    管理员可通过右键菜单或“设置 → 授权码管理 → 转移 / 复制文件”，在任意两个工作空间之间（或同一工作空间内）复制、转移文件和文件夹。
 3. 导出包内的文件位于与原 ND2 文件相同的目录中，例如 `20260918H2/vector 6h/MB2310439_DAPI.png`。
 4. 高级模式：通道 LUT、直方图、比例尺、Z/T 投影与切片（无该维度时会提示）、直线/ROI 测量。
+5. OME-TIFF（`.ome.tif` / `.ome.tiff`，也支持普通 `.tif`）：上传后在工作区预览多通道叠加，点“打开全片查看器”进入全片查看：
+   - 分块、多分辨率浏览，滚轮/双指缩放、拖动平移、导航图、比例尺；适合几十亿像素的全片扫描图。
+   - 每个通道可单独开关、改颜色、调黑场/白场/Gamma，或“只看此通道”。
+   - 视野截图：按当前视野、通道颜色和显示范围保存 PNG（1×/2×/4×，可带比例尺与通道图例）。
+   - 导出（后台任务）：范围可选当前视野 / 框选区域 / 整张切片，可选分辨率层级与通道；
+     OME-TIFF 保留原始像素值（分块、金字塔），TIFF/PNG/JPEG 为 8 位合成图。
+   - 文件自带的金字塔层级会直接使用；没有金字塔的大图在导入后台准备时自动生成缩略层级（缓存在 `data/cache`）。
 
 TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF：
 `*.ome.tif` 保留原始像素值（12 位数据存放在 16 位文件中，普通看图软件里会很暗），供 Fiji / QuPath / napari 分析；
@@ -74,6 +81,7 @@ On first start an admin access code is generated and printed to the server log (
 ### Notes
 
 - Large files are read plane-by-plane. Do not expect the whole T×Z cube in RAM.
+- OME-TIFF (`.ome.tif` / `.ome.tiff`, plain `.tif` too) opens in the slide viewer: tiled multi-resolution browsing (wheel/pinch zoom, pan, overview map, scale bar), per-channel visibility / color / range / gamma, view snapshots (PNG), and background exports of the current view, a selected region or the whole slide at any pyramid level — raw OME-TIFF (tiled, pyramidal) for the chosen channels or an 8-bit TIFF / PNG / JPEG composite. Existing pyramid levels are used as is; large images without one get generated overview levels during background preparation.
 - Every page and API call requires an access code. Each code owns one workspace. Codes have an optional expiry and are either *temporary* (files removed after `TTL_HOURS` and when the code expires) or *permanent* (never cleaned up automatically). Export archives are kept for `TTL_HOURS` for everyone.
 - Upload files or whole folders; the workspace keeps the folder tree. Right-click a file or folder to export it — exported files land in the same folders as their ND2 source inside the zip.
 - Every imported file is prepared in the background (auto-contrast and an 8-bit preview cached in `data/cache`), so opening it later is immediate.

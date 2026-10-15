@@ -1,4 +1,16 @@
-import type { AccessCode, AccessUser, CodeKind, FileDetail, FileSummary, JobInfo, MeasureResult } from "./types";
+import { isSupportedName } from "./format";
+import type {
+  AccessCode,
+  AccessUser,
+  CodeKind,
+  FileDetail,
+  FileSummary,
+  JobInfo,
+  LutSetting,
+  MeasureResult,
+  SlideExportFormat,
+  SlideInfo,
+} from "./types";
 
 export class ApiError extends Error {
   readonly code?: string;
@@ -223,6 +235,33 @@ export async function measure(
   return json(res);
 }
 
+export async function slideInfo(id: string): Promise<SlideInfo> {
+  return json(await fetch(`/api/files/${id}/slide`));
+}
+
+export async function startSlideExport(
+  id: string,
+  body: {
+    format: SlideExportFormat;
+    region: number[] | null;
+    level: number;
+    channels: number[];
+    luts: LutSetting[];
+    t: number;
+    z: number;
+    scale_bar: boolean;
+    jpeg_quality?: number;
+  },
+): Promise<{ id: string; width: number; height: number }> {
+  return json(
+    await fetch(`/api/files/${id}/slide/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
 export async function startExport(body: Record<string, unknown>): Promise<JobInfo & { file_count: number }> {
   return json(await fetch("/api/export", {
     method: "POST",
@@ -249,7 +288,7 @@ export async function uploadFile(
   folder: string,
   onProgress?: (ratio: number) => void,
 ): Promise<FileDetail> {
-  if (!file.name.toLowerCase().endsWith(".nd2")) {
+  if (!isSupportedName(file.name)) {
     throw new Error("not_nd2");
   }
   const chunkLimit = 32 * 1024 * 1024;

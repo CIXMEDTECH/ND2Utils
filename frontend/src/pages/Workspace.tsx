@@ -12,6 +12,7 @@ import {
   MagnifyingGlass,
   PencilSimple,
   SlidersHorizontal,
+  Stack,
   Trash,
   UploadSimple,
   X,
@@ -24,13 +25,14 @@ import { ExportPanel } from "../components/ExportPanel";
 import { countFilesIn, FileTree, orderedFiles, type TreeTarget } from "../components/FileTree";
 import { ConfirmDialog, Modal, NameDialog } from "../components/Modal";
 import { Glass } from "../components/Glass";
+import { Guide } from "../components/Guide";
 import { Shell } from "../components/Shell";
 import { TransferDialog, type TransferSeed } from "../components/TransferDialog";
 import { UploadBar } from "../components/UploadBar";
 import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
 import { createFolder, deleteFile, deleteFolder, fetchDisplay, getFile, prefetchDisplay, renameFolder, updateFile } from "../lib/api";
-import { axisSize, baseName, detailMessage, formatUm, joinPath, parentPath } from "../lib/format";
+import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
 import { createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
 import { readPref, writePref } from "../lib/storage";
 import type { ExportTarget, FileSummary, LutSetting, PackedPlane } from "../lib/types";
@@ -255,7 +257,10 @@ export function Workspace() {
     });
   }, [channelVisible, composite, localPreview, scaleBar, selected]);
   const selectedIds = files.filter((file) => checked[file.id]).map((file) => file.id);
-  const exportIds = selectedIds.length ? selectedIds : selected ? [selected.id] : [];
+  // Slides are exported from the slide viewer (by region / channel / resolution), not in batches.
+  const exportIds = (selectedIds.length ? selectedIds : selected ? [selected.id] : []).filter(
+    (id) => !isSlide(files.find((file) => file.id === id)),
+  );
   const allChecked = files.length > 0 && files.every((file) => checked[file.id]);
 
   const metaBlob = useMemo(() => {
@@ -349,7 +354,9 @@ export function Workspace() {
     const exportChecked = checked[file.id] && checkedFiles.length > 1;
     items.push(
       { key: "open", label: t(lang, "open"), icon: <Eye size={15} />, onSelect: () => select(file.id) },
-      { key: "advanced", label: t(lang, "openAdvanced"), icon: <SlidersHorizontal size={15} />, onSelect: () => nav(`/advanced/${file.id}`) },
+      isSlide(file)
+        ? { key: "slide", label: t(lang, "openSlide"), icon: <Stack size={15} />, onSelect: () => nav(`/slide/${file.id}`) }
+        : { key: "advanced", label: t(lang, "openAdvanced"), icon: <SlidersHorizontal size={15} />, onSelect: () => nav(`/advanced/${file.id}`) },
       {
         key: "export",
         label: exportChecked ? `${t(lang, "exportSelected")} (${checkedFiles.length})` : t(lang, "exportEllipsis"),
@@ -387,7 +394,8 @@ export function Workspace() {
       }
       reveal(renamed.path);
     } else {
-      const name = value.toLowerCase().endsWith(".nd2") ? value : `${value}.nd2`;
+      const ext = fileExtension(nameAction.file.name) || ".nd2";
+      const name = value.toLowerCase().endsWith(ext.toLowerCase()) ? value : `${value}${ext}`;
       await updateFile(nameAction.file.id, { name });
     }
     await refreshFiles();
@@ -579,8 +587,20 @@ export function Workspace() {
                   {tab === "identify" && (
                     <>
                       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 text-[13px]">
-                        <dt className="text-[var(--text-dim)]">{t(lang, "version")}</dt>
-                        <dd className="font-mono tabular-nums">{selected.version?.join(".") ?? "–"}</dd>
+                        {isSlide(selected) ? (
+                          <>
+                            <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
+                            <dd className="font-mono tabular-nums">
+                              {selected.format === "tiff" ? "TIFF" : "OME-TIFF"}
+                              {selected.levels?.length ? ` · ${selected.levels.length} ${t(lang, "pyramidLevels")}` : ""}
+                            </dd>
+                          </>
+                        ) : (
+                          <>
+                            <dt className="text-[var(--text-dim)]">{t(lang, "version")}</dt>
+                            <dd className="font-mono tabular-nums">{selected.version?.join(".") ?? "–"}</dd>
+                          </>
+                        )}
                         <dt className="text-[var(--text-dim)]">{t(lang, "dtype")}</dt>
                         <dd className="font-mono tabular-nums">
                           {selected.dtype ?? "–"} {selected.bits_significant ? `(${selected.bits_significant}-bit)` : ""}
@@ -614,9 +634,15 @@ export function Workspace() {
                       </dl>
 
                       <div className="mt-7 flex flex-wrap gap-2">
-                        <button type="button" onClick={() => nav(`/advanced/${selected.id}`)} className="primary-action min-h-9 px-4 text-[12px]">
-                          {t(lang, "openAdvanced")}
-                        </button>
+                        {isSlide(selected) ? (
+                          <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 px-4 text-[12px]">
+                            {t(lang, "openSlide")}
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => nav(`/advanced/${selected.id}`)} className="primary-action min-h-9 px-4 text-[12px]">
+                            {t(lang, "openAdvanced")}
+                          </button>
+                        )}
                         {pendingDelete !== selected.id && (
                           <button
                             type="button"
@@ -711,7 +737,18 @@ export function Workspace() {
                           ? `${t(lang, "checkedCount")} ${selectedIds.length} ${t(lang, "nFiles")}`
                           : joinPath(selected.folder, selected.name)}
                       </p>
-                      <ExportPanel fileIds={exportIds} />
+                      {exportIds.length > 0 ? (
+                        <ExportPanel fileIds={exportIds} />
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          <Guide title="export" body="slideExportHint" />
+                          {isSlide(selected) && (
+                            <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 self-start px-4 text-[12px]">
+                              {t(lang, "openSlide")}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                 </motion.div>

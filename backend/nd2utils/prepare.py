@@ -1,4 +1,4 @@
-"""Background preparation of imported ND2 files.
+"""Background preparation of imported ND2 and OME-TIFF files.
 
 Right after import every file is queued here. A worker reads its first plane once and stores,
 under cache/<file id>/:
@@ -8,6 +8,9 @@ under cache/<file id>/:
 
 Opening a file afterwards only streams a small pre-compressed blob instead of reading the ND2,
 sending megabytes of raw 16-bit data and auto-contrasting it in the browser.
+For (OME-)TIFF slides the preview comes from a coarse pyramid level, and large images without a
+pyramid get one first (see ometiff.build_pyramid), so the slide viewer can open them right away.
+
 Raw planes (detailed view) and other T/Z/P positions are read on demand and sent gzip-compressed;
 they are not stored, which would roughly duplicate the ND2 data on disk.
 """
@@ -20,11 +23,12 @@ import logging
 import shutil
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any
 
 import numpy as np
 
+from nd2utils import ometiff
 from nd2utils.config import settings
 from nd2utils.nd2io import OpenNd2, extract_channels, open_nd2, open_uncached, pack_planes
 from nd2utils.render import autoscale_limits
@@ -35,7 +39,7 @@ DEFAULT = (0, 0, 0)
 _KINDS = ("display", "autoscale")
 
 _GUARD = Lock()
-_FILE_LOCKS: dict[str, Lock] = {}
+_FILE_LOCKS: dict[str, RLock] = {}
 _QUEUED: dict[str, Future] = {}
 _EXECUTOR: ThreadPoolExecutor | None = None
 
@@ -57,9 +61,9 @@ def shutdown() -> None:
         executor.shutdown(wait=False, cancel_futures=True)
 
 
-def _file_lock(file_id: str) -> Lock:
+def _file_lock(file_id: str) -> RLock:
     with _GUARD:
-        return _FILE_LOCKS.setdefault(file_id, Lock())
+        return _FILE_LOCKS.setdefault(file_id, RLock())
 
 
 def _path(file_id: str, kind: str, coords: tuple[int, int, int] = DEFAULT) -> Path:
@@ -122,10 +126,62 @@ def _build(rec: dict[str, Any], handle: OpenNd2, coords: tuple[int, int, int]) -
     }
 
 
+def is_slide(rec: dict[str, Any]) -> bool:
+    return rec.get("format") in ("ome-tiff", "tiff")
+
+
+def ensure_slide(file_id: str, source: Path) -> ometiff.Slide:
+    """The slide handle, with virtual pyramid levels built first when the file lacks them."""
+    slide = ometiff.open_slide(source, file_id)
+    if not ometiff.needs_pyramid(slide):
+        return slide
+    with _file_lock(file_id):
+        slide = ometiff.open_slide(source, file_id)
+        if ometiff.needs_pyramid(slide) and not ometiff.pyramid_ready(file_id):
+            ometiff.build_pyramid(source, file_id)
+            slide = ometiff.open_slide(source, file_id)
+    return slide
+
+
+def _slide_limits(planes: list[np.ndarray], channels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Like _limits, but sparse channels (whole slides: mostly empty background) take their
+    white point from the foreground, otherwise faint noise in a near-empty channel is blown up."""
+    limits = _limits(planes, channels)
+    for lim, plane in zip(limits, planes):
+        fg = plane[plane > plane.min()]
+        if 0 < fg.size < plane.size * 0.5:
+            hi = float(np.percentile(fg, 99.9))
+            lim["max"] = max(hi, lim["min"] + 1.0)
+    return limits
+
+
+def _build_slide(rec: dict[str, Any], slide: ometiff.Slide, coords: tuple[int, int, int]) -> dict[str, Any]:
+    t, z, _ = coords
+    planes = ometiff.overview_planes(slide, t=t, z=z)
+    channels = rec.get("channels") or []
+    limits = _slide_limits(planes, channels)
+    return {
+        "display": gzip.compress(_display_bytes(planes, channels, limits), compresslevel=6),
+        "autoscale": {"channels": limits},
+    }
+
+
+def _build_any(rec: dict[str, Any], file_id: str, source: Path, coords: tuple[int, int, int]) -> dict[str, Any]:
+    if is_slide(rec):
+        return _build_slide(rec, ensure_slide(file_id, source), coords)
+    return _build(rec, open_nd2(source), coords)
+
+
 def raw_plane(rec: dict[str, Any], source: Path, coords: tuple[int, int, int]) -> bytes:
-    """Raw channels (native bit depth) for the detailed view, gzip-compressed for transfer."""
+    """Raw channels (native bit depth) for the detailed view, gzip-compressed for transfer.
+
+    Slides are far too large for one plane: they get their overview level instead."""
     t, z, p = coords
-    planes, _ = extract_channels(open_nd2(source), t=t, z=z, p=p)
+    if is_slide(rec):
+        slide = ometiff.open_slide(source, rec.get("id"))
+        planes = [ometiff.wire_dtype(plane) for plane in ometiff.overview_planes(slide, t=t, z=z)]
+    else:
+        planes, _ = extract_channels(open_nd2(source), t=t, z=z, p=p)
     return gzip.compress(pack_planes(planes, rec.get("channels") or []), compresslevel=1)
 
 
@@ -154,7 +210,7 @@ def get(file_id: str, rec: dict[str, Any], source: Path, kind: str, coords: tupl
     if kind == "plane":
         return raw_plane(rec, source, coords)
     if coords != DEFAULT:
-        return _build(rec, open_nd2(source), coords)[kind]
+        return _build_any(rec, file_id, source, coords)[kind]
     try:
         return _read(file_id, kind)
     except (OSError, json.JSONDecodeError):
@@ -163,7 +219,7 @@ def get(file_id: str, rec: dict[str, Any], source: Path, kind: str, coords: tupl
     with _file_lock(file_id):
         if is_prepared(file_id):
             return _read(file_id, kind)
-        built = _build(rec, open_nd2(source), DEFAULT)
+        built = _build_any(rec, file_id, source, DEFAULT)
         _store(file_id, built)
         return built[kind]
 
@@ -183,8 +239,11 @@ def _run(file_id: str) -> None:
             source = settings.uploads_dir / file_id / "source.nd2"
             with _file_lock(file_id):
                 if not is_prepared(file_id):
-                    with open_uncached(source) as handle:
-                        _store(file_id, _build(rec, handle, DEFAULT))
+                    if is_slide(rec):
+                        _store(file_id, _build_any(rec, file_id, source, DEFAULT))
+                    else:
+                        with open_uncached(source) as handle:
+                            _store(file_id, _build(rec, handle, DEFAULT))
         if store.load_index().get(file_id) is None:
             # Deleted while we were working.
             shutil.rmtree(settings.cache_dir / file_id, ignore_errors=True)

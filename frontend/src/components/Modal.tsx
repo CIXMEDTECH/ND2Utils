@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { t } from "../i18n";
-import { detailMessage } from "../lib/format";
+import { detailMessage, fileExtension } from "../lib/format";
 import { useApp } from "../store";
 
 export function Modal({
@@ -143,7 +143,8 @@ export function NameDialog({
             value={value}
             onChange={(event) => setValue(event.target.value)}
             onFocus={(event) => {
-              const dot = event.target.value.toLowerCase().endsWith(".nd2") ? event.target.value.length - 4 : event.target.value.length;
+              const ext = fileExtension(event.target.value);
+              const dot = ext ? event.target.value.length - ext.length : event.target.value.length;
               event.target.setSelectionRange(0, dot);
             }}
             className="h-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"

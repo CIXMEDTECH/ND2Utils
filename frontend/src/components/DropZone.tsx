@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { t } from "../i18n";
 import { fromDataTransfer, fromFileList, type PendingUpload, useUploads } from "../lib/uploads";
 import { useApp } from "../store";
+import { UPLOAD_ACCEPT } from "../lib/format";
 
 // React's input typings do not know the (widely supported) directory picker attributes.
 const DIRECTORY_PICKER = { webkitdirectory: "", directory: "" } as Record<string, string>;
@@ -55,7 +56,7 @@ export function DropZone({ inputId = "nd2-upload" }: { inputId?: string }) {
       <input
         id={inputId}
         type="file"
-        accept=".nd2"
+        accept={UPLOAD_ACCEPT}
         multiple
         disabled={Boolean(progress)}
         className="sr-only"

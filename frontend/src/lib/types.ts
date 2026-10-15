@@ -25,6 +25,10 @@ export interface FileSummary {
   name: string;
   /** Workspace folder path, "" for the root, e.g. "20260918H2/vector 6h". */
   folder: string;
+  /** Source format; missing on files imported before OME-TIFF support (= ND2). */
+  format?: "nd2" | "ome-tiff" | "tiff" | null;
+  /** Resolution levels [width, height] of (OME-)TIFF slides, finest first. */
+  levels?: number[][] | null;
   size_bytes: number;
   status: string;
   error?: string | null;
@@ -143,3 +147,28 @@ export interface MeasureResult {
     values: number[];
   }[];
 }
+
+export interface SlideLevel {
+  width: number;
+  height: number;
+  /** Full-resolution width / level width. */
+  downsample: number;
+  /** Built by the server (2x2 binning) because the file has no such level. */
+  virtual: boolean;
+}
+
+export interface SlideInfo {
+  id: string;
+  width: number;
+  height: number;
+  tile_size: number;
+  dtype: string;
+  levels: SlideLevel[];
+  sizes: { T: number; Z: number; C: number };
+  channels: ChannelInfo[];
+  autoscale: { index: number; min: number; max: number; gamma: number }[];
+  um_per_px: number | null;
+  magnification: number | null;
+}
+
+export type SlideExportFormat = "ome-tiff" | "tiff" | "png" | "jpeg";

@@ -8,6 +8,7 @@ import { useApp } from "./store";
 const Home = lazyPage(() => import("./pages/Home").then((module) => module.Home));
 const Workspace = lazyPage(() => import("./pages/Workspace").then((module) => module.Workspace));
 const Advanced = lazyPage(() => import("./pages/Advanced").then((module) => module.Advanced));
+const Slide = lazyPage(() => import("./pages/Slide").then((module) => module.Slide));
 const Jobs = lazyPage(() => import("./pages/Jobs").then((module) => module.Jobs));
 const Settings = lazyPage(() => import("./pages/Settings").then((module) => module.Settings));
 const Login = lazyPage(() => import("./pages/Login").then((module) => module.Login));
@@ -63,6 +64,7 @@ export function App() {
             <Route path="/workspace" element={<Workspace />} />
             <Route path="/advanced" element={<Advanced />} />
             <Route path="/advanced/:fileId" element={<Advanced />} />
+            <Route path="/slide/:fileId" element={<Slide />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />

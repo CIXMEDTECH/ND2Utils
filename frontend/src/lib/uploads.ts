@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { t } from "../i18n";
 import { useApp } from "../store";
 import { uploadFile } from "./api";
-import { detailMessage, joinPath } from "./format";
+import { detailMessage, isSupportedName, joinPath } from "./format";
 
 /** A file to upload plus its folder relative to the drop target ("" = directly into the target). */
 export interface PendingUpload {
@@ -19,7 +19,7 @@ interface UploadState {
 }
 
 function isNd2(file: File) {
-  return file.name.toLowerCase().endsWith(".nd2");
+  return isSupportedName(file.name);
 }
 
 export function fromFileList(list: FileList | File[]): PendingUpload[] {

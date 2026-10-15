@@ -215,7 +215,12 @@ def encode_image(rgb: np.ndarray, fmt: str = "jpeg", quality: int = 88) -> bytes
     if fmt == "png":
         img.save(buf, format="PNG", optimize=True)
     else:
-        img.save(buf, format="JPEG", quality=int(quality), subsampling=1, optimize=True)
+        try:
+            img.save(buf, format="JPEG", quality=int(quality), subsampling=1, optimize=True)
+        except OSError:
+            # libjpeg's optimizer runs out of buffer on very noisy images ("Suspension not allowed").
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=int(quality), subsampling=1)
     return buf.getvalue()
 
 
