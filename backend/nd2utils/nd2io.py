@@ -10,6 +10,7 @@ from typing import Any, Iterator
 import nd2
 import numpy as np
 
+from nd2utils import lifio
 from nd2utils.config import settings
 from nd2utils.jsonutil import jsonable
 
@@ -102,10 +103,13 @@ def _lut_from_custom(custom: dict[str, Any], n_channels: int) -> list[tuple[floa
 
 @dataclass
 class OpenNd2:
+    """An open image: an ND2 file, or one image of a Leica LIF project (`nd` is then the LifFile)."""
+
     path: Path
-    nd: nd2.ND2File
+    nd: Any
     sizes: dict[str, int]
     array: Any
+    is_rgb: bool = False
     lock: RLock = field(default_factory=RLock, repr=False)
 
     def close(self) -> None:
@@ -130,21 +134,29 @@ def set_max_open(limit: int) -> None:
             old.close()
 
 
+def _open_lif(path: Path) -> OpenNd2:
+    lif, sizes, array, rgb = lifio.open_image(path)
+    return OpenNd2(path=path, nd=lif, sizes=sizes, array=array, is_rgb=rgb)
+
+
 def open_nd2(path: Path) -> OpenNd2:
     key = str(path.resolve())
     with _OPEN_LOCK:
         if key in _OPEN:
             _OPEN.move_to_end(key)
             return _OPEN[key]
-        nd = nd2.ND2File(path)
-        try:
-            sizes = dict(nd.sizes)
-            nbytes = int(np.prod(list(sizes.values()) or [1]) * np.dtype(nd.dtype).itemsize)
-            array = nd.asarray() if nbytes <= settings.in_memory_limit_bytes else nd.to_dask()
-            handle = OpenNd2(path=path, nd=nd, sizes=sizes, array=array)
-        except Exception:
-            nd.close()
-            raise
+        if lifio.is_lif(path):
+            handle = _open_lif(path)
+        else:
+            nd = nd2.ND2File(path)
+            try:
+                sizes = dict(nd.sizes)
+                nbytes = int(np.prod(list(sizes.values()) or [1]) * np.dtype(nd.dtype).itemsize)
+                array = nd.asarray() if nbytes <= settings.in_memory_limit_bytes else nd.to_dask()
+                handle = OpenNd2(path=path, nd=nd, sizes=sizes, array=array, is_rgb=bool(nd.is_rgb))
+            except Exception:
+                nd.close()
+                raise
         _OPEN[key] = handle
         while len(_OPEN) > _MAX_OPEN:
             _, old = _OPEN.popitem(last=False)
@@ -156,9 +168,16 @@ def open_nd2(path: Path) -> OpenNd2:
 def open_uncached(path: Path) -> Iterator[OpenNd2]:
     """A private, lazily-read handle (background preparation): it neither evicts the
     viewer's cached handles nor loads the whole file into memory."""
+    if lifio.is_lif(path):
+        handle = _open_lif(path)
+        try:
+            yield handle
+        finally:
+            handle.close()
+        return
     nd = nd2.ND2File(path)
     try:
-        yield OpenNd2(path=path, nd=nd, sizes=dict(nd.sizes), array=nd.to_dask())
+        yield OpenNd2(path=path, nd=nd, sizes=dict(nd.sizes), array=nd.to_dask(), is_rgb=bool(nd.is_rgb))
     finally:
         nd.close()
 
@@ -406,7 +425,7 @@ def extract_channels(
             index.append(0)
     with handle.lock:
         slab = _compute(handle.array[tuple(index)])
-        is_rgb = handle.nd.is_rgb
+        is_rgb = handle.is_rgb
     # Remaining axes among C, Y, X, S
     remain = []
     for ax, spec in zip(sizes, index):

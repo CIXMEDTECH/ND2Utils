@@ -423,8 +423,9 @@ export function Workspace() {
       }
       reveal(renamed.path);
     } else {
-      const ext = fileExtension(nameAction.file.name) || ".nd2";
-      const name = value.toLowerCase().endsWith(ext.toLowerCase()) ? value : `${value}${ext}`;
+      // Images of a LIF project are named by LAS X and have no extension ("Series 1.5x" is not ".5x").
+      const ext = nameAction.file.format === "lif" ? "" : fileExtension(nameAction.file.name) || ".nd2";
+      const name = !ext || value.toLowerCase().endsWith(ext.toLowerCase()) ? value : `${value}${ext}`;
       await updateFile(nameAction.file.id, { name });
     }
     await refreshFiles();
@@ -665,6 +666,11 @@ export function Workspace() {
                               {selected.format === "tiff" ? "TIFF" : "OME-TIFF"}
                               {selected.levels?.length ? ` · ${selected.levels.length} ${t(lang, "pyramidLevels")}` : ""}
                             </dd>
+                          </>
+                        ) : selected.format === "lif" ? (
+                          <>
+                            <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
+                            <dd className="font-mono tabular-nums">Leica LIF</dd>
                           </>
                         ) : (
                           <>

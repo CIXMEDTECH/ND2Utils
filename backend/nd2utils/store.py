@@ -120,6 +120,20 @@ def upsert_file(record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def upsert_files(records: list[dict[str, Any]]) -> None:
+    """upsert_file for many records (e.g. the images of a LIF project) with one index write."""
+    if any(not record.get(OWNER_FIELD) for record in records):
+        raise ValueError("file record is missing an owner")
+    slim = [_split_detail(record) for record in records]
+    with _LOCK:
+        index = load_index()
+        for record in slim:
+            index[record["id"]] = record
+        save_index(index)
+        for record in slim:
+            _register_folder(record[OWNER_FIELD], record.get("folder") or "")
+
+
 def migrate_index() -> None:
     """Older versions kept the full metadata in index.json; split it out once."""
     with _LOCK:
@@ -200,7 +214,8 @@ def file_dir(file_id: str) -> Path:
 
 
 def source_path(file_id: str) -> Path:
-    # The uploaded file, whatever its format (ND2 or OME-TIFF): the readers sniff the content.
+    # The uploaded file, whatever its format (ND2, OME-TIFF or a hard link to a LIF project):
+    # the readers sniff the content.
     return file_dir(file_id) / "source.nd2"
 
 
@@ -350,7 +365,7 @@ def _clone_file_data(src_id: str, dst_id: str) -> None:
     for child in src.iterdir():
         target = dst / child.name
         if child.name == "source.nd2":
-            # Uploaded ND2 files are never modified in place, so a hard link is a safe, instant copy.
+            # Uploaded files are never modified in place, so a hard link is a safe, instant copy.
             try:
                 os.link(child, target)
                 continue

@@ -2,7 +2,7 @@
 name = "nd2utils"
 version = "0.1.0"
 description = "Self-hosted ND2 preview, metadata, and export tool"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
@@ -13,6 +13,7 @@ dependencies = [
   "pillow>=11.0",
   "tifffile>=2024.8",
   "imagecodecs>=2024.1",
+  "liffile>=2026.7.14",
   "pydantic-settings>=2.6",
 ]
 

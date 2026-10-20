@@ -25,8 +25,9 @@ export interface FileSummary {
   name: string;
   /** Workspace folder path, "" for the root, e.g. "20260918H2/vector 6h". */
   folder: string;
-  /** Source format; missing on files imported before OME-TIFF support (= ND2). */
-  format?: "nd2" | "ome-tiff" | "tiff" | null;
+  /** Source format; missing on files imported before OME-TIFF support (= ND2).
+   * "lif": one image of an imported Leica LIF project (named by LAS X, no file extension). */
+  format?: "nd2" | "ome-tiff" | "tiff" | "lif" | null;
   /** Resolution levels [width, height] of (OME-)TIFF slides, finest first. */
   levels?: number[][] | null;
   size_bytes: number;
@@ -60,6 +61,8 @@ export interface FileDetail extends FileSummary {
   metadata: Record<string, unknown>;
   app_info: Record<string, unknown>;
   groups: Record<string, unknown>;
+  /** Upload of a LIF project: the folder it became and how many images it holds. */
+  imported?: { folder: string; count: number } | null;
 }
 
 export interface LutSetting {

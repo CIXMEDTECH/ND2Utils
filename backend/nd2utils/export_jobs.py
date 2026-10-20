@@ -46,8 +46,12 @@ _META_KEYS = (
 _ILLEGAL = set('<>:"/\\|?*')
 
 
+_SOURCE_SUFFIXES = {".nd2", ".tif", ".tiff", ".lif"}
+
+
 def _safe_stem(name: str) -> str:
-    stem = Path(name).stem
+    # Images of a LIF project have no extension: "Position 1.5" must not lose ".5".
+    stem = Path(name).stem if Path(name).suffix.lower() in _SOURCE_SUFFIXES else name
     out = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in stem)
     return out or "nd2"
 

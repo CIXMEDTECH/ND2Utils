@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import json
 import logging
+import os
 import secrets
 import shutil
 import time
@@ -18,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from nd2utils import __version__, auth, ometiff, perf, prepare, slide_render
+from nd2utils import __version__, auth, lifio, ometiff, perf, prepare, slide_render
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import new_job_id, run_export
 from nd2utils.models import ExportRequest, MeasureRequest
@@ -32,6 +33,7 @@ from nd2utils.nd2io import (
     open_nd2,
     projection,
 )
+from nd2utils.lifio import LifError
 from nd2utils.ometiff import SlideError
 from nd2utils.render import (
     encode_image,
@@ -49,6 +51,7 @@ from nd2utils.store import (
     delete_file,
     delete_folder,
     delete_workspace,
+    file_dir,
     files_in_folder,
     find_file,
     get_file_detail,
@@ -61,11 +64,13 @@ from nd2utils.store import (
     normalize_filename,
     normalize_folder,
     purge_expired,
+    remove_file_data,
     rename_folder,
     source_path,
     transfer,
     update_file,
     upsert_file,
+    upsert_files,
     upsert_job,
     workspace_usage,
 )
@@ -177,8 +182,8 @@ def _public(record: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if not key.startswith("_")}
 
 
-def _raise_nd2(exc: Nd2Error | SlideError) -> None:
-    status = 400 if exc.code in {"not_nd2", "not_tiff", "parse_failed", "empty"} else 500
+def _raise_nd2(exc: Nd2Error | SlideError | LifError) -> None:
+    status = 400 if exc.code in {"not_nd2", "not_tiff", "not_lif", "parse_failed", "empty", "unsupported"} else 500
     raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
 
 
@@ -229,10 +234,10 @@ def _source_name(raw: str | None) -> str:
         name = normalize_filename(raw or "upload.nd2")
     except PathError as exc:
         raise _bad_path(exc) from exc
-    if not (name.lower().endswith(".nd2") or ometiff.is_tiff_name(name)):
+    if not (name.lower().endswith(".nd2") or ometiff.is_tiff_name(name) or lifio.is_lif_name(name)):
         raise HTTPException(
             status_code=400,
-            detail={"code": "not_nd2", "message": "Please upload a .nd2 or OME-TIFF (.ome.tif / .ome.tiff) file."},
+            detail={"code": "not_nd2", "message": "Please upload a .nd2, OME-TIFF (.ome.tif / .ome.tiff) or Leica .lif file."},
         )
     return name
 
@@ -252,6 +257,8 @@ def _ingest_file(
     size_bytes: int | None = None,
     folder: str = "",
 ) -> dict[str, Any]:
+    if lifio.is_lif_name(name):
+        return _ingest_lif(src, name, owner_id, size_bytes if size_bytes is not None else src.stat().st_size, folder)
     file_id = uuid.uuid4().hex
     dest = source_path(file_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -278,6 +285,81 @@ def _ingest_file(
     # Prepare previews in the background so opening the file later is instant.
     prepare.schedule(file_id)
     return rec
+
+
+def _link_or_copy(src: Path, dest: Path) -> None:
+    try:
+        os.link(src, dest)
+    except OSError:
+        # File systems without hard links: every image keeps its own copy of the project.
+        shutil.copy2(src, dest)
+
+
+def _ingest_lif(src: Path, name: str, owner_id: str, size: int, folder: str) -> dict[str, Any]:
+    """A Leica LIF file is a whole project: it becomes a folder named after the file, holding one
+    workspace file per image (the project's own folders become subfolders).
+
+    Every image links to the same uploaded data (see lifio). Images with the same name in the same
+    folder replace older ones, like re-uploading an ND2 file. Returns the first image's record."""
+    if size > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
+    try:
+        entries = lifio.read_project(src)
+    except LifError as exc:
+        _raise_nd2(exc)
+    if not entries:
+        raise HTTPException(status_code=400, detail={"code": "empty", "message": "The LIF file contains no readable images."})
+    try:
+        base = normalize_folder("/".join(p for p in (folder, lifio.project_folder_name(name)) if p))
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+    created = time.time()
+    records: list[dict[str, Any]] = []
+    made: list[str] = []
+    replaced: list[str] = []
+    taken: set[tuple[str, str]] = set()
+    try:
+        for entry in entries:
+            sub = normalize_folder("/".join(p for p in (base, entry["folder"]) if p))
+            child = entry["name"]
+            n = 2
+            while (sub, child.lower()) in taken:
+                child = f"{entry['name']} ({n})"
+                n += 1
+            taken.add((sub, child.lower()))
+            file_id = uuid.uuid4().hex
+            made.append(file_id)
+            directory = file_dir(file_id)
+            _link_or_copy(src, directory / "source.nd2")
+            lifio.write_sidecar(directory, entry)
+            rec = {
+                **entry["record"],
+                "id": file_id,
+                "name": child,
+                "created_at": created,
+                "_owner": owner_id,
+                "folder": sub,
+                "prepare": "pending",
+                "lif": {"project": name, "path": entry["path"]},
+            }
+            previous = find_file(owner_id, sub, child)
+            if previous:
+                replaced.append(previous["id"])
+            records.append(rec)
+    except PathError as exc:
+        for file_id in made:
+            remove_file_data(file_id)
+        raise _bad_path(exc) from exc
+    except Exception:
+        for file_id in made:
+            remove_file_data(file_id)
+        raise
+    upsert_files(records)
+    for file_id in replaced:
+        delete_file(file_id, owner_id)
+    for rec in records:
+        prepare.schedule(rec["id"])
+    return {**records[0], "imported": {"folder": base, "count": len(records)}}
 
 
 def _need_upload(upload_id: str, owner_id: str) -> tuple[Path, dict[str, Any]]:
@@ -687,9 +769,16 @@ def api_file(file_id: str, owner_id: Owner) -> dict[str, Any]:
 @app.patch("/api/files/{file_id}")
 def api_update_file(file_id: str, body: FilePatch, owner_id: Owner) -> dict[str, Any]:
     rec = _owned_file(file_id, owner_id)
-    name = _source_name(body.name) if body.name is not None else rec.get("name")
-    if ometiff.is_tiff_name(name) != prepare.is_slide(rec):
-        raise HTTPException(status_code=400, detail={"code": "bad_extension", "message": "Keep the file extension when renaming."})
+    if rec.get("format") == "lif":
+        # Images of a LIF project are named by LAS X and carry no file extension.
+        try:
+            name = normalize_filename(body.name) if body.name is not None else rec.get("name")
+        except PathError as exc:
+            raise _bad_path(exc) from exc
+    else:
+        name = _source_name(body.name) if body.name is not None else rec.get("name")
+        if ometiff.is_tiff_name(name) != prepare.is_slide(rec) or lifio.is_lif_name(name):
+            raise HTTPException(status_code=400, detail={"code": "bad_extension", "message": "Keep the file extension when renaming."})
     folder = _folder_arg(body.folder) if body.folder is not None else rec.get("folder") or ""
     clash = find_file(owner_id, folder, name)
     if clash and clash["id"] != file_id:

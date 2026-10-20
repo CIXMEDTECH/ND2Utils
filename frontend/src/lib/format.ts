@@ -9,13 +9,19 @@ export function isSlideName(name: string): boolean {
   return SLIDE_SUFFIXES.some((suffix) => lower.endsWith(suffix));
 }
 
+/** Leica LIF projects: imported as a folder with one workspace file per image. */
+export function isLifName(name: string): boolean {
+  return name.toLowerCase().endsWith(".lif");
+}
+
 export function isSupportedName(name: string): boolean {
-  return name.toLowerCase().endsWith(".nd2") || isSlideName(name);
+  const lower = name.toLowerCase();
+  return lower.endsWith(".nd2") || isSlideName(name) || isLifName(name);
 }
 
 export function isSlide(file: Pick<FileSummary, "format" | "name"> | null | undefined): boolean {
   if (!file) return false;
-  return file.format ? file.format !== "nd2" : isSlideName(file.name);
+  return file.format ? file.format === "ome-tiff" || file.format === "tiff" : isSlideName(file.name);
 }
 
 /** "a.ome.tiff" -> ".ome.tiff", "b.nd2" -> ".nd2" */
@@ -27,7 +33,7 @@ export function fileExtension(name: string): string {
   return dot > 0 ? name.slice(dot) : "";
 }
 
-export const UPLOAD_ACCEPT = ".nd2,.tif,.tiff";
+export const UPLOAD_ACCEPT = ".nd2,.tif,.tiff,.lif";
 
 export function formatBytes(n: number, lang: Lang = "en"): string {
   if (n < 1024) return `${n} B`;
@@ -77,6 +83,8 @@ export function detailMessage(err: unknown, lang: Lang = "en"): string {
   const keyByCode: Record<string, MsgKey> = {
     not_nd2: "errorNotNd2",
     not_tiff: "errorNotNd2",
+    not_lif: "errorNotNd2",
+    unsupported: "errorNotNd2",
     slide_error: "errorNotNd2",
     not_slide: "slideNotSlide",
     parse_failed: "errorNotNd2",
