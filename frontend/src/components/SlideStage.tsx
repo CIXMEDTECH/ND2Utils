@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { CornersOut, MagnifyingGlassMinus, MagnifyingGlassPlus } from "@phosphor-icons/react";
-import { motion, useReducedMotion } from "motion/react";
 import { t } from "../i18n";
 import { clientSettings } from "../lib/api";
 import { detailMessage } from "../lib/format";
@@ -338,14 +337,9 @@ export function SlideStage({
 /** Spinner shown while the slide description loads (the server may build overview levels). */
 export function SlideLoading({ preparing = true }: { preparing?: boolean }) {
   const lang = useApp((s) => s.lang);
-  const reduce = useReducedMotion();
   return (
     <div role="status" className="flex h-full flex-1 flex-col items-center justify-center gap-3 bg-[#050607] px-8 text-center">
-      <motion.span
-        animate={reduce ? undefined : { rotate: 360 }}
-        transition={{ duration: 1.1, repeat: Infinity, ease: "linear" }}
-        className="h-5 w-5 rounded-full border border-white/25 border-t-[var(--accent)]"
-      />
+      <span className="spinner h-5 w-5 rounded-full border border-white/25 border-t-[var(--accent)]" />
       <p className="font-mono text-[11px] text-white/65">{t(lang, "slideOpening")}</p>
       {preparing && <p className="max-w-[42ch] text-[12px] leading-5 text-white/40">{t(lang, "slidePreparing")}</p>}
     </div>

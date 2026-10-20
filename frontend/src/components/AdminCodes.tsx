@@ -13,7 +13,6 @@ import {
   ShieldCheck,
   Trash,
 } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { t, type MsgKey } from "../i18n";
 import { createCode, deleteCode, listCodes, regenerateCode, updateCode } from "../lib/api";
 import { detailMessage, formatBytes, formatDateTime } from "../lib/format";
@@ -148,7 +147,6 @@ function CodeRow({
   onFiles: () => void;
 }) {
   const lang = useApp((s) => s.lang);
-  const reduce = useReducedMotion();
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(code.label);
   const [kind, setKind] = useState<CodeKind>(code.kind);
@@ -235,45 +233,40 @@ function CodeRow({
         </button>
       </div>
 
-      <AnimatePresence initial={false}>
-        {editing && (
-          <motion.form
-            initial={reduce ? false : { opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={reduce ? undefined : { opacity: 0, height: 0 }}
-            className="overflow-hidden"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(() =>
-                updateCode(code.id, { label, kind, expires_at: expirySeconds(expiry) }),
-              ).then((ok) => ok && setEditing(false));
-            }}
-          >
-            <div className="mt-2 grid gap-2.5 rounded-xl bg-[var(--bg)]/60 p-3 sm:grid-cols-2">
-              <label className="grid gap-1 text-[11px] text-[var(--text-dim)] sm:col-span-2">
-                {t(lang, "codeLabel")}
-                <input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={80} className={fieldClass} />
-              </label>
-              <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
-                {t(lang, "codeKind")}
-                <KindToggle value={kind} onChange={setKind} />
-              </div>
-              <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
-                {t(lang, "codeExpiry")}
-                <ExpiryField value={expiry} onChange={setExpiry} />
-              </div>
-              <div className="flex justify-end gap-2 sm:col-span-2">
-                <button type="button" onClick={() => setEditing(false)} className="h-8 rounded-lg px-3 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
-                  {t(lang, "cancel")}
-                </button>
-                <button type="submit" className="h-8 rounded-lg bg-[var(--accent)] px-4 text-[12px] font-semibold text-white">
-                  {t(lang, "save")}
-                </button>
-              </div>
+      {editing && (
+        <form
+          className="overflow-hidden"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void run(() =>
+              updateCode(code.id, { label, kind, expires_at: expirySeconds(expiry) }),
+            ).then((ok) => ok && setEditing(false));
+          }}
+        >
+          <div className="mt-2 grid gap-2.5 rounded-xl bg-[var(--bg)]/60 p-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-[11px] text-[var(--text-dim)] sm:col-span-2">
+              {t(lang, "codeLabel")}
+              <input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={80} className={fieldClass} />
+            </label>
+            <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
+              {t(lang, "codeKind")}
+              <KindToggle value={kind} onChange={setKind} />
             </div>
-          </motion.form>
-        )}
-      </AnimatePresence>
+            <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
+              {t(lang, "codeExpiry")}
+              <ExpiryField value={expiry} onChange={setExpiry} />
+            </div>
+            <div className="flex justify-end gap-2 sm:col-span-2">
+              <button type="button" onClick={() => setEditing(false)} className="h-8 rounded-lg px-3 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+                {t(lang, "cancel")}
+              </button>
+              <button type="submit" className="h-8 rounded-lg bg-[var(--accent)] px-4 text-[12px] font-semibold text-white">
+                {t(lang, "save")}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
 
       {error && (
         <p role="alert" className="mt-2 text-[12px] text-[var(--danger)]">
@@ -306,7 +299,6 @@ function CodeRow({
 
 export function AdminCodes() {
   const lang = useApp((s) => s.lang);
-  const reduce = useReducedMotion();
   const [codes, setCodes] = useState<AccessCode[] | null>(null);
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState<CodeKind>("temporary");
@@ -407,22 +399,15 @@ export function AdminCodes() {
             </button>
           </form>
 
-          <AnimatePresence>
-            {created && (
-              <motion.div
-                initial={reduce ? false : { opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="mt-3 rounded-xl border border-[color-mix(in_srgb,var(--ok)_35%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_8%,transparent)] p-3"
-              >
-                <p className="text-[12px] text-[var(--text-dim)]">{t(lang, "codeCreated")}</p>
-                <div className="mt-1 flex items-center gap-1">
-                  <code className="select-all font-mono text-[15px] font-semibold tracking-[0.1em]">{created.code}</code>
-                  <CopyButton text={created.code} label={t(lang, "copyCode")} />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {created && (
+            <div className="mt-3 rounded-xl border border-[color-mix(in_srgb,var(--ok)_35%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_8%,transparent)] p-3">
+              <p className="text-[12px] text-[var(--text-dim)]">{t(lang, "codeCreated")}</p>
+              <div className="mt-1 flex items-center gap-1">
+                <code className="select-all font-mono text-[15px] font-semibold tracking-[0.1em]">{created.code}</code>
+                <CopyButton text={created.code} label={t(lang, "copyCode")} />
+              </div>
+            </div>
+          )}
 
           {error && (
             <p role="alert" className="mt-3 text-[12px] text-[var(--danger)]">

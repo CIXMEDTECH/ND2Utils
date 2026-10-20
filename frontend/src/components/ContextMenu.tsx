@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { motion, useReducedMotion } from "motion/react";
 
 export interface MenuItem {
   key: string;
@@ -21,7 +20,6 @@ export interface MenuState {
 }
 
 export function ContextMenu({ menu, onClose }: { menu: MenuState | null; onClose: () => void }) {
-  const reduce = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
@@ -74,13 +72,10 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState | null; onClose
 
   if (!menu) return null;
   return createPortal(
-    <motion.div
+    <div
       ref={ref}
       role="menu"
       aria-label={menu.title}
-      initial={reduce ? false : { opacity: 0, scale: 0.96, y: -4 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      transition={{ type: "spring", stiffness: 520, damping: 34 }}
       style={{ left: pos?.left ?? menu.x, top: pos?.top ?? menu.y, visibility: pos ? "visible" : "hidden" }}
       className="liquid-glass liquid-glass--chip fixed z-[60] min-w-[200px] max-w-[280px] origin-top-left bg-[var(--bg-elev)] p-1 text-[12.5px] shadow-[var(--shadow)]"
       onContextMenu={(event) => event.preventDefault()}
@@ -112,7 +107,7 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState | null; onClose
           </button>
         </div>
       ))}
-    </motion.div>,
+    </div>,
     document.body,
   );
 }

@@ -9,7 +9,6 @@ import {
   Play,
   Pause,
 } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Shell } from "../components/Shell";
 import { ExportPanel } from "../components/ExportPanel";
 import { Glass } from "../components/Glass";
@@ -17,12 +16,20 @@ import { Guide } from "../components/Guide";
 import { t } from "../i18n";
 import { autoscale, fetchPlane, measure, projectionUrl } from "../lib/api";
 import { axisSize, detailMessage, formatUm, isSlide, rgbCss } from "../lib/format";
-import { histogram, renderComposite, unpackPlane } from "../lib/plane";
+import { histogram, histogramPath, renderComposite, unpackPlane } from "../lib/plane";
 import type { LutSetting, MeasureResult, PackedPlane, Tool } from "../lib/types";
 import { readPref, writePref } from "../lib/storage";
 import { useApp } from "../store";
 
 const TOUR_KEY = "nd2utils.tour.v1";
+
+/** Line-profile values as SVG polyline points in a 200 x 48 box. */
+function profilePoints(values: number[]): string {
+  let peak = 1;
+  for (const v of values) if (v > peak) peak = v;
+  const last = values.length - 1;
+  return values.map((v, i) => `${((i / last) * 200).toFixed(1)},${(48 - (v / peak) * 48).toFixed(1)}`).join(" ");
+}
 
 export function Advanced() {
   const { fileId } = useParams();
@@ -32,7 +39,6 @@ export function Advanced() {
   const refreshFiles = useApp((s) => s.refreshFiles);
   const select = useApp((s) => s.select);
   const nav = useNavigate();
-  const reduce = useReducedMotion();
   const id = fileId || selectedId || files[0]?.id || null;
 
   const [tIdx, setT] = useState(0);
@@ -40,6 +46,8 @@ export function Advanced() {
   const [pIdx, setP] = useState(0);
   const [packed, setPacked] = useState<PackedPlane | null>(null);
   const [luts, setLuts] = useState<LutSetting[]>([]);
+  /** Histogram range per channel: a bit beyond the auto-contrast white point of the plane. */
+  const [histMax, setHistMax] = useState<number[]>([]);
   const [tool, setTool] = useState<Tool>("probe");
   const [points, setPoints] = useState<number[][]>([]);
   const [result, setResult] = useState<MeasureResult | null>(null);
@@ -91,6 +99,7 @@ export function Advanced() {
         if (cancel) return;
         const plane = unpackPlane(buf);
         setPacked(plane);
+        setHistMax(plane.channels.map((ch, i) => Math.max(1, (scaled.channels[i]?.max ?? ch.suggestedMax) * 1.5)));
         setLuts((prev) =>
           plane.channels.map((ch, i) => {
             const old = prev[i];
@@ -139,10 +148,12 @@ export function Advanced() {
     return () => window.clearInterval(h);
   }, [playing, nT]);
 
-  const hist = useMemo(() => {
-    if (!packed) return [];
-    return packed.channels.map((ch, i) => histogram(ch.data, 96, luts[i]?.max));
-  }, [packed, luts]);
+  // Computed once per plane, not on every LUT change (that meant a pass over all pixels per slider step).
+  const hist = useMemo(
+    () => (packed ? packed.channels.map((ch, i) => histogram(ch.data, 96, histMax[i])) : []),
+    [packed, histMax],
+  );
+  const histPaths = useMemo(() => hist.map((counts) => histogramPath(counts, 28, histLog)), [hist, histLog]);
 
   function canvasPoint(e: React.PointerEvent<HTMLCanvasElement>): number[] {
     const r = e.currentTarget.getBoundingClientRect();
@@ -256,14 +267,7 @@ export function Advanced() {
             <Guide title="lutTitle" body="lutGuide" />
             <div className="mt-3 flex flex-col gap-3" data-tour="channels">
               {luts.map((lut, i) => (
-                <motion.div
-                  layout
-                  key={i}
-                  initial={reduce ? false : { opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.04 }}
-                  className="liquid-glass liquid-glass--chip p-2.5"
-                >
+                <div key={i} className="liquid-glass liquid-glass--chip p-2.5">
                   <label className="flex items-center gap-2 text-[12px]">
                     <input
                       type="checkbox"
@@ -323,24 +327,10 @@ export function Advanced() {
                       className="w-full"
                     />
                   </label>
-                  <svg viewBox="0 0 96 28" className="mt-1 h-8 w-full text-[var(--text-dim)]">
-                    {(hist[i] ?? []).map((c, x) => {
-                      const h = hist[i] ?? [];
-                      const peak = Math.max(1, ...h);
-                      const v = histLog ? Math.log10(c + 1) / Math.log10(peak + 1) : c / peak;
-                      return (
-                        <rect
-                          key={x}
-                          x={x}
-                          y={28 - v * 28}
-                          width="1"
-                          height={v * 28}
-                          fill={rgbCss(lut.color, lut.visible ? 0.85 : 0.25)}
-                        />
-                      );
-                    })}
+                  <svg viewBox="0 0 96 28" preserveAspectRatio="none" className="mt-1 h-8 w-full" aria-hidden>
+                    <path d={histPaths[i] ?? ""} fill={rgbCss(lut.color, lut.visible ? 0.85 : 0.25)} />
                   </svg>
-                </motion.div>
+                </div>
               ))}
             </div>
             <label className="mt-2 flex items-center gap-2 text-[12px]">
@@ -369,7 +359,7 @@ export function Advanced() {
                     setResult(null);
                   }}
                   aria-pressed={tool === k}
-                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] transition-all duration-200 ${
+                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${
                     tool === k ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"
                   }`}
                 >
@@ -400,7 +390,7 @@ export function Advanced() {
                   setError(null);
                 }}
                 aria-pressed={view === "overlay"}
-                className={`rounded-lg px-2.5 py-1.5 text-[11px] transition-all ${view === "overlay" ? "bg-white text-black" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
+                className={`rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${view === "overlay" ? "bg-white text-black" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
               >
                 {t(lang, "overlay")}
               </button>
@@ -421,14 +411,7 @@ export function Advanced() {
             </Glass>
             <div className="relative flex min-h-0 flex-1 items-center justify-center p-3">
               {view === "mip" && projSrc ? (
-                <motion.img
-                  key={projSrc}
-                  src={projSrc}
-                  alt={t(lang, "projectionAlt")}
-                  initial={reduce ? false : { opacity: 0, scale: 0.985 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="max-h-full max-w-full object-contain"
-                />
+                <img src={projSrc} alt={t(lang, "projectionAlt")} className="max-h-full max-w-full object-contain" />
               ) : (
                 <canvas
                   ref={canvasRef}
@@ -440,37 +423,20 @@ export function Advanced() {
                 />
               )}
             </div>
-            <AnimatePresence>
-              {loading && (
-                <motion.div
-                  role="status"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="absolute inset-x-0 bottom-0 top-11 flex items-center justify-center bg-black/25 backdrop-blur-[2px]"
-                >
-                  <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/45 px-3 py-2 font-mono text-[11px] text-white/65">
-                    <motion.span
-                      animate={reduce ? undefined : { rotate: 360 }}
-                      transition={{ duration: 1.1, repeat: Infinity, ease: "linear" }}
-                      className="h-3 w-3 rounded-full border border-white/25 border-t-[var(--accent)]"
-                    />
-                    {t(lang, "previewLoading")}
-                  </div>
-                </motion.div>
-              )}
-              {error && (
-                <motion.p
-                  role="alert"
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 4 }}
-                  className="absolute bottom-3 left-3 max-w-[calc(100%-1.5rem)] rounded-lg border border-red-300/15 bg-black/70 px-3 py-2 text-[12px] leading-5 text-red-100 shadow-lg backdrop-blur-md"
-                >
-                  {error}
-                </motion.p>
-              )}
-            </AnimatePresence>
+            {loading && (
+              <div role="status" className="pointer-events-none absolute right-3 top-14 flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-2 font-mono text-[11px] text-white/65">
+                <span className="spinner h-3 w-3 border-white/25 border-t-[var(--accent)]" />
+                {t(lang, "previewLoading")}
+              </div>
+            )}
+            {error && (
+              <p
+                role="alert"
+                className="absolute bottom-3 left-3 max-w-[calc(100%-1.5rem)] rounded-lg border border-red-300/15 bg-black/80 px-3 py-2 text-[12px] leading-5 text-red-100 shadow-lg"
+              >
+                {error}
+              </p>
+            )}
             {file && (
               <p className="absolute right-3 top-12 font-mono text-[11px] text-white/70">
                 {file.name}{file.objective ? ` · ${file.objective}` : ""}
@@ -518,24 +484,9 @@ export function Advanced() {
                     {c.name} {t(lang, "mean")} {c.mean?.toFixed(1)} {t(lang, "max")} {c.max?.toFixed(0)}
                   </p>
                 ))}
-                {result.profiles?.[0] && (
-                  <svg viewBox="0 0 200 48" className="mt-2 h-12 w-full">
-                    {result.profiles[0].values.map((v, i, arr) => {
-                      const peak = Math.max(...arr, 1);
-                      const x = (i / (arr.length - 1)) * 200;
-                      const y = 48 - (v / peak) * 48;
-                      return i === 0 ? null : (
-                        <line
-                          key={i}
-                          x1={((i - 1) / (arr.length - 1)) * 200}
-                          y1={48 - (arr[i - 1] / peak) * 48}
-                          x2={x}
-                          y2={y}
-                          stroke="var(--accent)"
-                          strokeWidth="1.2"
-                        />
-                      );
-                    })}
+                {result.profiles?.[0] && result.profiles[0].values.length > 1 && (
+                  <svg viewBox="0 0 200 48" preserveAspectRatio="none" className="mt-2 h-12 w-full" aria-hidden>
+                    <polyline points={profilePoints(result.profiles[0].values)} fill="none" stroke="var(--accent)" strokeWidth="1.2" vectorEffect="non-scaling-stroke" />
                   </svg>
                 )}
                 <button
@@ -593,74 +544,53 @@ export function Advanced() {
         </div>
       </div>
 
-      <AnimatePresence>
-        {tour != null && (
-          <motion.div
-            initial={reduce ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={reduce ? undefined : { opacity: 0 }}
-            className="fixed inset-0 z-30 flex items-end justify-center bg-black/48 p-4 backdrop-blur-[2px] sm:p-6"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t(lang, "help")}
-          >
-            <motion.div
-              initial={reduce ? false : { opacity: 0, y: 22, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={reduce ? undefined : { opacity: 0, y: 12, scale: 0.99 }}
-              transition={{ type: "spring", stiffness: 300, damping: 27 }}
-              className="w-full max-w-md"
-            >
-              <Glass shape="island" className="p-5">
-              <div className="mb-4 flex gap-1.5" aria-hidden>
-                {tourCopy.map((_, index) => (
-                  <motion.span
-                    key={index}
-                    animate={{ width: index === tour ? 22 : 6, opacity: index <= tour ? 1 : 0.35 }}
-                    className="h-1.5 rounded-full bg-[var(--accent)]"
-                  />
-                ))}
-              </div>
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.p
-                  key={tour}
-                  initial={reduce ? false : { opacity: 0, x: 8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={reduce ? undefined : { opacity: 0, x: -8 }}
-                  className="min-h-14 text-[14px] leading-6"
-                >
-                  {tourCopy[tour]}
-                </motion.p>
-              </AnimatePresence>
-              <div className="mt-5 flex items-center justify-between text-[13px]">
-                <button
-                  type="button"
-                  className="rounded-lg px-2 py-1.5 text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
-                  onClick={() => {
+      {tour != null && (
+        <div
+          className="fade-in fixed inset-0 z-30 flex items-end justify-center bg-black/48 p-4 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t(lang, "help")}
+        >
+          <div className="w-full max-w-md">
+            <Glass shape="island" className="p-5">
+            <div className="mb-4 flex gap-1.5" aria-hidden>
+              {tourCopy.map((_, index) => (
+                <span
+                  key={index}
+                  className="h-1.5 rounded-full bg-[var(--accent)] transition-[width,opacity] duration-200"
+                  style={{ width: index === tour ? 22 : 6, opacity: index <= tour ? 1 : 0.35 }}
+                />
+              ))}
+            </div>
+            <p className="min-h-14 text-[14px] leading-6">{tourCopy[tour]}</p>
+            <div className="mt-5 flex items-center justify-between text-[13px]">
+              <button
+                type="button"
+                className="rounded-lg px-2 py-1.5 text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                onClick={() => {
+                  writePref(TOUR_KEY, "1");
+                  setTour(null);
+                }}
+              >
+                {t(lang, "skipTour")}
+              </button>
+              <button
+                type="button"
+                className="rounded-xl bg-[var(--accent)] px-4 py-2 font-medium text-white transition-colors hover:bg-[var(--accent-strong)]"
+                onClick={() => {
+                  if (tour >= tourCopy.length - 1) {
                     writePref(TOUR_KEY, "1");
                     setTour(null);
-                  }}
-                >
-                  {t(lang, "skipTour")}
-                </button>
-                <button
-                  type="button"
-                  className="rounded-xl bg-[var(--accent)] px-4 py-2 font-medium text-white transition-all hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] active:scale-[0.98]"
-                  onClick={() => {
-                    if (tour >= tourCopy.length - 1) {
-                      writePref(TOUR_KEY, "1");
-                      setTour(null);
-                    } else setTour(tour + 1);
-                  }}
-                >
-                  {tour >= tourCopy.length - 1 ? t(lang, "done") : t(lang, "next")}
-                </button>
-              </div>
-              </Glass>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+                  } else setTour(tour + 1);
+                }}
+              >
+                {tour >= tourCopy.length - 1 ? t(lang, "done") : t(lang, "next")}
+              </button>
+            </div>
+            </Glass>
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }

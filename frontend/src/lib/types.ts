@@ -52,6 +52,8 @@ export interface FileSummary {
   created_at: number | null;
   /** Background preparation of the preview after import. */
   prepare?: "pending" | "ready" | "error" | null;
+  /** Version of the prepared previews (changes when the cache is rebuilt). */
+  prepared_at?: number | null;
 }
 
 export interface FileDetail extends FileSummary {
@@ -172,6 +174,8 @@ export interface SlideInfo {
   autoscale: { index: number; min: number; max: number; gamma: number }[];
   um_per_px: number | null;
   magnification: number | null;
+  /** Cache version (see FileSummary.prepared_at). */
+  version?: number;
 }
 
 export type SlideExportFormat = "ome-tiff" | "tiff" | "png" | "jpeg";
@@ -187,11 +191,18 @@ export interface PerformanceValues {
   prepare_workers: number;
   export_workers: number;
   raster_max_mpx: number;
+  local_cache: boolean;
+  local_cache_auto: boolean;
+  local_cache_mb: number;
+  cache_rebuild_users: boolean;
 }
 
 export interface PerformanceView {
   values: PerformanceValues;
-  schema: Record<keyof PerformanceValues, { type: "int" | "choice"; min?: number; max?: number; default: number | string; choices?: string[] }>;
+  schema: Record<
+    keyof PerformanceValues,
+    { type: "int" | "choice" | "bool"; min?: number; max?: number; default: number | string | boolean; choices?: string[] }
+  >;
   status: {
     cpu_count: number | null;
     memory_total: number | null;

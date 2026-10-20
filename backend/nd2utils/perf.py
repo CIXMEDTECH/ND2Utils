@@ -26,8 +26,23 @@ _NUMBERS: dict[str, tuple[int, int, int]] = {
     "prepare_workers": (2, 1, 32),
     "export_workers": (2, 1, 16),
     "raster_max_mpx": (64, 4, 1024),
+    # Browsers keep previews in IndexedDB up to this size (per browser profile).
+    "local_cache_mb": (2048, 64, 16384),
 }
-DEFAULTS: dict[str, Any] = {"render_mode": "auto", **{name: spec[0] for name, spec in _NUMBERS.items()}}
+# name -> default
+_SWITCHES: dict[str, bool] = {
+    # Browsers keep downloaded previews locally, so browsing a folder again needs no network.
+    "local_cache": True,
+    # ...and download every prepared preview of the workspace in the background (new imports too).
+    "local_cache_auto": True,
+    # Non-admin users may rebuild caches from the file tree (administrators always can).
+    "cache_rebuild_users": True,
+}
+DEFAULTS: dict[str, Any] = {
+    "render_mode": "auto",
+    **{name: spec[0] for name, spec in _NUMBERS.items()},
+    **_SWITCHES,
+}
 
 _LOCK = RLock()
 
@@ -44,6 +59,8 @@ def schema() -> dict[str, Any]:
     out: dict[str, Any] = {"render_mode": {"type": "choice", "choices": list(RENDER_MODES), "default": DEFAULTS["render_mode"]}}
     for name, (default, lo, hi) in _NUMBERS.items():
         out[name] = {"type": "int", "min": lo, "max": hi, "default": default}
+    for name, default in _SWITCHES.items():
+        out[name] = {"type": "bool", "default": default}
     return out
 
 
@@ -56,6 +73,9 @@ def _clean(raw: dict[str, Any]) -> dict[str, Any]:
         value = raw.get(name)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             out[name] = int(min(max(int(value), lo), hi))
+    for name in _SWITCHES:
+        if isinstance(raw.get(name), bool):
+            out[name] = raw[name]
     return out
 
 
@@ -81,6 +101,9 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(new, bool) or not isinstance(new, (int, float)) or not lo <= new <= hi:
                     raise PerfError(f"{name} must be a number between {lo} and {hi}.")
                 new = int(new)
+            elif name in _SWITCHES:
+                if not isinstance(new, bool):
+                    raise PerfError(f"{name} must be true or false.")
             else:
                 raise PerfError(f"Unknown setting {name!r}.")
             current[name] = new

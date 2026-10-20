@@ -421,6 +421,8 @@ export class SlideViewer {
   private gl: GlRenderer | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
   private readonly fileId: string;
+  /** Cache version of the file: part of tile URLs, so browsers may keep tiles until a rebuild. */
+  private readonly cacheVersion: string;
   private display: ChannelDisplay[] = [];
   private luts: ChannelLut[] = [];
   private version = 0;
@@ -463,6 +465,7 @@ export class SlideViewer {
     this.container = container;
     this.info = info;
     this.fileId = info.id;
+    this.cacheVersion = String(info.version ?? "");
     this.cx = info.width / 2;
     this.cy = info.height / 2;
     const layer = () => {
@@ -803,6 +806,7 @@ export class SlideViewer {
       c: channels.join(","),
       t: String(t),
       z: String(z),
+      v: this.cacheVersion,
     });
     const res = await fetch(`/api/files/${this.fileId}/slide/tile?${q}`, { signal });
     if (!res.ok) throw new Error(`tile ${res.status}`);
@@ -825,7 +829,7 @@ export class SlideViewer {
     signal?: AbortSignal,
     keep = true,
   ): Promise<ImageBitmap> {
-    const q = new URLSearchParams({ level: String(ref.level), x: String(ref.x), y: String(ref.y), d: display, t: String(t), z: String(z) });
+    const q = new URLSearchParams({ level: String(ref.level), x: String(ref.x), y: String(ref.y), d: display, t: String(t), z: String(z), v: this.cacheVersion });
     const res = await fetch(`/api/files/${this.fileId}/slide/render?${q}`, { signal });
     if (!res.ok) throw new Error(`tile ${res.status}`);
     const bitmap = await createImageBitmap(await res.blob());

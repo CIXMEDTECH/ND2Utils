@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { ArrowRight, Key, Translate, WarningCircle } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Glass } from "../components/Glass";
 import { Mark } from "../components/Mark";
 import { t } from "../i18n";
@@ -12,7 +11,6 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
   const lang = useApp((s) => s.lang);
   const setLang = useApp((s) => s.setLang);
   const setUser = useApp((s) => s.setUser);
-  const reduce = useReducedMotion();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(sessionEnded ? t(lang, "sessionEnded") : null);
@@ -48,12 +46,7 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
         <span className="text-[12px]">{t(lang, "lang")}</span>
       </button>
 
-      <motion.div
-        initial={reduce ? false : { opacity: 0, y: 18, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ type: "spring", bounce: 0.1, duration: 0.6 }}
-        className="relative z-[1] w-full max-w-[420px]"
-      >
+      <div className="relative z-[1] w-full max-w-[420px]">
         <Glass as="section" shape="card" className="p-7 sm:p-9">
           <div className="flex items-center gap-2.5 text-[var(--accent)]">
             <Mark />
@@ -82,20 +75,12 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
               </span>
             </label>
 
-            <AnimatePresence>
-              {error && (
-                <motion.p
-                  role="alert"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="flex items-start gap-1.5 overflow-hidden text-[12px] leading-5 text-[var(--danger)]"
-                >
-                  <WarningCircle size={15} className="mt-0.5 shrink-0" />
-                  {error}
-                </motion.p>
-              )}
-            </AnimatePresence>
+            {error && (
+              <p role="alert" className="flex items-start gap-1.5 overflow-hidden text-[12px] leading-5 text-[var(--danger)]">
+                <WarningCircle size={15} className="mt-0.5 shrink-0" />
+                {error}
+              </p>
+            )}
 
             <button type="submit" disabled={busy || !code.trim()} className="primary-action group mt-1 w-full disabled:opacity-45">
               {busy ? t(lang, "signingIn") : t(lang, "signIn")}
@@ -106,7 +91,7 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
           <p className="mt-6 text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "loginHint")}</p>
         </Glass>
         <p className="mx-auto mt-6 max-w-sm text-center text-[11px] leading-5 text-[var(--text-dim)]">{t(lang, "legal")}</p>
-      </motion.div>
+      </div>
     </div>
   );
 }

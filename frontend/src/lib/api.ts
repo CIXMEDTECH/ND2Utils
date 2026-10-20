@@ -34,7 +34,7 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
-async function parseError(res: Response): Promise<Error> {
+export async function parseError(res: Response): Promise<Error> {
   if (res.status === 401 && !res.url.includes("/api/auth/")) onUnauthorized?.();
   try {
     const body = (await res.json()) as { detail?: unknown };
@@ -75,6 +75,13 @@ export interface ServerSettings {
   ttl_hours: number;
   render_mode: RenderModeSetting;
   raster_max_pixels: number;
+  /** Browsers keep previews locally (IndexedDB), up to `local_cache_bytes`. */
+  local_cache: boolean;
+  /** ...and download every prepared preview of the workspace in the background. */
+  local_cache_auto: boolean;
+  local_cache_bytes: number;
+  /** The signed-in user may rebuild caches from the file tree. */
+  cache_rebuild: boolean;
 }
 
 export async function serverSettings(): Promise<ServerSettings> {
@@ -191,58 +198,9 @@ export async function deleteFile(id: string) {
   return json(await fetch(`/api/files/${id}`, { method: "DELETE" }));
 }
 
-export function previewUrl(
-  id: string,
-  opts: {
-    t?: number;
-    z?: number;
-    p?: number;
-    composite?: boolean;
-    scale_bar?: boolean;
-    visible?: boolean[];
-  } = {},
-): string {
-  const q = new URLSearchParams();
-  q.set("t", String(opts.t ?? 0));
-  q.set("z", String(opts.z ?? 0));
-  q.set("p", String(opts.p ?? 0));
-  q.set("composite", opts.composite === false ? "false" : "true");
-  q.set("scale_bar", opts.scale_bar === false ? "false" : "true");
-  if (opts.visible?.some((value) => !value)) {
-    q.set("visible", opts.visible.map((value) => (value ? "1" : "0")).join(","));
-  }
-  return `/api/files/${id}/preview?${q.toString()}`;
-}
-
-// Recently viewed / prefetched previews. Each entry is a few MB at most (8-bit channels).
-const DISPLAY_CACHE_LIMIT = 12;
-const displayCache = new Map<string, Promise<ArrayBuffer>>();
-
-/**
- * 8-bit, already auto-contrasted channels of the first plane (prepared by the server at import).
- * Results are kept in memory, so going back to a file, or one that was prefetched, is instant.
- */
-export function fetchDisplay(id: string): Promise<ArrayBuffer> {
-  const hit = displayCache.get(id);
-  if (hit) {
-    displayCache.delete(id);
-    displayCache.set(id, hit);
-    return hit;
-  }
-  const request = fetch(`/api/files/${id}/display`).then(async (res) => {
-    if (!res.ok) throw await parseError(res);
-    return res.arrayBuffer();
-  });
-  displayCache.set(id, request);
-  request.catch(() => displayCache.delete(id));
-  while (displayCache.size > DISPLAY_CACHE_LIMIT) {
-    displayCache.delete(displayCache.keys().next().value as string);
-  }
-  return request;
-}
-
-export function prefetchDisplay(ids: string[]) {
-  for (const id of ids) void fetchDisplay(id).catch(() => undefined);
+/** Prepare the previews of these files / everything below these folders again (in the background). */
+export async function rebuildCache(body: { file_ids?: string[]; folders?: string[] }) {
+  return json<{ count: number }>(await send("/api/cache/rebuild", "POST", body));
 }
 
 export async function fetchPlane(id: string, t = 0, z = 0, p = 0, signal?: AbortSignal): Promise<ArrayBuffer> {

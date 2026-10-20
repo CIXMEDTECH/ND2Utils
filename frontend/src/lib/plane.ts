@@ -5,7 +5,6 @@ export interface PreviewLayer {
   name: string;
 }
 
-const MAX_AUTOSCALE_SAMPLES = 131_072;
 const MAX_PREVIEW_EDGE = 2048;
 
 export function unpackPlane(buf: ArrayBuffer): PackedPlane {
@@ -61,33 +60,11 @@ export function mapLut(v: number, min: number, max: number, gamma: number): numb
   return Math.abs(gamma - 1) < 1e-6 ? y : Math.pow(y, 1 / (gamma || 1));
 }
 
-export function autoscaleLimits(
-  data: Float32Array,
-  pLo = 5,
-  pHi = 99.85,
-): [number, number] {
-  if (data.length === 0) return [0, 1];
-  const stride = Math.max(1, Math.ceil(data.length / MAX_AUTOSCALE_SAMPLES));
-  const sampled = new Float32Array(Math.ceil(data.length / stride));
-  let count = 0;
-  for (let i = 0; i < data.length; i += stride) {
-    const value = data[i];
-    if (Number.isFinite(value)) sampled[count++] = value;
-  }
-  if (count === 0) return [0, 1];
-  const sorted = sampled.subarray(0, count);
-  sorted.sort();
-  const percentile = (percent: number) => {
-    const position = ((count - 1) * percent) / 100;
-    const lower = Math.floor(position);
-    const upper = Math.ceil(position);
-    if (lower === upper) return sorted[lower];
-    const weight = position - lower;
-    return sorted[lower] * (1 - weight) + sorted[upper] * weight;
-  };
-  const lo = percentile(pLo);
-  const hi = percentile(pHi);
-  return hi > lo ? [lo, hi] : [lo, lo + 1];
+/** mapLut for every integer value 0..size-1 (u8/u16 planes hold integers). */
+function lutTable(size: number, min: number, max: number, gamma: number): Float32Array {
+  const table = new Float32Array(size);
+  for (let v = 0; v < size; v++) table[v] = mapLut(v, min, max, gamma);
+  return table;
 }
 
 export function renderComposite(
@@ -98,21 +75,22 @@ export function renderComposite(
   const { channels } = packed;
   const out = target.data;
   out.fill(0);
+  // Integer planes: one table lookup per pixel instead of a division and a pow.
+  const tableSize = packed.dtype === "u8" ? 256 : packed.dtype === "u16" ? 65536 : 0;
   for (let c = 0; c < channels.length; c++) {
     const lut = luts[c];
     if (!lut?.visible) continue;
     const plane = channels[c].data;
     const [cr, cg, cb] = lut.color;
-    const min = lut.min;
-    const max = lut.max;
     const gamma = lut.gamma || 1;
+    const table = tableSize ? lutTable(tableSize, lut.min, lut.max, gamma) : null;
     for (let i = 0; i < plane.length; i++) {
-      const y = mapLut(plane[i], min, max, gamma);
+      const y = table ? table[plane[i]] : mapLut(plane[i], lut.min, lut.max, gamma);
+      if (y === 0) continue;
       const o = i * 4;
       out[o] = Math.min(255, out[o] + y * cr);
       out[o + 1] = Math.min(255, out[o + 1] + y * cg);
       out[o + 2] = Math.min(255, out[o + 2] + y * cb);
-      out[o + 3] = 255;
     }
   }
   for (let i = 3; i < out.length; i += 4) out[i] = 255;
@@ -261,4 +239,17 @@ export function histogram(data: Float32Array, bins = 128, hi?: number): number[]
     counts[idx] += 1;
   }
   return counts;
+}
+
+/** Histogram counts as a filled SVG step path in a `counts.length` x `height` box. */
+export function histogramPath(counts: number[], height: number, log = false): string {
+  let peak = 1;
+  for (const c of counts) if (c > peak) peak = c;
+  const scale = (c: number) => (log ? Math.log10(c + 1) / Math.log10(peak + 1) : c / peak);
+  let d = `M0 ${height}`;
+  counts.forEach((c, x) => {
+    const y = (height - scale(c) * height).toFixed(2);
+    d += `V${y}H${x + 1}`;
+  });
+  return `${d}V${height}Z`;
 }

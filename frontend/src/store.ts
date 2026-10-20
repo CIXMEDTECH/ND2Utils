@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { AccessUser, FileDetail, FileSummary, JobInfo, Lang, Theme } from "./lib/types";
 import { readPref, writePref } from "./lib/storage";
 import { listJobs, listWorkspace, logout as apiLogout, me, setUnauthorizedHandler } from "./lib/api";
+import { configure as configureCache, signedOut as clearCache } from "./lib/previewCache";
 
 function systemDark(): boolean {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
@@ -90,7 +91,10 @@ export const useApp = create<AppState>((set, get) => ({
   },
   setUser: (user) => {
     // A different code means a different workspace: never show the previous one's data.
-    if (user?.id !== get().user?.id) set({ ...emptyWorkspace });
+    if (user?.id !== get().user?.id) {
+      set({ ...emptyWorkspace });
+      void configureCache(user?.id ?? null, true);
+    }
     set({ user, authChecked: true, sessionExpired: false });
   },
   signOut: async () => {
@@ -98,6 +102,8 @@ export const useApp = create<AppState>((set, get) => ({
       await apiLogout();
     } finally {
       get().setUser(null);
+      // Shared lab computers: no previews of this workspace stay behind.
+      await clearCache();
     }
   },
   refreshFiles: async () => {

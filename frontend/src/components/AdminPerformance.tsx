@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Gauge, WarningCircle } from "@phosphor-icons/react";
-import { AnimatePresence, motion } from "motion/react";
 import { t, type MsgKey } from "../i18n";
 import { getPerformance, resetPerformance, updatePerformance } from "../lib/api";
+import { configure as configureCache } from "../lib/previewCache";
 import { detailMessage, formatBytes } from "../lib/format";
 import type { PerformanceValues, PerformanceView, RenderModeSetting } from "../lib/types";
 import { useApp } from "../store";
 import { Glass } from "./Glass";
 
-type NumberKey = Exclude<keyof PerformanceValues, "render_mode">;
+type NumberKey = { [K in keyof PerformanceValues]: PerformanceValues[K] extends number ? K : never }[keyof PerformanceValues];
+type SwitchKey = { [K in keyof PerformanceValues]: PerformanceValues[K] extends boolean ? K : never }[keyof PerformanceValues];
+type NumberItem = { key: NumberKey; label: MsgKey; hint: MsgKey; unit?: MsgKey; step?: number };
 
-const NUMBERS: { key: NumberKey; label: MsgKey; hint: MsgKey; unit?: MsgKey; step?: number }[] = [
+const NUMBERS: NumberItem[] = [
   { key: "tile_cache_mb", label: "perfTileCache", hint: "perfTileCacheHint", unit: "unitMb", step: 32 },
   { key: "render_cache_mb", label: "perfRenderCache", hint: "perfRenderCacheHint", unit: "unitMb", step: 32 },
   { key: "server_tile_quality", label: "perfQuality", hint: "perfQualityHint" },
@@ -19,6 +21,14 @@ const NUMBERS: { key: NumberKey; label: MsgKey; hint: MsgKey; unit?: MsgKey; ste
   { key: "export_workers", label: "perfExports", hint: "perfExportsHint", unit: "unitCount" },
   { key: "raster_max_mpx", label: "perfRaster", hint: "perfRasterHint", unit: "unitMpx", step: 4 },
 ];
+
+const CACHE_SWITCHES: { key: SwitchKey; label: MsgKey; hint: MsgKey; needs?: SwitchKey }[] = [
+  { key: "local_cache", label: "perfLocalCache", hint: "perfLocalCacheHint" },
+  { key: "local_cache_auto", label: "perfLocalCacheAuto", hint: "perfLocalCacheAutoHint", needs: "local_cache" },
+  { key: "cache_rebuild_users", label: "perfRebuildUsers", hint: "perfRebuildUsersHint" },
+];
+
+const CACHE_SIZE: NumberItem = { key: "local_cache_mb", label: "perfLocalCacheSize", hint: "perfLocalCacheSizeHint", unit: "unitMb", step: 256 };
 
 const MODES: { key: RenderModeSetting; label: MsgKey; hint: MsgKey }[] = [
   { key: "auto", label: "renderAuto", hint: "renderAutoHint" },
@@ -29,6 +39,7 @@ const MODES: { key: RenderModeSetting; label: MsgKey; hint: MsgKey }[] = [
 /** Administrators: performance settings, applied on the server without a restart. */
 export function AdminPerformance() {
   const lang = useApp((s) => s.lang);
+  const userId = useApp((s) => s.user?.id ?? null);
   const [view, setView] = useState<PerformanceView | null>(null);
   const [draft, setDraft] = useState<PerformanceValues | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,6 +79,8 @@ export function AdminPerformance() {
       const next = await action();
       setView(next);
       setDraft(next.values);
+      // This browser follows the new cache settings right away (others on their next load).
+      void configureCache(userId, true);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2200);
     } catch (err) {
@@ -75,6 +88,56 @@ export function AdminPerformance() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function numberField(item: NumberItem) {
+    if (!draft || !view) return null;
+    const spec = view.schema[item.key];
+    const min = spec.min ?? 0;
+    const max = spec.max ?? 100;
+    const value = draft[item.key];
+    const set = (next: number) => {
+      if (Number.isNaN(next)) return;
+      setDraft({ ...draft, [item.key]: Math.round(Math.min(max, Math.max(min, next))) });
+    };
+    const unit = item.unit ? t(lang, item.unit) : "";
+    return (
+      <div key={item.key} className="grid gap-1.5">
+        <div className="flex items-baseline justify-between gap-3">
+          <label htmlFor={`perf-${item.key}`} className="text-[12.5px] font-medium">
+            {t(lang, item.label)}
+          </label>
+          <span className="flex items-center gap-1.5">
+            <input
+              id={`perf-${item.key}`}
+              type="number"
+              min={min}
+              max={max}
+              step={item.step ?? 1}
+              value={value}
+              onChange={(event) => set(Number(event.target.value))}
+              className="h-8 w-24 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-right font-mono text-[12px] tabular-nums focus:border-[var(--accent)]"
+            />
+            {unit && <span className="w-14 text-[11px] text-[var(--text-dim)]">{unit}</span>}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={item.step ?? 1}
+          value={value}
+          onChange={(event) => set(Number(event.target.value))}
+          aria-label={t(lang, item.label)}
+        />
+        <p className="flex justify-between gap-3 text-[11px] leading-4 text-[var(--text-dim)]">
+          <span>{t(lang, item.hint)}</span>
+          <span className="shrink-0 font-mono">
+            {t(lang, "perfDefault")} {String(spec.default)}
+          </span>
+        </p>
+      </div>
+    );
   }
 
   const status = view?.status;
@@ -149,69 +212,45 @@ export function AdminPerformance() {
                 </p>
               </fieldset>
 
-              {NUMBERS.map((item) => {
-                const spec = view.schema[item.key];
-                const min = spec.min ?? 0;
-                const max = spec.max ?? 100;
-                const value = draft[item.key];
-                const set = (next: number) => {
-                  if (Number.isNaN(next)) return;
-                  setDraft({ ...draft, [item.key]: Math.round(Math.min(max, Math.max(min, next))) });
-                };
-                const unit = item.unit ? t(lang, item.unit) : "";
-                return (
-                  <div key={item.key} className="grid gap-1.5">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <label htmlFor={`perf-${item.key}`} className="text-[12.5px] font-medium">
-                        {t(lang, item.label)}
-                      </label>
-                      <span className="flex items-center gap-1.5">
-                        <input
-                          id={`perf-${item.key}`}
-                          type="number"
-                          min={min}
-                          max={max}
-                          step={item.step ?? 1}
-                          value={value}
-                          onChange={(event) => set(Number(event.target.value))}
-                          className="h-8 w-24 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-right font-mono text-[12px] tabular-nums focus:border-[var(--accent)]"
-                        />
-                        {unit && <span className="w-14 text-[11px] text-[var(--text-dim)]">{unit}</span>}
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={min}
-                      max={max}
-                      step={item.step ?? 1}
-                      value={value}
-                      onChange={(event) => set(Number(event.target.value))}
-                      aria-label={t(lang, item.label)}
-                    />
-                    <p className="flex justify-between gap-3 text-[11px] leading-4 text-[var(--text-dim)]">
-                      <span>{t(lang, item.hint)}</span>
-                      <span className="shrink-0 font-mono">
-                        {t(lang, "perfDefault")} {String(spec.default)}
-                      </span>
-                    </p>
-                  </div>
-                );
-              })}
+              {NUMBERS.map(numberField)}
 
-              <AnimatePresence>
-                {error && (
-                  <motion.p
-                    role="alert"
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]"
-                  >
-                    <WarningCircle size={15} className="mt-0.5 shrink-0" />
-                    {error}
-                  </motion.p>
-                )}
-              </AnimatePresence>
+              <fieldset className="grid gap-4 border-t border-[var(--line)] pt-5">
+                <legend className="float-left mb-1 text-[13px] font-semibold">{t(lang, "perfCacheSection")}</legend>
+                <p className="clear-both -mt-2 text-[11.5px] leading-5 text-[var(--text-dim)]">{t(lang, "perfCacheIntro")}</p>
+                {CACHE_SWITCHES.map((item) => {
+                  const disabled = Boolean(item.needs && !draft[item.needs]);
+                  const on = draft[item.key] && !disabled;
+                  return (
+                    <div key={item.key} className={`flex items-start justify-between gap-4 ${disabled ? "opacity-45" : ""}`}>
+                      <div className="min-w-0">
+                        <p id={`perf-${item.key}`} className="text-[12.5px] font-medium">
+                          {t(lang, item.label)}
+                        </p>
+                        <p className="mt-0.5 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, item.hint)}</p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={on}
+                        aria-labelledby={`perf-${item.key}`}
+                        disabled={disabled}
+                        onClick={() => setDraft({ ...draft, [item.key]: !draft[item.key] })}
+                        className={`relative mt-0.5 h-6 w-10 shrink-0 rounded-full transition-colors ${on ? "bg-[var(--accent)]" : "bg-[var(--line-strong)]"}`}
+                      >
+                        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-[left] duration-150 ${on ? "left-[18px]" : "left-0.5"}`} />
+                      </button>
+                    </div>
+                  );
+                })}
+                <div className={draft.local_cache ? "" : "pointer-events-none opacity-45"}>{numberField(CACHE_SIZE)}</div>
+              </fieldset>
+
+              {error && (
+                <p role="alert" className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]">
+                  <WarningCircle size={15} className="mt-0.5 shrink-0" />
+                  {error}
+                </p>
+              )}
 
               <div className="flex flex-wrap items-center gap-2">
                 <button

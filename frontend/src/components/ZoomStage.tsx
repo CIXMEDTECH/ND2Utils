@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Minus, Plus } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { t } from "../i18n";
 import { useApp } from "../store";
 
@@ -27,7 +26,6 @@ export function ZoomStage({
   mediaLoading?: boolean;
 }) {
   const lang = useApp((s) => s.lang);
-  const reduce = useReducedMotion();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
@@ -157,7 +155,6 @@ export function ZoomStage({
             style={{
               transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
               transformOrigin: "center center",
-              transition: dragging || reduce ? "none" : "transform 180ms cubic-bezier(0.16, 1, 0.3, 1)",
             }}
           >
             {media}
@@ -171,7 +168,6 @@ export function ZoomStage({
             style={{
               transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
               transformOrigin: "center center",
-              transition: dragging || reduce ? "none" : "transform 180ms cubic-bezier(0.16, 1, 0.3, 1)",
             }}
           />
         ) : (
@@ -180,26 +176,14 @@ export function ZoomStage({
           </div>
         )}
 
-        <AnimatePresence>
-          {previewLoading && (
-            <motion.div
-              role="status"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="pointer-events-none absolute right-3 top-3 z-10"
-            >
-              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/45 px-3 py-2 font-mono text-[11px] text-white/65 backdrop-blur-md">
-                <motion.span
-                  animate={reduce ? undefined : { rotate: 360 }}
-                  transition={{ duration: 1.1, repeat: Infinity, ease: "linear" }}
-                  className="h-3 w-3 rounded-full border border-white/25 border-t-[var(--accent)]"
-                />
-                {t(lang, "previewLoading")}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {previewLoading && (
+          <div role="status" className="pointer-events-none absolute right-3 top-3 z-10">
+            <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-2 font-mono text-[11px] text-white/65">
+              <span className="spinner h-3 w-3 border-white/25 border-t-[var(--accent)]" />
+              {t(lang, "previewLoading")}
+            </div>
+          </div>
+        )}
 
         {children ? (
           <div

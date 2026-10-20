@@ -473,15 +473,25 @@ def api_me(request: Request) -> dict[str, Any]:
     return {"authenticated": True, "user": _user_info(user)}
 
 
+def _may_rebuild(user: dict[str, Any]) -> bool:
+    return user.get("role") == "admin" or bool(perf.value("cache_rebuild_users"))
+
+
 @app.get("/api/settings")
-def get_settings(_user: CurrentUser) -> dict[str, Any]:
+def get_settings(user: CurrentUser) -> dict[str, Any]:
+    values = perf.get()
     return {
         "version": __version__,
         "max_upload_bytes": settings.max_upload_bytes,
         "ttl_hours": settings.ttl_hours,
         # How slide tiles are composited: in the browser (GPU), on the server, or decided per browser.
-        "render_mode": perf.value("render_mode"),
-        "raster_max_pixels": perf.value("raster_max_mpx") * 1_000_000,
+        "render_mode": values["render_mode"],
+        "raster_max_pixels": values["raster_max_mpx"] * 1_000_000,
+        # Previews kept by the browser (IndexedDB), see Settings → Performance.
+        "local_cache": values["local_cache"],
+        "local_cache_auto": values["local_cache"] and values["local_cache_auto"],
+        "local_cache_bytes": values["local_cache_mb"] * 1024 * 1024,
+        "cache_rebuild": _may_rebuild(user),
     }
 
 
@@ -628,7 +638,7 @@ _SUMMARY_KEYS = (
     "id", "name", "folder", "format", "levels", "size_bytes", "status", "error", "version", "dtype",
     "shape", "axes", "width", "height", "channels", "voxel_um",
     "objective", "magnification", "na", "acquired", "instrument",
-    "software", "bits_significant", "is_rgb", "created_at", "prepare",
+    "software", "bits_significant", "is_rgb", "created_at", "prepare", "prepared_at",
 )
 
 
@@ -760,6 +770,31 @@ def api_chunk_complete(upload_id: str, owner_id: Owner) -> dict[str, Any]:
     return _public(rec)
 
 
+class RebuildBody(BaseModel):
+    file_ids: list[str] = []
+    folders: list[str] = []
+
+
+@app.post("/api/cache/rebuild")
+def api_rebuild_cache(body: RebuildBody, user: CurrentUser) -> dict[str, int]:
+    """Prepare the previews of these files (and of every file below these folders) again."""
+    if not _may_rebuild(user):
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Rebuilding caches is turned off."})
+    owner_id = user["id"]
+    ids: list[str] = []
+    for raw in body.folders:
+        folder = _folder_arg(raw)
+        if folder and folder not in list_folders(owner_id):
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Folder not found."})
+        ids.extend(rec["id"] for rec in files_in_folder(owner_id, folder))
+    for file_id in body.file_ids:
+        _owned_file(file_id, owner_id)
+        ids.append(file_id)
+    # Files still being imported or that failed to import have nothing to rebuild.
+    ready = [file_id for file_id in dict.fromkeys(ids) if (get_owned_file(file_id, owner_id) or {}).get("status") == "ready"]
+    return {"count": prepare.rebuild(ready)}
+
+
 @app.get("/api/files/{file_id}")
 def api_file(file_id: str, owner_id: Owner) -> dict[str, Any]:
     _need(file_id, owner_id)
@@ -849,9 +884,22 @@ def _prepared(file_id: str, owner_id: str, kind: str, t: int, z: int, p: int) ->
 
 
 @app.get("/api/files/{file_id}/display")
-def api_display(file_id: str, request: Request, owner_id: Owner, t: int = 0, z: int = 0, p: int = 0) -> Response:
-    """8-bit, auto-contrasted channels for the workspace preview (same layout as /plane)."""
+def api_display(
+    file_id: str,
+    request: Request,
+    owner_id: Owner,
+    t: int = 0,
+    z: int = 0,
+    p: int = 0,
+    wire: Literal["auto", "gzip"] = "auto",
+) -> Response:
+    """8-bit, auto-contrasted channels for the workspace preview (same layout as /plane).
+
+    `wire=gzip` sends the stored gzip file as is (application/gzip): browsers keep it compressed
+    in their local cache and decompress it themselves."""
     body = _prepared(file_id, owner_id, "display", t, z, p)
+    if wire == "gzip":
+        return Response(content=body, media_type="application/gzip")
     return _gzip_response(request, body)
 
 
@@ -989,6 +1037,14 @@ def api_orthogonal(
 # --- whole-slide (OME-TIFF) viewer --------------------------------------------------
 
 
+def _tile_cache_control(version: str) -> str:
+    """Tiles never change for a file. With the cache version in the URL (and the local cache on)
+    browsers may keep them for a week; otherwise for the session, as before."""
+    if version and perf.value("local_cache"):
+        return "private, max-age=604800"
+    return "private, max-age=3600"
+
+
 @app.get("/api/files/{file_id}/slide")
 def api_slide(file_id: str, owner_id: Owner) -> dict[str, Any]:
     """Resolution levels and tile grid for the slide viewer (builds missing pyramid levels first)."""
@@ -1007,6 +1063,8 @@ def api_slide(file_id: str, owner_id: Owner) -> dict[str, Any]:
         "autoscale": limits.get("channels") or [],
         "um_per_px": (rec.get("voxel_um") or [None])[0],
         "magnification": rec.get("magnification"),
+        # Tile URLs carry it, so browsers may keep tiles until the cache is rebuilt.
+        "version": rec.get("prepared_at") or rec.get("created_at") or 0,
     }
 
 
@@ -1021,6 +1079,7 @@ def api_slide_tile(
     c: str = "",
     t: int = 0,
     z: int = 0,
+    v: str = "",
 ) -> Response:
     """Native-value channels of one TILE x TILE viewer tile (packed planes, gzip)."""
     rec = _need_slide(file_id, owner_id)
@@ -1040,8 +1099,7 @@ def api_slide_tile(
     meta = rec.get("channels") or []
     body = gzip.compress(pack_planes(planes, [meta[ch] if ch < len(meta) else {} for ch in channels]), compresslevel=1)
     response = _gzip_response(request, body)
-    # Tiles of an uploaded file never change: let the browser keep them for the session.
-    response.headers["Cache-Control"] = "private, max-age=3600"
+    response.headers["Cache-Control"] = _tile_cache_control(v)
     return response
 
 
@@ -1055,6 +1113,7 @@ def api_slide_render(
     d: str = "",
     t: int = 0,
     z: int = 0,
+    v: str = "",
 ) -> Response:
     """A viewer tile composited on the server (render mode "server"), as JPEG.
 
@@ -1074,7 +1133,7 @@ def api_slide_render(
     except SlideError as exc:
         raise HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)}) from exc
     # The URL carries the display settings, so a tile at a URL never changes.
-    return Response(content=body, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+    return Response(content=body, media_type="image/jpeg", headers={"Cache-Control": _tile_cache_control(v)})
 
 
 @app.post("/api/files/{file_id}/slide/export")

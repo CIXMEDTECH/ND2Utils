@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { ArrowRight, WarningCircle } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import { t } from "../i18n";
 import { startExport } from "../lib/api";
@@ -27,7 +26,6 @@ export function ExportPanel({
   const lang = useApp((s) => s.lang);
   const nav = useNavigate();
   const refreshJobs = useApp((s) => s.refreshJobs);
-  const reduce = useReducedMotion();
   const [format, setFormat] = useState<"ome-tiff" | "tiff" | "png" | "jpeg">("ome-tiff");
   const [scope, setScope] = useState<"current" | "all">("current");
   const [channelsMode, setChannelsMode] = useState<"composite" | "split" | "both">("composite");
@@ -83,17 +81,7 @@ export function ExportPanel({
         </select>
       </label>
 
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={format}
-          initial={reduce ? false : { opacity: 0, y: 5 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={reduce ? undefined : { opacity: 0, y: -4 }}
-          transition={{ duration: 0.18 }}
-        >
-          <Guide title="export" body={format === "ome-tiff" ? "omeHint" : format === "tiff" ? "tiffHint" : "displayWarn"} />
-        </motion.div>
-      </AnimatePresence>
+      <Guide title="export" body={format === "ome-tiff" ? "omeHint" : format === "tiff" ? "tiffHint" : "displayWarn"} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1">
         <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
@@ -124,37 +112,22 @@ export function ExportPanel({
         </label>
       </div>
 
-      <AnimatePresence>
-        {format === "jpeg" && (
-          <motion.label
-            initial={reduce ? false : { opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={reduce ? undefined : { opacity: 0, height: 0 }}
-            className="grid gap-2 overflow-hidden text-[11px] font-medium text-[var(--text-dim)]"
-          >
-            <span className="flex items-center justify-between">
-              {t(lang, "jpegQ")}
-              <span className="font-mono tabular-nums text-[var(--text)]">{jpegQuality}</span>
-            </span>
-            <input type="range" min={60} max={98} value={jpegQuality} onChange={(event) => setJpegQuality(Number(event.target.value))} />
-          </motion.label>
-        )}
-      </AnimatePresence>
+      {format === "jpeg" && (
+        <label className="grid gap-2 overflow-hidden text-[11px] font-medium text-[var(--text-dim)]">
+          <span className="flex items-center justify-between">
+            {t(lang, "jpegQ")}
+            <span className="font-mono tabular-nums text-[var(--text)]">{jpegQuality}</span>
+          </span>
+          <input type="range" min={60} max={98} value={jpegQuality} onChange={(event) => setJpegQuality(Number(event.target.value))} />
+        </label>
+      )}
 
-      <AnimatePresence>
-        {error && (
-          <motion.p
-            role="alert"
-            initial={{ opacity: 0, y: 5 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]"
-          >
-            <WarningCircle size={15} className="mt-0.5 shrink-0" />
-            {error}
-          </motion.p>
-        )}
-      </AnimatePresence>
+      {error && (
+        <p role="alert" className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]">
+          <WarningCircle size={15} className="mt-0.5 shrink-0" />
+          {error}
+        </p>
+      )}
 
       <button
         type="button"
@@ -164,11 +137,7 @@ export function ExportPanel({
       >
         <span className="inline-flex items-center gap-2">
           {busy && (
-            <motion.span
-              animate={reduce ? undefined : { rotate: 360 }}
-              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-              className="h-3.5 w-3.5 rounded-full border border-white/35 border-t-white"
-            />
+            <span className="spinner h-3.5 w-3.5 rounded-full border border-white/35 border-t-white" />
           )}
           {busy ? t(lang, "jobRunning") : t(lang, "startExport")}
         </span>

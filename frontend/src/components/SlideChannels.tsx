@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Eye, EyeSlash, SlidersHorizontal } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { t } from "../i18n";
 import { rgbCss } from "../lib/format";
 import type { ChannelDisplay } from "../lib/slide";
@@ -50,7 +49,6 @@ export function SlideChannels({
   onAuto: () => void;
 }) {
   const lang = useApp((s) => s.lang);
-  const reduce = useReducedMotion();
   const [open, setOpen] = useState<number | null>(null);
   const float = info.dtype.startsWith("float");
 
@@ -107,92 +105,84 @@ export function SlideChannels({
               </button>
             </div>
 
-            <AnimatePresence initial={false}>
-              {expanded && (
-                <motion.div
-                  initial={reduce ? false : { height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={reduce ? undefined : { height: 0, opacity: 0 }}
-                  transition={{ duration: 0.18 }}
-                  className="overflow-hidden"
-                >
-                  <div className="grid gap-2 px-2 pb-2.5 pt-1 text-[10.5px] text-[var(--text-dim)]">
-                    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t(lang, "channelColor")}>
-                      {SWATCHES.map((color) => (
-                        <button
-                          key={color.join()}
-                          type="button"
-                          onClick={() => patch(i, { color })}
-                          aria-label={hex(color)}
-                          className={`h-4 w-4 rounded-full ring-offset-1 ring-offset-[var(--bg)] transition-transform hover:scale-110 ${d.color.join() === color.join() ? "ring-2 ring-[var(--text)]" : "ring-1 ring-[var(--line-strong)]"}`}
-                          style={{ background: rgbCss(color) }}
-                        />
-                      ))}
-                      <label className="relative ml-auto h-4 w-4 cursor-pointer overflow-hidden rounded-full ring-1 ring-[var(--line-strong)]" title={t(lang, "channelColor")} style={{ background: "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }}>
-                        <input
-                          type="color"
-                          value={hex(d.color)}
-                          onChange={(event) => patch(i, { color: fromHex(event.target.value) })}
-                          className="absolute inset-0 cursor-pointer opacity-0"
-                          aria-label={`${t(lang, "channelColor")} ${name}`}
-                        />
-                      </label>
-                    </div>
-                    <label className="grid gap-0.5">
-                      <span className="flex justify-between">
-                        {t(lang, "min")}
-                        <span className="font-mono tabular-nums text-[var(--text)]">{float ? d.min.toPrecision(3) : Math.round(d.min)}</span>
-                      </span>
+            {expanded && (
+              <div className="overflow-hidden">
+                <div className="grid gap-2 px-2 pb-2.5 pt-1 text-[10.5px] text-[var(--text-dim)]">
+                  <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t(lang, "channelColor")}>
+                    {SWATCHES.map((color) => (
+                      <button
+                        key={color.join()}
+                        type="button"
+                        onClick={() => patch(i, { color })}
+                        aria-label={hex(color)}
+                        className={`h-4 w-4 rounded-full ring-offset-1 ring-offset-[var(--bg)] transition-transform hover:scale-110 ${d.color.join() === color.join() ? "ring-2 ring-[var(--text)]" : "ring-1 ring-[var(--line-strong)]"}`}
+                        style={{ background: rgbCss(color) }}
+                      />
+                    ))}
+                    <label className="relative ml-auto h-4 w-4 cursor-pointer overflow-hidden rounded-full ring-1 ring-[var(--line-strong)]" title={t(lang, "channelColor")} style={{ background: "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }}>
                       <input
-                        type="range"
-                        min={0}
-                        max={top}
-                        step={step}
-                        value={d.min}
-                        onChange={(event) => patch(i, { min: Math.min(Number(event.target.value), d.max - step) })}
-                        className="w-full"
+                        type="color"
+                        value={hex(d.color)}
+                        onChange={(event) => patch(i, { color: fromHex(event.target.value) })}
+                        className="absolute inset-0 cursor-pointer opacity-0"
+                        aria-label={`${t(lang, "channelColor")} ${name}`}
                       />
                     </label>
-                    <label className="grid gap-0.5">
-                      <span className="flex justify-between">
-                        {t(lang, "max")}
-                        <span className="font-mono tabular-nums text-[var(--text)]">{float ? d.max.toPrecision(3) : Math.round(d.max)}</span>
-                      </span>
-                      <input
-                        type="range"
-                        min={0}
-                        max={top}
-                        step={step}
-                        value={d.max}
-                        onChange={(event) => patch(i, { max: Math.max(Number(event.target.value), d.min + step) })}
-                        className="w-full"
-                      />
-                    </label>
-                    <label className="grid gap-0.5">
-                      <span className="flex justify-between">
-                        γ<span className="font-mono tabular-nums text-[var(--text)]">{d.gamma.toFixed(2)}</span>
-                      </span>
-                      <input
-                        type="range"
-                        min={0.3}
-                        max={3}
-                        step={0.05}
-                        value={d.gamma}
-                        onChange={(event) => patch(i, { gamma: Number(event.target.value) })}
-                        className="w-full"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => onChange(display.map((x, j) => ({ ...x, visible: j === i })))}
-                      className="justify-self-start rounded-md px-1.5 py-1 text-[11px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
-                    >
-                      {t(lang, "solo")}
-                    </button>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                  <label className="grid gap-0.5">
+                    <span className="flex justify-between">
+                      {t(lang, "min")}
+                      <span className="font-mono tabular-nums text-[var(--text)]">{float ? d.min.toPrecision(3) : Math.round(d.min)}</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={top}
+                      step={step}
+                      value={d.min}
+                      onChange={(event) => patch(i, { min: Math.min(Number(event.target.value), d.max - step) })}
+                      className="w-full"
+                    />
+                  </label>
+                  <label className="grid gap-0.5">
+                    <span className="flex justify-between">
+                      {t(lang, "max")}
+                      <span className="font-mono tabular-nums text-[var(--text)]">{float ? d.max.toPrecision(3) : Math.round(d.max)}</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={top}
+                      step={step}
+                      value={d.max}
+                      onChange={(event) => patch(i, { max: Math.max(Number(event.target.value), d.min + step) })}
+                      className="w-full"
+                    />
+                  </label>
+                  <label className="grid gap-0.5">
+                    <span className="flex justify-between">
+                      γ<span className="font-mono tabular-nums text-[var(--text)]">{d.gamma.toFixed(2)}</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0.3}
+                      max={3}
+                      step={0.05}
+                      value={d.gamma}
+                      onChange={(event) => patch(i, { gamma: Number(event.target.value) })}
+                      className="w-full"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => onChange(display.map((x, j) => ({ ...x, visible: j === i })))}
+                    className="justify-self-start rounded-md px-1.5 py-1 text-[11px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                  >
+                    {t(lang, "solo")}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })}

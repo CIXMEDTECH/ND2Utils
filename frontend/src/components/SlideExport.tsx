@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, DownloadSimple, WarningCircle } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import { t, type MsgKey } from "../i18n";
 import { ApiError, clientSettings, getJob, jobDownloadUrl, startSlideExport } from "../lib/api";
@@ -57,7 +56,6 @@ export function SlideExport({
   const lang = useApp((s) => s.lang);
   const refreshJobs = useApp((s) => s.refreshJobs);
   const nav = useNavigate();
-  const reduce = useReducedMotion();
   const [format, setFormat] = useState<SlideExportFormat>("ome-tiff");
   const [mode, setMode] = useState<RegionMode>(selection ? "selection" : "view");
   const [level, setLevel] = useState(0);
@@ -222,20 +220,12 @@ export function SlideExport({
         </label>
       )}
 
-      <AnimatePresence>
-        {error && (
-          <motion.p
-            role="alert"
-            initial={{ opacity: 0, y: 5 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]"
-          >
-            <WarningCircle size={15} className="mt-0.5 shrink-0" />
-            {error}
-          </motion.p>
-        )}
-      </AnimatePresence>
+      {error && (
+        <p role="alert" className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]">
+          <WarningCircle size={15} className="mt-0.5 shrink-0" />
+          {error}
+        </p>
+      )}
 
       <button
         type="button"
@@ -245,11 +235,7 @@ export function SlideExport({
       >
         <span className="inline-flex items-center gap-2">
           {(busy || running) && (
-            <motion.span
-              animate={reduce ? undefined : { rotate: 360 }}
-              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-              className="h-3.5 w-3.5 rounded-full border border-white/35 border-t-white"
-            />
+            <span className="spinner h-3.5 w-3.5 rounded-full border border-white/35 border-t-white" />
           )}
           {busy || running ? t(lang, "jobRunning") : t(lang, "startExport")}
         </span>
@@ -265,10 +251,9 @@ export function SlideExport({
             <span className="font-mono tabular-nums text-[11px]">{Math.round((job.progress ?? 0) * 100)}%</span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--bg)]">
-            <motion.div
-              className={`h-full rounded-full ${job.status === "error" ? "bg-[var(--danger)]" : "bg-[var(--accent)]"}`}
-              animate={{ width: `${Math.max(2, (job.progress ?? 0) * 100)}%` }}
-              transition={{ duration: 0.3 }}
+            <div
+              className={`h-full rounded-full transition-[width] duration-300 ${job.status === "error" ? "bg-[var(--danger)]" : "bg-[var(--accent)]"}`}
+              style={{ width: `${Math.max(2, (job.progress ?? 0) * 100)}%` }}
             />
           </div>
           {job.status === "error" && job.error && <p className="mt-2 leading-5 text-[var(--danger)]">{job.error}</p>}

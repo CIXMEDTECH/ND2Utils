@@ -3,8 +3,12 @@
 Right after import every file is queued here. A worker reads its first plane once and stores,
 under cache/<file id>/:
 
-- display_0_0_0.bin.gz  8-bit, auto-contrasted channels (what the workspace preview shows)
-- autoscale_0_0_0.json  per-channel auto-contrast limits
+- display_0_0_0.bin.gz  8-bit, auto-contrasted channels (what the workspace preview shows),
+                        reduced to at most DISPLAY_EDGE pixels on the long side
+- autoscale_0_0_0.json  per-channel auto-contrast limits (from the full-resolution plane)
+
+When a file is ready its record gets `prepared_at`, the version of these cache files. Browsers key
+their local copies of the preview by it, so a rebuild (see `rebuild`) replaces them everywhere.
 
 Opening a file afterwards only streams a small pre-compressed blob instead of reading the ND2,
 sending megabytes of raw 16-bit data and auto-contrasting it in the browser.
@@ -20,7 +24,9 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import math
 import shutil
+import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from threading import Lock, RLock
@@ -37,10 +43,14 @@ log = logging.getLogger("nd2utils.prepare")
 
 DEFAULT = (0, 0, 0)
 _KINDS = ("display", "autoscale")
+# The workspace preview is drawn at most this large, so the display data never needs more pixels.
+DISPLAY_EDGE = 2048
 
 _GUARD = Lock()
 _FILE_LOCKS: dict[str, RLock] = {}
 _QUEUED: dict[str, Future] = {}
+# Files whose cache was rebuilt while a worker was already preparing them: run them once more.
+_AGAIN: set[str] = set()
 _EXECUTOR: ThreadPoolExecutor | None = None
 _WORKERS = 2
 
@@ -71,6 +81,7 @@ def shutdown() -> None:
     with _GUARD:
         executor, _EXECUTOR = _EXECUTOR, None
         _QUEUED.clear()
+        _AGAIN.clear()
     if executor:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -115,11 +126,23 @@ def _limits(planes: list[np.ndarray], channels: list[dict[str, Any]]) -> list[di
     return out
 
 
+def _shrink(plane: np.ndarray, edge: int = DISPLAY_EDGE) -> np.ndarray:
+    """Block-average a plane until its long side is at most `edge` (a few edge pixels may drop)."""
+    if plane.ndim != 2:
+        return plane
+    h, w = plane.shape
+    f = math.ceil(max(h, w) / edge)
+    if f <= 1:
+        return plane
+    hh, ww = h // f * f, w // f * f
+    return np.asarray(plane[:hh, :ww]).reshape(hh // f, f, ww // f, f).mean(axis=(1, 3), dtype=np.float32)
+
+
 def _display_bytes(planes: list[np.ndarray], channels: list[dict[str, Any]], limits: list[dict[str, Any]]) -> bytes:
     mapped = []
     for plane, lim in zip(planes, limits):
         span = max(lim["max"] - lim["min"], 1e-6)
-        y = np.clip((np.asarray(plane, dtype=np.float32) - lim["min"]) / span, 0.0, 1.0)
+        y = np.clip((np.asarray(_shrink(plane), dtype=np.float32) - lim["min"]) / span, 0.0, 1.0)
         gamma = lim["gamma"] if lim["gamma"] > 0 else 1.0
         if abs(gamma - 1.0) > 1e-6:
             y = np.power(y, 1.0 / gamma)
@@ -262,7 +285,7 @@ def _run(file_id: str) -> None:
             # Deleted while we were working.
             shutil.rmtree(settings.cache_dir / file_id, ignore_errors=True)
             return
-        store.update_file(file_id, owner, {"prepare": "ready"})
+        store.update_file(file_id, owner, {"prepare": "ready", "prepared_at": round(time.time(), 3)})
     except Exception:
         log.exception("Preparing %s failed", file_id)
         rec = store.load_index().get(file_id)
@@ -271,14 +294,41 @@ def _run(file_id: str) -> None:
     finally:
         with _GUARD:
             _QUEUED.pop(file_id, None)
+            again = file_id in _AGAIN
+            _AGAIN.discard(file_id)
+        if again:
+            schedule(file_id)
 
 
-def schedule(file_id: str) -> None:
+def schedule(file_id: str, *, again: bool = False) -> None:
+    """Queue `file_id`; with `again`, a file that is being prepared right now runs once more."""
     executor = _executor()
     with _GUARD:
         if file_id in _QUEUED:
+            if again:
+                _AGAIN.add(file_id)
             return
         _QUEUED[file_id] = executor.submit(_run, file_id)
+
+
+def rebuild(file_ids: list[str]) -> int:
+    """Drop the prepared previews of these files and prepare them again in the background.
+
+    Slide pyramid levels are kept: they are derived from the unchanged source and written
+    atomically, and rebuilding them can take minutes. Returns the number of files queued."""
+    from nd2utils import slide_render, store
+
+    index = store.load_index()
+    ids = [file_id for file_id in dict.fromkeys(file_ids) if file_id in index]
+    for file_id in ids:
+        with _file_lock(file_id):
+            for kind in _KINDS:
+                _path(file_id, kind).unlink(missing_ok=True)
+        slide_render.forget(file_id)
+    store.patch_files({file_id: {"prepare": "pending"} for file_id in ids})
+    for file_id in ids:
+        schedule(file_id, again=True)
+    return len(ids)
 
 
 def schedule_missing() -> int:
@@ -286,10 +336,16 @@ def schedule_missing() -> int:
     from nd2utils import store
 
     count = 0
+    stamps: dict[str, dict[str, Any]] = {}
     for file_id, rec in store.load_index().items():
         if rec.get("prepare") != "ready" or not is_prepared(file_id):
             schedule(file_id)
             count += 1
+        elif not rec.get("prepared_at"):
+            # Prepared by a version without cache versions: the files' age is the version.
+            stamps[file_id] = {"prepared_at": round(_path(file_id, "display").stat().st_mtime, 3)}
+    if stamps:
+        store.patch_files(stamps)
     return count
 
 

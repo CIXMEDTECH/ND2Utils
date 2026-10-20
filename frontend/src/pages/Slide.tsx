@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Camera, Hand, Selection, X } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChannelToggles } from "../components/ChannelToggles";
 import { Glass } from "../components/Glass";
 import { Shell } from "../components/Shell";
@@ -250,11 +249,9 @@ export function Slide() {
                 </Glass>
               )}
 
-              <AnimatePresence>
-                {snapOpen && viewer && (
-                  <SnapshotPopover viewer={viewer} names={names} fileName={file?.name ?? "slide"} scaleBar={scaleBar} onClose={() => setSnapOpen(false)} />
-                )}
-              </AnimatePresence>
+              {snapOpen && viewer && (
+                <SnapshotPopover viewer={viewer} names={names} fileName={file?.name ?? "slide"} scaleBar={scaleBar} onClose={() => setSnapOpen(false)} />
+              )}
             </SlideStage>
           ) : error ? (
             <div className="flex flex-1 items-center justify-center bg-[#050607] px-8">
@@ -306,12 +303,9 @@ export function Slide() {
                 role="tab"
                 aria-selected={tab === key}
                 onClick={() => setTab(key)}
-                className={`relative flex-1 rounded-lg px-2 py-2 transition-colors ${tab === key ? "text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
+                className={`flex-1 rounded-lg px-2 py-2 transition-colors ${tab === key ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
               >
-                {tab === key && (
-                  <motion.span layoutId="slide-tab" className="absolute inset-0 rounded-lg bg-[var(--text)]" transition={{ type: "spring", stiffness: 420, damping: 34 }} />
-                )}
-                <span className="relative z-[1]">{t(lang, key === "info" ? "slideTabInfo" : "slideTabExport")}</span>
+                {t(lang, key === "info" ? "slideTabInfo" : "slideTabExport")}
               </button>
             ))}
           </div>
@@ -404,7 +398,6 @@ function SnapshotPopover({
   onClose: () => void;
 }) {
   const lang = useApp((s) => s.lang);
-  const reduce = useReducedMotion();
   const [k, setK] = useState(2);
   const [scaleBar, setScaleBar] = useState(initialScaleBar);
   const [legend, setLegend] = useState(true);
@@ -448,12 +441,8 @@ function SnapshotPopover({
   }
 
   return (
-    <motion.div
+    <div
       data-no-pan
-      initial={reduce ? false : { opacity: 0, y: -6, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={reduce ? undefined : { opacity: 0, y: -4 }}
-      transition={{ duration: 0.16 }}
       className="absolute right-3 top-14 z-30 w-72"
       onPointerDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
@@ -512,6 +501,6 @@ function SnapshotPopover({
         </div>
         {note && <p className="mt-2 text-[11.5px] leading-5 text-[var(--text-dim)]" aria-live="polite">{note}</p>}
       </Glass>
-    </motion.div>
+    </div>
   );
 }

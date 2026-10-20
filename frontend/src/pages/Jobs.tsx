@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowDown, ArrowRight, CheckCircle, Hourglass, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Glass } from "../components/Glass";
 import { Shell } from "../components/Shell";
 import { t } from "../i18n";
@@ -17,22 +16,17 @@ const statusKey = {
   error: "jobError",
 } as const;
 
-function StatusIcon({ status, spinning }: { status: JobInfo["status"]; spinning: boolean }) {
+function StatusIcon({ status }: { status: JobInfo["status"] }) {
   if (status === "done") return <CheckCircle size={18} weight="fill" className="text-[var(--ok)]" />;
   if (status === "error") return <WarningCircle size={18} weight="fill" className="text-[var(--danger)]" />;
   if (status === "queued") return <Hourglass size={18} weight="duotone" className="text-[var(--accent)]" />;
-  return (
-    <motion.span animate={spinning ? { rotate: 360 } : undefined} transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}>
-      <SpinnerGap size={18} className="text-[var(--accent)]" />
-    </motion.span>
-  );
+  return <SpinnerGap size={18} className="animate-spin text-[var(--accent)]" />;
 }
 
 export function Jobs() {
   const lang = useApp((s) => s.lang);
   const jobs = useApp((s) => s.jobs);
   const refreshJobs = useApp((s) => s.refreshJobs);
-  const reduce = useReducedMotion();
   const [error, setError] = useState<string | null>(null);
   const active = jobs.some((job) => job.status === "queued" || job.status === "running");
 
@@ -66,52 +60,31 @@ export function Jobs() {
           <span className="font-mono text-[11px] text-[var(--text-dim)]">{jobs.length}</span>
         </div>
 
-        <AnimatePresence>
-          {error && (
-            <motion.p
-              role="alert"
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              className="mt-5 text-[13px] text-[var(--danger)]"
-            >
-              {error}
-            </motion.p>
-          )}
-        </AnimatePresence>
+        {error && (
+          <p role="alert" className="mt-5 text-[13px] text-[var(--danger)]">
+            {error}
+          </p>
+        )}
 
         {jobs.length === 0 && (
-          <motion.div
-            initial={reduce ? false : { opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex min-h-72 flex-col items-center justify-center text-center"
-          >
+          <div className="flex min-h-72 flex-col items-center justify-center text-center">
             <span className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
               <ArrowDown size={24} weight="duotone" />
             </span>
             <p className="max-w-sm text-[14px] leading-6 text-[var(--text-dim)]">{t(lang, "noJobs")}</p>
-            <Link to="/workspace" className="text-action group mt-4">
+            <Link to="/workspace" className="text-action mt-4">
               {t(lang, "goWorkspace")}
-              <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" />
+              <ArrowRight size={14} />
             </Link>
-          </motion.div>
+          </div>
         )}
 
-        <motion.ul layout className="grid gap-3">
-          <AnimatePresence initial={false}>
-            {jobs.map((job, index) => (
-              <motion.li
-                layout
-                key={job.id}
-                initial={reduce ? false : { opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={reduce ? undefined : { opacity: 0, x: -12 }}
-                transition={{ delay: Math.min(index * 0.035, 0.18) }}
-                className="py-2"
-              >
-                <Glass shape="card" className="grid gap-4 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+        <ul className="grid gap-3">
+          {jobs.map((job) => (
+            <li key={job.id} className="py-2">
+              <Glass shape="card" className="grid gap-4 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--bg)]/40 shadow-[inset_0_0_0_1px_var(--line)]">
-                  <StatusIcon status={job.status} spinning={!reduce} />
+                  <StatusIcon status={job.status} />
                 </span>
 
                 <div className="min-w-0">
@@ -133,30 +106,26 @@ export function Jobs() {
                     {job.status === "error" && job.error ? ` (${job.error})` : ""}
                   </p>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--line)]">
-                    <motion.div
-                      className={`h-full rounded-full ${job.status === "error" ? "bg-[var(--danger)]" : "bg-[var(--accent)]"}`}
-                      animate={{ width: `${Math.round((job.progress || 0) * 100)}%` }}
-                      transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+                    <div
+                      className={`h-full rounded-full transition-[width] duration-300 ${job.status === "error" ? "bg-[var(--danger)]" : "bg-[var(--accent)]"}`}
+                      style={{ width: `${Math.round((job.progress || 0) * 100)}%` }}
                     />
                   </div>
                 </div>
 
                 {job.status === "done" && (
-                  <motion.a
-                    initial={reduce ? false : { opacity: 0, scale: 0.96 }}
-                    animate={{ opacity: 1, scale: 1 }}
+                  <a
                     href={jobDownloadUrl(job.id)}
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[12px] font-medium text-white transition-all hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] active:scale-[0.98]"
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[12px] font-medium text-white transition-colors hover:bg-[var(--accent-strong)]"
                   >
                     <ArrowDown size={14} />
                     {t(lang, "download")}
-                  </motion.a>
+                  </a>
                 )}
-                </Glass>
-              </motion.li>
-            ))}
-          </AnimatePresence>
-        </motion.ul>
+              </Glass>
+            </li>
+          ))}
+        </ul>
       </main>
     </Shell>
   );

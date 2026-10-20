@@ -185,9 +185,13 @@ def list_files(owner_id: str) -> list[dict[str, Any]]:
 
 def find_file(owner_id: str, folder: str, name: str) -> dict[str, Any] | None:
     lowered = name.lower()
-    for record in list_files(owner_id):
-        if (record.get("folder") or "") == folder and (record.get("name") or "").lower() == lowered:
-            return record
+    for record in load_index().values():
+        if (
+            (record.get("folder") or "") == folder
+            and (record.get("name") or "").lower() == lowered
+            and _owned(record, owner_id)
+        ):
+            return dict(record)
     return None
 
 
@@ -205,6 +209,18 @@ def update_file(file_id: str, owner_id: str, changes: dict[str, Any]) -> dict[st
         save_index(index)
         _register_folder(owner_id, record.get("folder") or "")
         return dict(record)
+
+
+def patch_files(changes: dict[str, dict[str, Any]]) -> None:
+    """Apply per-file changes (file id -> fields) with one index write. Unknown ids are skipped."""
+    if not changes:
+        return
+    with _LOCK:
+        index = load_index()
+        for file_id, fields in changes.items():
+            if file_id in index:
+                index[file_id].update(fields)
+        save_index(index)
 
 
 def file_dir(file_id: str) -> Path:

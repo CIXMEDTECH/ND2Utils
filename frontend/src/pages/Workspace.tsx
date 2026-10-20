@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  ArrowClockwise,
   ArrowsLeftRight,
   Check,
   Copy,
@@ -17,7 +18,6 @@ import {
   UploadSimple,
   X,
 } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChannelToggles } from "../components/ChannelToggles";
 import { ContextMenu, type MenuItem, type MenuState } from "../components/ContextMenu";
 import { folderInputId } from "../components/DropZone";
@@ -32,7 +32,18 @@ import { UploadBar } from "../components/UploadBar";
 import { SlideLoading, SlideStage, SlideZoomControls, loadDisplay } from "../components/SlideStage";
 import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
-import { createFolder, deleteFile, deleteFolder, fetchDisplay, getFile, prefetchDisplay, renameFolder, slideInfo, updateFile } from "../lib/api";
+import {
+  clientSettings,
+  createFolder,
+  deleteFile,
+  deleteFolder,
+  getFile,
+  rebuildCache,
+  renameFolder,
+  slideInfo,
+  updateFile,
+} from "../lib/api";
+import { forget as forgetPreviews, getDisplay, prefetch as prefetchPreviews, warm as warmPreviews } from "../lib/previewCache";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
 import { createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
 import { readPref, writePref } from "../lib/storage";
@@ -85,7 +96,7 @@ export function Workspace() {
   const folders = useApp((s) => s.folders);
   const isAdmin = useApp((s) => s.user?.role === "admin");
   const nav = useNavigate();
-  const reduce = useReducedMotion();
+  const [mayRebuild, setMayRebuild] = useState(false);
   const [tab, setTab] = useState<WorkspaceTab>("identify");
   const [q, setQ] = useState("");
   const [copied, setCopied] = useState(false);
@@ -112,6 +123,12 @@ export function Workspace() {
   useEffect(() => {
     void refreshFiles().catch((err) => setError(detailMessage(err, lang)));
   }, [lang, refreshFiles]);
+
+  useEffect(() => {
+    void clientSettings()
+      .then((s) => setMayRebuild(s.cache_rebuild))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!selectedId) {
@@ -191,8 +208,9 @@ export function Workspace() {
     let cancelled = false;
     const file = selected;
     setLoadingPreview(true);
-    // The server prepared these 8-bit, auto-contrasted channels when the file was imported.
-    void fetchDisplay(file.id)
+    // The server prepared these 8-bit, auto-contrasted channels when the file was imported;
+    // usually they come straight from the browser's local cache.
+    void getDisplay(file)
       .then((buffer) => {
         if (cancelled) return;
         const packed = unpackPlane(buffer);
@@ -206,7 +224,11 @@ export function Workspace() {
         const layers = createPreviewLayers(packed, luts);
         setLocalPreview({
           fileId: file.id,
-          dimensions: { width: packed.width, height: packed.height },
+          // Large images are prepared at reduced size: the scale bar needs the true width.
+          dimensions: {
+            width: Math.max(file.width ?? 0, packed.width),
+            height: Math.max(file.height ?? 0, packed.height),
+          },
           layers,
         });
       })
@@ -221,23 +243,29 @@ export function Workspace() {
     return () => {
       cancelled = true;
     };
-  }, [lang, selected?.id]);
+    // A rebuilt cache (new prepared_at) replaces the preview once it is ready.
+  }, [lang, selected?.id, selected?.prepared_at]);
 
-  // Warm up the neighbours so stepping through a folder does not wait for the network.
-  const order = useMemo(() => orderedFiles(folders, files), [folders, files]);
+  // Decode the neighbours so stepping through a folder never waits.
+  const order = useMemo(() => orderedFiles(folders, files).filter((f) => !isSlide(f)), [folders, files]);
   useEffect(() => {
     if (!previewReady || !selectedId) return;
     const at = order.findIndex((f) => f.id === selectedId);
     if (at < 0) return;
     const handle = window.setTimeout(() => {
-      prefetchDisplay(
-        [order[at + 1], order[at + 2], order[at - 1]]
-          .filter((f): f is FileSummary => Boolean(f) && f.prepare === "ready")
-          .map((f) => f.id),
+      prefetchPreviews(
+        [order[at + 1], order[at + 2], order[at - 1]].filter((f): f is FileSummary => Boolean(f) && f.prepare === "ready"),
       );
     }, 150);
     return () => window.clearTimeout(handle);
   }, [order, previewReady, selectedId]);
+
+  // Keep every prepared preview in the local cache (if the administrator enabled it), starting
+  // next to the selected file. New imports are picked up as soon as they are ready.
+  useEffect(() => {
+    const at = Math.max(0, order.findIndex((f) => f.id === useApp.getState().selectedId));
+    warmPreviews([...order.slice(at), ...order.slice(0, at)]);
+  }, [order]);
 
   // While files are still being prepared in the background, keep their status fresh.
   const preparing = files.some((f) => f.prepare === "pending");
@@ -369,6 +397,14 @@ export function Workspace() {
           onSelect: () => setTransferSeed({ fileIds: [], folders: [path] }),
         });
       }
+      if (mayRebuild && count > 0) {
+        items.push({
+          key: "rebuild",
+          label: t(lang, "rebuildCache"),
+          icon: <ArrowClockwise size={15} />,
+          onSelect: () => void rebuild({ folders: [path] }, files.filter((f) => !path || f.folder === path || f.folder.startsWith(`${path}/`))),
+        });
+      }
       if (path) {
         items.push(
           { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, separated: true, onSelect: () => setNameAction({ mode: "renameFolder", path }) },
@@ -403,10 +439,36 @@ export function Workspace() {
             },
           ]
         : []),
+      ...(mayRebuild
+        ? [
+            {
+              key: "rebuild",
+              label: exportChecked ? `${t(lang, "rebuildCache")} (${checkedFiles.length})` : t(lang, "rebuildCache"),
+              icon: <ArrowClockwise size={15} />,
+              disabled: !exportChecked && file.prepare === "pending",
+              onSelect: () => {
+                const list = exportChecked ? checkedFiles : [file];
+                void rebuild({ file_ids: list.map((f) => f.id) }, list);
+              },
+            },
+          ]
+        : []),
       { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, separated: true, onSelect: () => setNameAction({ mode: "renameFile", file }) },
       { key: "delete", label: t(lang, "delete"), icon: <Trash size={15} />, danger: true, onSelect: () => setDeleteAction({ type: "file", file }) },
     );
     setMenu({ x, y, title: joinPath(file.folder, file.name), items });
+  }
+
+  async function rebuild(body: { file_ids?: string[]; folders?: string[] }, affected: FileSummary[]) {
+    try {
+      setError(null);
+      forgetPreviews(affected.map((f) => f.id));
+      await rebuildCache(body);
+      // The files now show as preparing; the list keeps refreshing until they are ready again.
+      await refreshFiles();
+    } catch (err) {
+      setError(detailMessage(err, lang));
+    }
   }
 
   async function submitName(value: string) {
@@ -508,19 +570,11 @@ export function Workspace() {
             <UploadBar inputId={UPLOAD_INPUT} />
           </div>
 
-          <AnimatePresence>
-            {error && (
-              <motion.p
-                role="alert"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="mx-3 mb-2 overflow-hidden text-[12px] leading-5 text-[var(--danger)]"
-              >
-                {error}
-              </motion.p>
-            )}
-          </AnimatePresence>
+          {error && (
+            <p role="alert" className="mx-3 mb-2 text-[12px] leading-5 text-[var(--danger)]">
+              {error}
+            </p>
+          )}
 
           <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--line)] max-lg:max-h-[70dvh]">
             <FileTree onMenu={openMenu} />
@@ -560,7 +614,7 @@ export function Workspace() {
                       type="button"
                       onClick={() => setScaleBar((value) => !value)}
                       aria-pressed={scaleBar}
-                      className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] transition-all duration-200 ${scaleBar ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
+                      className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${scaleBar ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
                     >
                       {t(lang, "scaleBar")}
                     </button>
@@ -601,7 +655,7 @@ export function Workspace() {
                   type="button"
                   onClick={action}
                   aria-pressed={active}
-                  className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] transition-all duration-200 ${active ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
+                  className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${active ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
                 >
                   {t(lang, key)}
                 </button>
@@ -625,16 +679,9 @@ export function Workspace() {
                 role="tab"
                 aria-selected={tab === key}
                 onClick={() => setTab(key)}
-                className={`relative flex-1 rounded-lg px-2 py-2 transition-colors ${tab === key ? "text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
+                className={`flex-1 rounded-lg px-2 py-2 transition-colors ${tab === key ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
               >
-                {tab === key && (
-                  <motion.span
-                    layoutId="workspace-tab"
-                    className="absolute inset-0 rounded-lg bg-[var(--text)]"
-                    transition={{ type: "spring", stiffness: 420, damping: 34 }}
-                  />
-                )}
-                <span className="relative z-[1]">{t(lang, label)}</span>
+                {t(lang, label)}
               </button>
             ))}
           </div>
@@ -648,14 +695,7 @@ export function Workspace() {
             )}
 
             {selected && (
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={tab}
-                  initial={reduce ? false : { opacity: 0, x: 8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={reduce ? undefined : { opacity: 0, x: -6 }}
-                  transition={{ duration: 0.2 }}
-                >
+              <div>
                   {tab === "identify" && (
                     <>
                       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 text-[13px]">
@@ -731,26 +771,19 @@ export function Workspace() {
                         )}
                       </div>
 
-                      <AnimatePresence>
-                        {pendingDelete === selected.id && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 8, height: 0 }}
-                            animate={{ opacity: 1, y: 0, height: "auto" }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="mt-4 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_28%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg))] p-3"
-                          >
-                            <p className="text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "deleteHint")}</p>
-                            <div className="mt-3 flex gap-2">
-                              <button type="button" onClick={() => void confirmDelete()} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--danger)] px-3 text-[11px] font-medium text-white">
-                                <Check size={13} /> {t(lang, "confirmDelete")}
-                              </button>
-                              <button type="button" onClick={() => setPendingDelete(null)} className="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-[11px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
-                                <X size={13} /> {t(lang, "cancel")}
-                              </button>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
+                      {pendingDelete === selected.id && (
+                        <div className="mt-4 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_28%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg))] p-3">
+                          <p className="text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "deleteHint")}</p>
+                          <div className="mt-3 flex gap-2">
+                            <button type="button" onClick={() => void confirmDelete()} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--danger)] px-3 text-[11px] font-medium text-white">
+                              <Check size={13} /> {t(lang, "confirmDelete")}
+                            </button>
+                            <button type="button" onClick={() => setPendingDelete(null)} className="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-[11px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+                              <X size={13} /> {t(lang, "cancel")}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -828,8 +861,7 @@ export function Workspace() {
                       )}
                     </>
                   )}
-                </motion.div>
-              </AnimatePresence>
+              </div>
             )}
           </div>
 

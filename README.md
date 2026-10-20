@@ -47,6 +47,9 @@ docker compose up -d
 1. 在首页或工作区拖入 `.nd2` 文件或整个文件夹（也可点“选择文件夹”），目录结构会原样保留。
 2. 工作区左侧是文件树：右键文件或文件夹可导出、上传到此处、新建文件夹、重命名、删除（触屏设备点 `⋯`）。文件树支持搜索、全部展开/折叠，拖动右边缘可调整宽度。
    每个文件导入后会在后台初始化（预先计算自动亮度和预览数据，缓存在 `data/cache`），之后打开文件无需等待；初始化中的文件旁会显示转圈图标。
+   预览还会缓存在用户浏览器本地（IndexedDB）：导入的文件准备好后自动下载到本地，之后浏览、刷新页面都直接从本地读取，不再走网络。
+   右键文件或文件夹选“重建缓存”可重新生成预览（勾选多个文件时作用于全部勾选的文件），各浏览器中的旧副本会自动更新。
+   “设置 → 本地预览缓存”显示本浏览器已缓存的数量，可一键清除；退出登录时自动清除。
    管理员可通过右键菜单或“设置 → 授权码管理 → 转移 / 复制文件”，在任意两个工作空间之间（或同一工作空间内）复制、转移文件和文件夹。
 3. 导出包内的文件位于与原 ND2 文件相同的目录中，例如 `20260918H2/vector 6h/MB2310439_DAPI.png`。
 4. 高级模式：通道 LUT、直方图、比例尺、Z/T 投影与切片（无该维度时会提示）、直线/ROI 测量。
@@ -64,6 +67,7 @@ docker compose up -d
 7. 性能设置（仅管理员，“设置 → 性能设置”）：保存后立即生效，无需重启。
    - 切片渲染方式：**自动**（用户电脑有显卡时在浏览器中用 GPU 合成，否则由服务器合成）、**用户浏览器**、**服务器**（服务器合成好 JPEG 图块再发送，适合用户电脑性能弱；服务器不需要显卡）。
    - 瓦片解码缓存、服务器合成缓存、JPEG 质量、同时打开的文件数、后台准备线程数、同时运行的导出任务数（超出的排队）、PNG/JPEG 导出像素上限。
+   - 预览缓存：是否开启浏览器本地缓存、导入后是否自动建立缓存、是否允许普通用户右键重建缓存（管理员始终可以）、每个浏览器的本地缓存上限（默认 2 GB，超出时先删除最久未看的）。关闭本地缓存后，各浏览器中已保存的预览会被清除。
    - 卡片上方实时显示服务器 CPU 核心数、内存、缓存占用和导出任务情况。参数保存在 `data/performance.json`。
 
 TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-TIFF：
@@ -94,6 +98,7 @@ On first start an admin access code is generated and printed to the server log (
 - Every page and API call requires an access code. Each code owns one workspace. Codes have an optional expiry and are either *temporary* (files removed after `TTL_HOURS` and when the code expires) or *permanent* (never cleaned up automatically). Export archives are kept for `TTL_HOURS` for everyone.
 - Upload files or whole folders; the workspace keeps the folder tree. Right-click a file or folder to export it — exported files land in the same folders as their ND2 source inside the zip.
 - Every imported file is prepared in the background (auto-contrast and an 8-bit preview cached in `data/cache`), so opening it later is immediate.
+- Browsers also keep previews locally (IndexedDB): prepared previews are downloaded in the background right after import, so browsing and reloading need no network. Right-click a file or folder → Rebuild cache to prepare previews again; local copies update automatically. Settings → Local preview cache shows what this browser holds and clears it; signing out clears it too. Administrators turn the local cache, automatic caching after import and rebuilding by non-admin users on or off, and set the per-browser size limit (default 2 GB, least recently viewed dropped first), under Settings → Performance.
 - Administrators can copy or move files and folders between any two workspaces (Settings → Access codes → Copy / move files, or the workspace context menu).
 - Leica `.lif` files are whole projects: uploading one creates a folder named after the file (`BRD9 VECTOR.lif` → `BRD9 VECTOR/`) with one workspace file per image (series); the project's own folders become subfolders. The images work like ND2 files (preview, Advanced mode with Z/T/mosaic positions, projections, measurements, batch export) with channel names, LUT colors, wavelengths, objective, pixel size and scan settings taken from the LIF metadata. All images of a project share one copy of the uploaded data (hard links). Uploading the same .lif again replaces images with the same name. Raw FLIM histogram data is not supported.
 - OME-TIFF keeps native bit depth in `*.ome.tif` (12-bit data looks dark in ordinary viewers). Each one has an 8-bit `*.tif` with the same name and the display LUT applied. TIFF / PNG / JPEG are 8-bit display images. Hidden channels are not exported.
