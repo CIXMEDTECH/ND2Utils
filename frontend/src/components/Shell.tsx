@@ -12,6 +12,8 @@ import {
   Translate,
 } from "@phosphor-icons/react";
 import { t } from "../i18n";
+import { useActivityTracker } from "../lib/activity";
+import { ActivityIndicator, ActivityLine } from "./Activity";
 import { useApp } from "../store";
 import { Glass } from "./Glass";
 import { Mark } from "./Mark";
@@ -31,6 +33,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
   const user = useApp((s) => s.user);
   const signOut = useApp((s) => s.signOut);
   const navigate = useNavigate();
+  useActivityTracker();
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
@@ -70,6 +73,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
           </nav>
 
           <div className="flex items-center gap-1">
+            <ActivityIndicator />
             {user && (
               <Link
                 to="/settings"
@@ -109,6 +113,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
               <SignOut size={16} />
             </button>
           </div>
+          <ActivityLine />
         </Glass>
       </div>
 

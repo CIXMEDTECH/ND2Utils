@@ -28,19 +28,11 @@ export function Jobs() {
   const jobs = useApp((s) => s.jobs);
   const refreshJobs = useApp((s) => s.refreshJobs);
   const [error, setError] = useState<string | null>(null);
-  const active = jobs.some((job) => job.status === "queued" || job.status === "running");
 
+  // Running jobs are kept current by the global activity tracker (see Shell).
   useEffect(() => {
     void refreshJobs().catch((err) => setError(detailMessage(err, lang)));
   }, [lang, refreshJobs]);
-
-  useEffect(() => {
-    if (!active) return;
-    const handle = window.setInterval(() => {
-      void refreshJobs().catch((err) => setError(detailMessage(err, lang)));
-    }, 1500);
-    return () => window.clearInterval(handle);
-  }, [active, lang, refreshJobs]);
 
   const dateFormatter = new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en", {
     month: "short",

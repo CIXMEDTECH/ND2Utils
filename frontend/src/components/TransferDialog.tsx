@@ -5,7 +5,7 @@ import { adminTransfer, adminWorkspace, listCodes } from "../lib/api";
 import { detailMessage, formatBytes } from "../lib/format";
 import type { AccessCode, FileSummary } from "../lib/types";
 import { useApp } from "../store";
-import { buildTree, type FolderNode } from "./FileTree";
+import { buildTree, type FolderNode } from "../lib/tree";
 import { Modal } from "./Modal";
 
 /** Pre-selection when the dialog is opened from a workspace or a code row. */

@@ -58,7 +58,7 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
-/** Notified whenever the stored set changes (usage display). */
+/** Notified whenever the stored set or the background download changes. */
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -250,18 +250,33 @@ export function prefetch(files: CachedFile[]) {
 
 let warmQueue: CachedFile[] = [];
 let warmRunning = 0;
+/** Downloads finished / in flight in the current background batch (progress display). */
+let warmDone = 0;
+let warmInflight = 0;
+
+/** Progress of the background download, or null when idle. */
+export function warmProgress(): { done: number; total: number } | null {
+  const total = warmDone + warmInflight + warmQueue.length;
+  return total ? { done: warmDone, total } : null;
+}
 
 async function warmNext(): Promise<void> {
   while (warmQueue.length && config.enabled && config.auto) {
     const file = warmQueue.shift()!;
     const map = await loadIndex();
     if (map.get(file.id)?.version === versionOf(file) || memory.get(file.id)?.version === versionOf(file)) continue;
+    warmInflight += 1;
     try {
       const gz = await download(file.id, true);
       // Full: stop instead of replacing previews the user actually looked at.
       if (!(await store(file, gz, false))) warmQueue = [];
     } catch {
       // Deleted meanwhile, network hiccup…: the file is fetched when it is opened.
+    } finally {
+      warmInflight -= 1;
+      warmDone += 1;
+      if (!warmQueue.length && !warmInflight) warmDone = 0;
+      emit();
     }
   }
 }
@@ -277,6 +292,8 @@ export function warm(files: CachedFile[]) {
     // Previews in memory were (or are being) stored by the view that loaded them.
     const pending = (f: CachedFile) => map.get(f.id)?.version !== versionOf(f) && memory.get(f.id)?.version !== versionOf(f);
     warmQueue = files.filter((f) => storable(f) && pending(f));
+    if (!warmQueue.length && !warmInflight) warmDone = 0;
+    emit();
     while (warmRunning < WARM_CONCURRENCY && warmQueue.length) {
       warmRunning += 1;
       void warmNext().finally(() => {
@@ -293,12 +310,14 @@ export function forget(ids: string[]) {
   for (const id of ids) memory.delete(id);
   warmQueue = warmQueue.filter((f) => !ids.includes(f.id));
   void removeStored(ids);
+  emit();
 }
 
 /** Remove every stored preview (sign-out, user request, or the administrator turned it off). */
 export async function clearLocal(): Promise<void> {
   memory.clear();
   warmQueue = [];
+  warmDone = 0;
   const db = await openDb();
   if (db) {
     const tx = db.transaction([META, DATA], "readwrite");

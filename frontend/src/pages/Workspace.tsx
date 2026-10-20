@@ -22,7 +22,7 @@ import { ChannelToggles } from "../components/ChannelToggles";
 import { ContextMenu, type MenuItem, type MenuState } from "../components/ContextMenu";
 import { folderInputId } from "../components/DropZone";
 import { ExportPanel } from "../components/ExportPanel";
-import { countFilesIn, FileTree, orderedFiles, type TreeTarget } from "../components/FileTree";
+import { FileTree, type TreeTarget } from "../components/FileTree";
 import { ConfirmDialog, Modal, NameDialog } from "../components/Modal";
 import { Glass } from "../components/Glass";
 import { Guide } from "../components/Guide";
@@ -43,10 +43,11 @@ import {
   slideInfo,
   updateFile,
 } from "../lib/api";
-import { forget as forgetPreviews, getDisplay, prefetch as prefetchPreviews, warm as warmPreviews } from "../lib/previewCache";
+import { forget as forgetPreviews, getDisplay, prefetch as prefetchPreviews } from "../lib/previewCache";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
 import { createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
 import { readPref, writePref } from "../lib/storage";
+import { countFilesIn, orderedFiles } from "../lib/tree";
 import type { SlideViewer, ViewState } from "../lib/slide";
 import type { ExportTarget, FileSummary, LutSetting, PackedPlane, SlideInfo } from "../lib/types";
 import { useApp } from "../store";
@@ -259,21 +260,6 @@ export function Workspace() {
     }, 150);
     return () => window.clearTimeout(handle);
   }, [order, previewReady, selectedId]);
-
-  // Keep every prepared preview in the local cache (if the administrator enabled it), starting
-  // next to the selected file. New imports are picked up as soon as they are ready.
-  useEffect(() => {
-    const at = Math.max(0, order.findIndex((f) => f.id === useApp.getState().selectedId));
-    warmPreviews([...order.slice(at), ...order.slice(0, at)]);
-  }, [order]);
-
-  // While files are still being prepared in the background, keep their status fresh.
-  const preparing = files.some((f) => f.prepare === "pending");
-  useEffect(() => {
-    if (!preparing) return;
-    const handle = window.setInterval(() => void refreshFiles().catch(() => undefined), 2500);
-    return () => window.clearInterval(handle);
-  }, [preparing, refreshFiles]);
 
   function resizeTree(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();

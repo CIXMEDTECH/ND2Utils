@@ -51,6 +51,7 @@ export function App() {
         <Route path="/slide/:fileId" element={<Slide />} />
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/settings/:section" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
