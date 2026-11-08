@@ -19,8 +19,8 @@ export function isSupportedName(name: string): boolean {
   return lower.endsWith(".nd2") || isSlideName(name) || isLifName(name);
 }
 
-export function isSlide(file: Pick<FileSummary, "format" | "name"> | null | undefined): boolean {
-  if (!file) return false;
+export function isSlide(file: Pick<FileSummary, "format" | "name" | "cropped"> | null | undefined): boolean {
+  if (!file || file.cropped) return false;
   return file.format ? file.format === "ome-tiff" || file.format === "tiff" : isSlideName(file.name);
 }
 

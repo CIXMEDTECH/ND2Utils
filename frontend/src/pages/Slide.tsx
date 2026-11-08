@@ -54,6 +54,9 @@ export function Slide() {
   const files = useApp((s) => s.files);
   const refreshFiles = useApp((s) => s.refreshFiles);
   const select = useApp((s) => s.select);
+  const channelLocked = useApp((s) => s.channelLocked);
+  const resolveVisibleChannels = useApp((s) => s.resolveVisibleChannels);
+  const updateLockedChannels = useApp((s) => s.updateLockedChannels);
   const nav = useNavigate();
   const file = files.find((f) => f.id === fileId) ?? null;
 
@@ -89,7 +92,13 @@ export function Slide() {
     void slideInfo(fileId)
       .then((next) => {
         if (cancelled) return;
-        setDisplay(loadDisplay(next));
+        const base = loadDisplay(next);
+        if (useApp.getState().channelLocked) {
+          const lockedVis = resolveVisibleChannels(next.channels);
+          setDisplay(base.map((d, i) => ({ ...d, visible: lockedVis[i] ?? d.visible })));
+        } else {
+          setDisplay(base);
+        }
         setInfo(next);
       })
       .catch((err) => {
@@ -98,7 +107,7 @@ export function Slide() {
     return () => {
       cancelled = true;
     };
-  }, [fileId, lang]);
+  }, [fileId, lang, resolveVisibleChannels]);
 
   useEffect(() => {
     if (info && display.length === info.channels.length) writePref(displayKey(info.id), JSON.stringify(display));
@@ -113,7 +122,16 @@ export function Slide() {
   const mag = info?.magnification && view ? info.magnification * view.scale : null;
 
   function toggle(index: number) {
-    setDisplay((prev) => prev.map((d, i) => (i === index ? { ...d, visible: !d.visible } : d)));
+    setDisplay((prev) => {
+      const next = prev.map((d, i) => (i === index ? { ...d, visible: !d.visible } : d));
+      if (info && channelLocked) {
+        updateLockedChannels(
+          info.channels,
+          next.map((d) => d.visible),
+        );
+      }
+      return next;
+    });
   }
 
   if (file && !isSlide(file)) {

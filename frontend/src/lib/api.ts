@@ -3,6 +3,7 @@ import type {
   AccessCode,
   AccessUser,
   CodeKind,
+  CropRequest,
   FileDetail,
   FileSummary,
   JobInfo,
@@ -188,6 +189,10 @@ export async function deleteFolder(path: string) {
 
 export async function updateFile(id: string, body: { name?: string; folder?: string }) {
   return json<FileDetail>(await send(`/api/files/${id}`, "PATCH", body));
+}
+
+export async function cropFile(id: string, body: CropRequest): Promise<FileSummary> {
+  return json<FileSummary>(await send(`/api/files/${id}/crop`, "POST", body));
 }
 
 export async function getFile(id: string): Promise<FileDetail> {

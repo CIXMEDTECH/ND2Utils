@@ -154,7 +154,7 @@ def preview_rgb(
 
 
 def nice_scale_um(um_per_px: float, width_px: int) -> tuple[float, int]:
-    target_px = max(width_px / 6.0, 32)
+    target_px = min(max(width_px / 6.0, 24.0), max(width_px * 0.4, 8.0))
     target_um = target_px * um_per_px
     if target_um <= 0:
         return 10.0, int(10 / um_per_px) if um_per_px else 50
@@ -170,6 +170,8 @@ def nice_scale_um(um_per_px: float, width_px: int) -> tuple[float, int]:
         nice = 10.0
     um = nice * (10 ** exp)
     px = max(int(round(um / um_per_px)), 8)
+    if width_px > 24 and px > width_px - 24:
+        px = max(8, width_px - 24)
     return float(um), px
 
 

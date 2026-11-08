@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, EyeSlash, SlidersHorizontal } from "@phosphor-icons/react";
+import { Eye, EyeSlash, LockSimple, LockSimpleOpen, SlidersHorizontal } from "@phosphor-icons/react";
 import { t } from "../i18n";
 import { rgbCss } from "../lib/format";
 import type { ChannelDisplay } from "../lib/slide";
@@ -49,11 +49,24 @@ export function SlideChannels({
   onAuto: () => void;
 }) {
   const lang = useApp((s) => s.lang);
+  const channelLocked = useApp((s) => s.channelLocked);
+  const toggleChannelLock = useApp((s) => s.toggleChannelLock);
+  const updateLockedChannels = useApp((s) => s.updateLockedChannels);
   const [open, setOpen] = useState<number | null>(null);
   const float = info.dtype.startsWith("float");
 
+  function applyDisplay(next: ChannelDisplay[]) {
+    onChange(next);
+    if (channelLocked) {
+      updateLockedChannels(
+        info.channels,
+        next.map((d) => d.visible),
+      );
+    }
+  }
+
   function patch(index: number, change: Partial<ChannelDisplay>) {
-    onChange(display.map((d, i) => (i === index ? { ...d, ...change } : d)));
+    applyDisplay(display.map((d, i) => (i === index ? { ...d, ...change } : d)));
   }
 
   const headerButton = "rounded-lg px-2 py-1 text-[11px] text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]";
@@ -61,11 +74,28 @@ export function SlideChannels({
   return (
     <div className="flex flex-col gap-1">
       <div className="mb-1 flex flex-wrap items-center gap-0.5">
-        <button type="button" className={headerButton} onClick={() => onChange(display.map((d) => ({ ...d, visible: true })))}>
+        <button type="button" className={headerButton} onClick={() => applyDisplay(display.map((d) => ({ ...d, visible: true })))}>
           {t(lang, "showAll")}
         </button>
-        <button type="button" className={headerButton} onClick={() => onChange(display.map((d) => ({ ...d, visible: false })))}>
+        <button type="button" className={headerButton} onClick={() => applyDisplay(display.map((d) => ({ ...d, visible: false })))}>
           {t(lang, "hideAll")}
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            toggleChannelLock(
+              info.channels,
+              display.map((d) => d.visible),
+            )
+          }
+          aria-pressed={channelLocked}
+          title={t(lang, "lockChannelsHint")}
+          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition-colors ${
+            channelLocked ? "bg-[var(--accent-soft)] text-[var(--accent)]" : "text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+          }`}
+        >
+          {channelLocked ? <LockSimple size={12} weight="fill" /> : <LockSimpleOpen size={12} />}
+          {t(lang, channelLocked ? "channelsLocked" : "lockChannels")}
         </button>
         <button type="button" className={`${headerButton} ml-auto`} onClick={onAuto}>
           {t(lang, "auto")}
@@ -175,7 +205,7 @@ export function SlideChannels({
                   </label>
                   <button
                     type="button"
-                    onClick={() => onChange(display.map((x, j) => ({ ...x, visible: j === i })))}
+                    onClick={() => applyDisplay(display.map((x, j) => ({ ...x, visible: j === i })))}
                     className="justify-self-start rounded-md px-1.5 py-1 text-[11px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
                   >
                     {t(lang, "solo")}

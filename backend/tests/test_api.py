@@ -640,3 +640,45 @@ def test_admin_transfer_whole_workspace(admin, sample_files):
         assert r.json()["moved"] == 2
         assert ca.get("/api/files").json() == {"files": [], "folders": []}
         assert sorted(f["folder"] for f in list_files(b["id"])) == ["old A", "old A/p/q"]
+
+
+def test_crop_file_creates_new_workspace_file_and_exports(client, sample_files):
+    src = _upload(client, sample_files[0], "crops")
+    w0, h0 = int(src["width"]), int(src["height"])
+    cw, ch = max(32, w0 // 2), max(32, h0 // 2)
+    r = client.post(
+        f"/api/files/{src['id']}/crop",
+        json={"x": 10, "y": 12, "w": cw, "h": ch, "name": "cropped_1to1.nd2"},
+    )
+    assert r.status_code == 200, r.text
+    cropped = r.json()
+    assert cropped["id"] != src["id"]
+    assert cropped["name"] == "cropped_1to1.nd2"
+    assert cropped["folder"] == "crops"
+    assert cropped["width"] == cw and cropped["height"] == ch
+    assert cropped["cropped"] is True
+    assert cropped["crop"]["x"] == 10 and cropped["crop"]["y"] == 12
+    assert cropped["voxel_um"] == src["voxel_um"]
+    assert cropped["prepare"] == "ready"
+
+    # Preview and display plane reflect cropped dimensions
+    prev = Image.open(BytesIO(client.get(f"/api/files/{cropped['id']}/preview").content))
+    assert prev.size == (cw, ch)
+
+    # Secondary crop on already-cropped file accumulates coordinates
+    cw2, ch2 = max(16, cw // 2), max(16, ch // 2)
+    r2 = client.post(
+        f"/api/files/{cropped['id']}/crop",
+        json={"x": 5, "y": 6, "w": cw2, "h": ch2},
+    )
+    assert r2.status_code == 200, r2.text
+    cropped2 = r2.json()
+    assert cropped2["width"] == cw2 and cropped2["height"] == ch2
+    assert cropped2["crop"]["x"] == 15 and cropped2["crop"]["y"] == 18
+
+    # Exporting the cropped file produces images of the cropped dimensions
+    _, zf = _export(client, {"file_ids": [cropped["id"]], "format": "png", "scale_bar": True})
+    png_names = [n for n in zf.namelist() if n.endswith(".png")]
+    assert len(png_names) >= 1
+    exported_img = Image.open(BytesIO(zf.read(png_names[0])))
+    assert exported_img.size == (cw, ch)

@@ -21,17 +21,19 @@ from pydantic import BaseModel
 
 from nd2utils import __version__, auth, lifio, ometiff, perf, prepare, slide_render
 from nd2utils.config import ensure_dirs, repo_root, settings
-from nd2utils.export_jobs import new_job_id, run_export
-from nd2utils.models import ExportRequest, MeasureRequest
+from nd2utils.export_jobs import _write_ome_tiff, new_job_id, run_export
+from nd2utils.models import CropRequest, ExportRequest, MeasureRequest
 from nd2utils.nd2io import (
     Nd2Error,
-    pack_planes,
     axis_size,
     close_all,
     extract_channels,
     identify_path,
     open_nd2,
+    pack_planes,
     projection,
+    read_crop,
+    write_crop,
 )
 from nd2utils.lifio import LifError
 from nd2utils.ometiff import SlideError
@@ -639,6 +641,7 @@ _SUMMARY_KEYS = (
     "shape", "axes", "width", "height", "channels", "voxel_um",
     "objective", "magnification", "na", "acquired", "instrument",
     "software", "bits_significant", "is_rgb", "created_at", "prepare", "prepared_at",
+    "cropped", "crop",
 )
 
 
@@ -812,7 +815,7 @@ def api_update_file(file_id: str, body: FilePatch, owner_id: Owner) -> dict[str,
             raise _bad_path(exc) from exc
     else:
         name = _source_name(body.name) if body.name is not None else rec.get("name")
-        if ometiff.is_tiff_name(name) != prepare.is_slide(rec) or lifio.is_lif_name(name):
+        if not rec.get("cropped") and (ometiff.is_tiff_name(name) != prepare.is_slide(rec) or lifio.is_lif_name(name)):
             raise HTTPException(status_code=400, detail={"code": "bad_extension", "message": "Keep the file extension when renaming."})
     folder = _folder_arg(body.folder) if body.folder is not None else rec.get("folder") or ""
     clash = find_file(owner_id, folder, name)
@@ -820,6 +823,193 @@ def api_update_file(file_id: str, body: FilePatch, owner_id: Owner) -> dict[str,
         raise HTTPException(status_code=409, detail={"code": "exists", "message": "A file with this name already exists here."})
     updated = update_file(file_id, owner_id, {"name": name, "folder": folder})
     return _public(updated or rec)
+
+
+def _unique_filename(owner_id: str, folder: str, desired: str) -> str:
+    if not find_file(owner_id, folder, desired):
+        return desired
+    lower = desired.lower()
+    ext = ""
+    for suffix in (".ome.tiff", ".ome.tif", ".tiff", ".tif", ".nd2", ".lif"):
+        if lower.endswith(suffix):
+            ext = desired[-len(suffix) :]
+            stem = desired[: -len(suffix)]
+            break
+    else:
+        stem = desired
+    n = 2
+    while True:
+        candidate = f"{stem} ({n}){ext}"
+        if not find_file(owner_id, folder, candidate):
+            return candidate
+        n += 1
+
+
+@app.post("/api/files/{file_id}/crop")
+def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str, Any]:
+    rec = _need(file_id, owner_id)
+    detail = get_file_detail(file_id, owner_id) or dict(rec)
+    src_w = int(rec.get("width") or 0)
+    src_h = int(rec.get("height") or 0)
+    if src_w < 2 or src_h < 2:
+        raise HTTPException(status_code=400, detail={"code": "bad_crop", "message": "Source image dimensions are invalid."})
+    x = max(0, min(int(body.x), src_w - 2))
+    y = max(0, min(int(body.y), src_h - 2))
+    w = max(2, min(int(body.w), src_w - x))
+    h = max(2, min(int(body.h), src_h - y))
+
+    folder = _folder_arg(body.folder) if body.folder is not None else (rec.get("folder") or "")
+    orig_name = str(rec.get("name") or "image.nd2")
+    fmt = rec.get("format") or "nd2"
+
+    if body.name and body.name.strip():
+        try:
+            raw_name = normalize_filename(body.name.strip())
+        except PathError as exc:
+            raise _bad_path(exc) from exc
+    else:
+        lower = orig_name.lower()
+        stem = orig_name
+        for suffix in (".ome.tiff", ".ome.tif", ".tiff", ".tif", ".nd2", ".lif"):
+            if lower.endswith(suffix):
+                stem = orig_name[: -len(suffix)]
+                break
+        if fmt == "lif":
+            raw_name = f"{stem}_crop_{w}x{h}"
+        elif fmt in ("ome-tiff", "tiff"):
+            raw_name = f"{stem}_crop_{w}x{h}.ome.tif"
+        else:
+            raw_name = f"{stem}_crop_{w}x{h}.nd2"
+
+    if fmt == "lif":
+        final_name = _unique_filename(owner_id, folder, raw_name)
+    elif fmt in ("ome-tiff", "tiff"):
+        if not ometiff.is_tiff_name(raw_name):
+            raw_name = f"{raw_name}.ome.tif"
+        final_name = _unique_filename(owner_id, folder, raw_name)
+    else:
+        if not raw_name.lower().endswith(".nd2"):
+            raw_name = f"{raw_name}.nd2"
+        final_name = _unique_filename(owner_id, folder, raw_name)
+
+    new_id = uuid.uuid4().hex
+    src_dir = file_dir(file_id)
+    dst_dir = file_dir(new_id)
+    src_file = src_dir / "source.nd2"
+    dst_file = dst_dir / "source.nd2"
+    voxel = list(rec.get("voxel_um") or [1.0, 1.0, 1.0])
+    channels = [dict(ch) for ch in (rec.get("channels") or [])]
+
+    try:
+        if prepare.is_slide(rec):
+            slide = prepare.ensure_slide(file_id, src_file)
+            lv_idx = 0
+            for idx, lv in enumerate(slide.levels):
+                ds = slide.width / max(lv.width, 1)
+                if max(w / ds, h / ds) <= 4096 or idx == len(slide.levels) - 1:
+                    lv_idx = idx
+                    break
+            lv = slide.levels[lv_idx]
+            ds_x = slide.width / max(lv.width, 1)
+            ds_y = slide.height / max(lv.height, 1)
+            lx = max(0, min(int(round(x / ds_x)), lv.width - 1))
+            ly = max(0, min(int(round(y / ds_y)), lv.height - 1))
+            lw = max(2, min(int(round(w / ds_x)), lv.width - lx))
+            lh = max(2, min(int(round(h / ds_y)), lv.height - ly))
+            planes = [
+                ometiff.read_region(slide, lv_idx, c, lx, ly, lw, lh, t=int(body.t), z=int(body.z))
+                for c in range(slide.n_channels)
+            ]
+            if len(voxel) >= 2:
+                voxel = [float(voxel[0]) * ds_x, float(voxel[1]) * ds_y, *(voxel[2:] or [1.0])]
+            names = [str(ch.get("name") or f"C{i}") for i, ch in enumerate(channels)]
+            colors = [list(ch.get("color") or [255, 255, 255]) for ch in channels]
+            _write_ome_tiff(dst_file, planes, names, colors, voxel, rec.get("bits_significant"))
+            w, h = lw, lh
+            abs_x, abs_y = x, y
+            size_bytes = dst_file.stat().st_size
+            axes = [{"name": "C", "size": len(planes)}, {"name": "Y", "size": h}, {"name": "X", "size": w}]
+            sizes = {"C": len(planes), "Y": h, "X": w}
+            shape = [len(planes), h, w]
+        else:
+            _link_or_copy(src_file, dst_file)
+            if (src_dir / lifio.SIDECAR).is_file():
+                shutil.copy2(src_dir / lifio.SIDECAR, dst_dir / lifio.SIDECAR)
+            prev_crop = read_crop(src_file)
+            abs_x = (prev_crop[0] if prev_crop else 0) + x
+            abs_y = (prev_crop[1] if prev_crop else 0) + y
+            write_crop(dst_dir, abs_x, abs_y, w, h)
+            orig_area = max(src_w * src_h, 1)
+            size_bytes = max(1024, int(round(float(rec.get("size_bytes") or 0) * ((w * h) / orig_area))))
+            old_sizes = dict(detail.get("sizes") or {})
+            for ax_info in rec.get("axes") or []:
+                old_sizes.setdefault(ax_info["name"], ax_info["size"])
+            sizes = dict(old_sizes)
+            for k in list(sizes.keys()):
+                if k.upper() == "X":
+                    sizes[k] = w
+                elif k.upper() == "Y":
+                    sizes[k] = h
+            if not any(k.upper() == "X" for k in sizes):
+                sizes["X"] = w
+            if not any(k.upper() == "Y" for k in sizes):
+                sizes["Y"] = h
+            axes = [{"name": k, "size": int(v)} for k, v in sizes.items()]
+            shape = [int(v) for v in sizes.values()]
+
+        now = time.time()
+        text_info = dict(detail.get("text_info") or {})
+        text_info["Crop region"] = f"x={abs_x}, y={abs_y}, w={w}, h={h} (from {orig_name})"
+        groups = dict(detail.get("groups") or {})
+        if "file" in groups and isinstance(groups["file"], dict):
+            groups["file"] = {
+                **groups["file"],
+                "name": final_name,
+                "shape": shape,
+                "axes": axes,
+                "crop": {"x": abs_x, "y": abs_y, "w": w, "h": h, "source": orig_name},
+            }
+
+        new_rec: dict[str, Any] = {
+            **detail,
+            "id": new_id,
+            "name": final_name,
+            "folder": folder,
+            "format": fmt,
+            "size_bytes": size_bytes,
+            "status": "ready",
+            "error": None,
+            "width": w,
+            "height": h,
+            "axes": axes,
+            "sizes": sizes,
+            "shape": shape,
+            "voxel_um": voxel,
+            "channels": channels,
+            "created_at": now,
+            "_owner": owner_id,
+            "cropped": True,
+            "crop": {
+                "x": abs_x,
+                "y": abs_y,
+                "w": w,
+                "h": h,
+                "source_id": file_id,
+                "source_name": orig_name,
+            },
+            "text_info": text_info,
+            "groups": groups,
+            "prepare": "pending",
+        }
+        new_rec.pop("levels", None)
+        upsert_file(new_rec)
+        prepare.get(new_id, new_rec, dst_file, "display", (0, 0, 0))
+        ready_at = round(time.time(), 3)
+        updated = update_file(new_id, owner_id, {"prepare": "ready", "prepared_at": ready_at})
+        return _public(updated or {**new_rec, "prepare": "ready", "prepared_at": ready_at})
+    except Exception:
+        remove_file_data(new_id)
+        raise
 
 
 @app.delete("/api/files/{file_id}")

@@ -14,6 +14,7 @@ export function ExportPanel({
   fileCount,
   coords,
   luts,
+  visible,
 }: {
   fileIds: string[];
   /** Workspace folders to export recursively (resolved on the server). */
@@ -22,6 +23,7 @@ export function ExportPanel({
   fileCount?: number;
   coords?: { t: number; z: number; p: number };
   luts?: LutSetting[];
+  visible?: boolean[];
 }) {
   const lang = useApp((s) => s.lang);
   const nav = useNavigate();
@@ -56,7 +58,7 @@ export function ExportPanel({
         jpeg_quality: jpegQuality,
         coords: coords ?? { t: 0, z: 0, p: 0 },
         luts: luts ? Object.fromEntries(luts.map((lut, index) => [String(index), lut])) : undefined,
-        visible: luts?.map((lut) => lut.visible),
+        visible: visible ?? luts?.map((lut) => lut.visible),
       });
       await refreshJobs();
       nav("/jobs");

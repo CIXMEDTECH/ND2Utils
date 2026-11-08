@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   Crosshair,
   LineSegment,
+  LockSimple,
+  LockSimpleOpen,
   Rectangle,
   Circle,
   Polygon,
@@ -38,6 +40,10 @@ export function Advanced() {
   const selectedId = useApp((s) => s.selectedId);
   const refreshFiles = useApp((s) => s.refreshFiles);
   const select = useApp((s) => s.select);
+  const channelLocked = useApp((s) => s.channelLocked);
+  const resolveVisibleChannels = useApp((s) => s.resolveVisibleChannels);
+  const toggleChannelLock = useApp((s) => s.toggleChannelLock);
+  const updateLockedChannels = useApp((s) => s.updateLockedChannels);
   const nav = useNavigate();
   const id = fileId || selectedId || files[0]?.id || null;
 
@@ -60,6 +66,7 @@ export function Advanced() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgDataRef = useRef<ImageData | null>(null);
 
   const file = files.find((f) => f.id === id) ?? null;
   const nT = file ? axisSize(file.axes, "T") : 1;
@@ -100,6 +107,9 @@ export function Advanced() {
         const plane = unpackPlane(buf);
         setPacked(plane);
         setHistMax(plane.channels.map((ch, i) => Math.max(1, (scaled.channels[i]?.max ?? ch.suggestedMax) * 1.5)));
+        const lockedVis = resolveVisibleChannels(
+          plane.channels.map((ch, i) => ({ index: i, name: ch.name, color: ch.color })),
+        );
         setLuts((prev) =>
           plane.channels.map((ch, i) => {
             const old = prev[i];
@@ -108,7 +118,7 @@ export function Advanced() {
               min: old?.min ?? s?.min ?? ch.suggestedMin,
               max: old?.max ?? s?.max ?? ch.suggestedMax,
               gamma: old?.gamma ?? 1,
-              visible: old?.visible ?? true,
+              visible: old?.visible ?? lockedVis[i] ?? true,
               color: old?.color ?? ch.color,
             };
           }),
@@ -122,7 +132,7 @@ export function Advanced() {
     return () => {
       cancel = true;
     };
-  }, [id, tIdx, zIdx, pIdx]);
+  }, [id, lang, resolveVisibleChannels, tIdx, zIdx, pIdx]);
 
   useEffect(() => {
     return () => {
@@ -132,14 +142,24 @@ export function Advanced() {
 
   useEffect(() => {
     if (!packed || !canvasRef.current || view === "mip") return;
-    const cvs = canvasRef.current;
-    cvs.width = packed.width;
-    cvs.height = packed.height;
-    const ctx = cvs.getContext("2d");
-    if (!ctx) return;
-    const img = ctx.createImageData(packed.width, packed.height);
-    renderComposite(packed, luts, img);
-    ctx.putImageData(img, 0, 0);
+    const raf = window.requestAnimationFrame(() => {
+      const cvs = canvasRef.current;
+      if (!cvs) return;
+      if (cvs.width !== packed.width || cvs.height !== packed.height) {
+        cvs.width = packed.width;
+        cvs.height = packed.height;
+      }
+      const ctx = cvs.getContext("2d");
+      if (!ctx) return;
+      let img = imgDataRef.current;
+      if (!img || img.width !== packed.width || img.height !== packed.height) {
+        img = ctx.createImageData(packed.width, packed.height);
+        imgDataRef.current = img;
+      }
+      renderComposite(packed, luts, img);
+      ctx.putImageData(img, 0, 0);
+    });
+    return () => window.cancelAnimationFrame(raf);
   }, [packed, luts, view]);
 
   useEffect(() => {
@@ -239,30 +259,53 @@ export function Advanced() {
     <Shell dense>
       <div className="flex min-h-[calc(100dvh-4rem)] flex-col">
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
-          <Glass as="aside" shape="panel" className="overflow-auto border-b p-3 lg:border-b-0" data-tour="lut">
+          <Glass as="aside" shape="panel" className="overflow-auto border-b p-3 lg:border-b-0 lg:border-r" data-tour="lut">
             <div className="mb-2 flex items-center justify-between text-[12px] font-medium">
-              {t(lang, "lutTitle")}
-              <button
-                type="button"
-                className="rounded-lg px-2 py-1 text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]"
-                onClick={async () => {
-                  if (!id) return;
-                  try {
-                    const scaled = await autoscale(id, tIdx, zIdx, pIdx);
-                    setLuts((prev) =>
-                      prev.map((lut, i) => ({
-                        ...lut,
-                        min: scaled.channels[i]?.min ?? lut.min,
-                        max: scaled.channels[i]?.max ?? lut.max,
-                      })),
-                    );
-                  } catch (err) {
-                    setError(detailMessage(err, lang));
-                  }
-                }}
-              >
-                {t(lang, "auto")}
-              </button>
+              <span>{t(lang, "lutTitle")}</span>
+              <div className="flex items-center gap-1">
+                {packed && packed.channels.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      toggleChannelLock(
+                        packed.channels.map((ch, idx) => ({ index: idx, name: ch.name, color: ch.color })),
+                        luts.map((x) => x.visible),
+                      )
+                    }
+                    aria-pressed={channelLocked}
+                    title={t(lang, "lockChannelsHint")}
+                    className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
+                      channelLocked
+                        ? "bg-amber-400/20 text-amber-500 ring-1 ring-inset ring-amber-400/40"
+                        : "text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                    }`}
+                  >
+                    {channelLocked ? <LockSimple size={12} weight="fill" /> : <LockSimpleOpen size={12} />}
+                    {t(lang, channelLocked ? "channelsLocked" : "lockChannels")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="rounded-lg px-2 py-1 text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]"
+                  onClick={async () => {
+                    if (!id) return;
+                    try {
+                      const scaled = await autoscale(id, tIdx, zIdx, pIdx);
+                      setLuts((prev) =>
+                        prev.map((lut, i) => ({
+                          ...lut,
+                          min: scaled.channels[i]?.min ?? lut.min,
+                          max: scaled.channels[i]?.max ?? lut.max,
+                        })),
+                      );
+                    } catch (err) {
+                      setError(detailMessage(err, lang));
+                    }
+                  }}
+                >
+                  {t(lang, "auto")}
+                </button>
+              </div>
             </div>
             <Guide title="lutTitle" body="lutGuide" />
             <div className="mt-3 flex flex-col gap-3" data-tour="channels">
@@ -273,7 +316,16 @@ export function Advanced() {
                       type="checkbox"
                       checked={lut.visible}
                       onChange={(e) =>
-                        setLuts((prev) => prev.map((x, j) => (j === i ? { ...x, visible: e.target.checked } : x)))
+                        setLuts((prev) => {
+                          const next = prev.map((x, j) => (j === i ? { ...x, visible: e.target.checked } : x));
+                          if (packed) {
+                            updateLockedChannels(
+                              packed.channels.map((ch, idx) => ({ index: idx, name: ch.name, color: ch.color })),
+                              next.map((x) => x.visible),
+                            );
+                          }
+                          return next;
+                        })
                       }
                     />
                     <span className="h-2.5 w-2.5 rounded-full" style={{ background: rgbCss(lut.color) }} />

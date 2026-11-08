@@ -13,6 +13,11 @@ function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle("dark", dark);
 }
 
+export interface LockedChannelsState {
+  byIndex: boolean[];
+  byName: Record<string, boolean>;
+}
+
 export interface AppState {
   lang: Lang;
   theme: Theme;
@@ -34,6 +39,9 @@ export interface AppState {
   detail: FileDetail | null;
   jobs: JobInfo[];
   checked: Record<string, boolean>;
+  /** When enabled, channel visibility is preserved when switching between images. */
+  channelLocked: boolean;
+  lockedChannels: LockedChannelsState;
   setLang: (lang: Lang) => void;
   setTheme: (theme: Theme) => void;
   checkAuth: () => Promise<void>;
@@ -47,10 +55,27 @@ export interface AppState {
   setDetail: (d: FileDetail | null) => void;
   toggleChecked: (id: string, value?: boolean) => void;
   checkAll: (value: boolean) => void;
+  toggleChannelLock: (channels?: { name: string }[], currentVisible?: boolean[]) => void;
+  updateLockedChannels: (channels: { name: string }[], visible: boolean[]) => void;
+  resolveVisibleChannels: (channels: { name: string }[]) => boolean[];
 }
 
 const savedLang = (readPref("nd2utils.lang") as Lang | null) ?? "zh";
 const savedTheme = (readPref("nd2utils.theme") as Theme | null) ?? "system";
+const savedChannelLocked = readPref("nd2utils.channelLocked") === "1";
+const savedLockedChannels: LockedChannelsState = (() => {
+  try {
+    const raw = readPref("nd2utils.lockedChannels");
+    if (!raw) return { byIndex: [], byName: {} };
+    const parsed = JSON.parse(raw) as Partial<LockedChannelsState>;
+    return {
+      byIndex: Array.isArray(parsed.byIndex) ? parsed.byIndex.map(Boolean) : [],
+      byName: parsed.byName && typeof parsed.byName === "object" ? parsed.byName : {},
+    };
+  } catch {
+    return { byIndex: [], byName: {} };
+  }
+})();
 applyTheme(savedTheme);
 
 const emptyWorkspace = {
@@ -70,6 +95,8 @@ export const useApp = create<AppState>((set, get) => ({
   authChecked: false,
   user: null,
   sessionExpired: false,
+  channelLocked: savedChannelLocked,
+  lockedChannels: savedLockedChannels,
   ...emptyWorkspace,
   setLang: (lang) => {
     writePref("nd2utils.lang", lang);
@@ -137,6 +164,46 @@ export const useApp = create<AppState>((set, get) => ({
     const checked: Record<string, boolean> = {};
     for (const f of get().files) checked[f.id] = value;
     set({ checked });
+  },
+  toggleChannelLock: (channels, currentVisible) => {
+    const nextLocked = !get().channelLocked;
+    writePref("nd2utils.channelLocked", nextLocked ? "1" : "0");
+    if (nextLocked && channels && currentVisible) {
+      const byIndex = channels.map((_, i) => currentVisible[i] ?? true);
+      const byName: Record<string, boolean> = { ...get().lockedChannels.byName };
+      channels.forEach((ch, i) => {
+        if (ch.name) byName[ch.name] = currentVisible[i] ?? true;
+      });
+      const lockedChannels = { byIndex, byName };
+      writePref("nd2utils.lockedChannels", JSON.stringify(lockedChannels));
+      set({ channelLocked: true, lockedChannels });
+    } else {
+      set({ channelLocked: nextLocked });
+    }
+  },
+  updateLockedChannels: (channels, visible) => {
+    const byIndex = channels.map((_, i) => visible[i] ?? true);
+    const byName: Record<string, boolean> = { ...get().lockedChannels.byName };
+    channels.forEach((ch, i) => {
+      if (ch.name) byName[ch.name] = visible[i] ?? true;
+    });
+    const lockedChannels = { byIndex, byName };
+    writePref("nd2utils.lockedChannels", JSON.stringify(lockedChannels));
+    set({ lockedChannels });
+  },
+  resolveVisibleChannels: (channels) => {
+    if (!get().channelLocked) {
+      return channels.map(() => true);
+    }
+    const { byIndex, byName } = get().lockedChannels;
+    if (byIndex.length === 0 && Object.keys(byName).length === 0) {
+      return channels.map(() => true);
+    }
+    return channels.map((ch, i) => {
+      if (i < byIndex.length) return byIndex[i];
+      if (ch.name && ch.name in byName) return byName[ch.name];
+      return true;
+    });
   },
 }));
 

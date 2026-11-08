@@ -60,10 +60,20 @@ export function mapLut(v: number, min: number, max: number, gamma: number): numb
   return Math.abs(gamma - 1) < 1e-6 ? y : Math.pow(y, 1 / (gamma || 1));
 }
 
-/** mapLut for every integer value 0..size-1 (u8/u16 planes hold integers). */
+const lutCache = new Map<string, Float32Array>();
+
+/** mapLut for every integer value 0..size-1 (u8/u16 planes hold integers), cached by parameters. */
 function lutTable(size: number, min: number, max: number, gamma: number): Float32Array {
+  const key = `${size}:${min}:${max}:${gamma}`;
+  const hit = lutCache.get(key);
+  if (hit) return hit;
+  if (lutCache.size > 24) {
+    const oldest = lutCache.keys().next().value;
+    if (oldest !== undefined) lutCache.delete(oldest);
+  }
   const table = new Float32Array(size);
   for (let v = 0; v < size; v++) table[v] = mapLut(v, min, max, gamma);
+  lutCache.set(key, table);
   return table;
 }
 
@@ -116,6 +126,22 @@ export function createPreviewLayers(packed: PackedPlane, luts: LutSetting[]): Pr
     const inverseGamma = 1 / gamma;
     const span = Math.max(max - min, 1e-6);
     const [red, green, blue] = lut?.color ?? channel.color;
+    if (previewWidth === packed.width && previewHeight === packed.height && linear && min === 0 && max === 255) {
+      const rScale = red / 255;
+      const gScale = green / 255;
+      const bScale = blue / 255;
+      const data = channel.data;
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i];
+        const offset = i * 4;
+        output[offset] = v * rScale;
+        output[offset + 1] = v * gScale;
+        output[offset + 2] = v * bScale;
+        output[offset + 3] = 255;
+      }
+      context.putImageData(image, 0, 0);
+      return { canvas, name: channel.name };
+    }
     for (let y = 0; y < previewHeight; y++) {
       const sourceY = Math.min(packed.height - 1, Math.floor(y / previewScale));
       for (let x = 0; x < previewWidth; x++) {
@@ -150,33 +176,34 @@ function drawLabel(context: CanvasRenderingContext2D, name: string, x: number, y
   context.restore();
 }
 
-function niceScaleUm(umPerPixel: number, width: number): [number, number] {
-  const targetPixels = Math.max(width / 6, 32);
+export function niceScaleUm(umPerPixel: number, width: number): [number, number] {
+  const targetPixels = Math.min(Math.max(width / 6, 24), Math.max(width * 0.4, 8));
   const targetUm = targetPixels * umPerPixel;
   if (targetUm <= 0) return [10, umPerPixel ? Math.round(10 / umPerPixel) : 50];
   const exponent = Math.floor(Math.log10(targetUm));
   const fraction = targetUm / 10 ** exponent;
   const nice = fraction < 1.5 ? 1 : fraction < 3.5 ? 2 : fraction < 7.5 ? 5 : 10;
   const um = nice * 10 ** exponent;
-  return [um, Math.max(Math.round(um / umPerPixel), 8)];
+  const px = Math.max(Math.round(um / umPerPixel), 8);
+  return [um, width > 24 ? Math.min(px, Math.max(8, width - 24)) : px];
 }
 
 function drawScaleBar(context: CanvasRenderingContext2D, width: number, height: number, umPerPixel: number): void {
   if (!(umPerPixel > 0)) return;
   const [um, pixels] = niceScaleUm(umPerPixel, width);
-  const padding = 16;
+  const padding = Math.max(8, Math.min(16, Math.round(Math.min(width, height) * 0.04)));
   const x1 = width - padding;
   const x0 = x1 - pixels;
   const y = height - padding;
   const barY = y - 4;
   context.save();
-  context.fillStyle = "rgb(8 8 10 / 0.92)";
+  context.fillStyle = "rgb(8 10 14 / 0.88)";
   context.fillRect(x0 - 6, barY - 18, pixels + 12, 25);
   context.fillStyle = "rgb(240 244 248)";
   context.fillRect(x0, barY, pixels, 3);
   context.font = '12px "Geist Mono Variable", ui-monospace, monospace';
   context.textBaseline = "top";
-  context.fillText(`${Number(um.toPrecision(6))} um`, x0, barY - 16);
+  context.fillText(`${Number(um.toPrecision(6))} µm`, x0, barY - 16);
   context.restore();
 }
 

@@ -54,6 +54,30 @@ export interface FileSummary {
   prepare?: "pending" | "ready" | "error" | null;
   /** Version of the prepared previews (changes when the cache is rebuilt). */
   prepared_at?: number | null;
+  /** True when created by cropping another image in the workspace. */
+  cropped?: boolean | null;
+  crop?: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    ratio_label?: string;
+    source_id?: string;
+    source_name?: string;
+  } | null;
+}
+
+export interface CropRequest {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  ratio_label?: string;
+  name?: string;
+  folder?: string;
+  t?: number;
+  z?: number;
+  p?: number;
 }
 
 export interface FileDetail extends FileSummary {

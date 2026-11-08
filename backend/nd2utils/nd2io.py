@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -9,6 +10,7 @@ from typing import Any, Iterator
 
 import nd2
 import numpy as np
+import tifffile
 
 from nd2utils import lifio
 from nd2utils.config import settings
@@ -16,6 +18,39 @@ from nd2utils.jsonutil import jsonable
 
 MAGIC = b"ND2 FILE SIGNATURE"
 PLANE_MAGIC = b"ND2P"
+CROP_SIDECAR = "crop.json"
+_TIFF_MAGICS = (b"II*\0", b"MM\0*", b"II+\0", b"MM\0+")
+
+
+def read_crop(path: Path) -> tuple[int, int, int, int] | None:
+    """Return (x, y, w, h) from crop.json alongside `path` if present."""
+    sidecar = path.parent / CROP_SIDECAR
+    if not sidecar.is_file():
+        return None
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        x, y, w, h = int(data["x"]), int(data["y"]), int(data["w"]), int(data["h"])
+        if w > 0 and h > 0 and x >= 0 and y >= 0:
+            return (x, y, w, h)
+    except Exception:
+        pass
+    return None
+
+
+def write_crop(directory: Path, x: int, y: int, w: int, h: int) -> None:
+    (directory / CROP_SIDECAR).write_text(
+        json.dumps({"x": int(x), "y": int(y), "w": int(w), "h": int(h)}),
+        encoding="utf-8",
+    )
+
+
+def _is_tiff(path: Path) -> bool:
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(4)
+        return head in _TIFF_MAGICS
+    except OSError:
+        return False
 
 
 class Nd2Error(Exception):
@@ -103,13 +138,14 @@ def _lut_from_custom(custom: dict[str, Any], n_channels: int) -> list[tuple[floa
 
 @dataclass
 class OpenNd2:
-    """An open image: an ND2 file, or one image of a Leica LIF project (`nd` is then the LifFile)."""
+    """An open image: an ND2 file, a cropped TIFF, or one image of a Leica LIF project."""
 
     path: Path
     nd: Any
     sizes: dict[str, int]
     array: Any
     is_rgb: bool = False
+    crop: tuple[int, int, int, int] | None = None
     lock: RLock = field(default_factory=RLock, repr=False)
 
     def close(self) -> None:
@@ -139,14 +175,58 @@ def _open_lif(path: Path) -> OpenNd2:
     return OpenNd2(path=path, nd=lif, sizes=sizes, array=array, is_rgb=rgb)
 
 
+def _open_tiff(path: Path) -> OpenNd2:
+    tif = tifffile.TiffFile(path)
+    try:
+        series = tif.series[0]
+        arr = series.asarray()
+        axes = series.axes
+        sizes = {ax: int(n) for ax, n in zip(axes, arr.shape)}
+        rgb = sizes.get("S", 1) in (3, 4) and sizes.get("C", 1) == 1
+        return OpenNd2(path=path, nd=tif, sizes=sizes, array=arr, is_rgb=rgb)
+    except Exception:
+        tif.close()
+        raise
+
+
+def _with_crop(handle: OpenNd2) -> OpenNd2:
+    crop = read_crop(handle.path)
+    if not crop:
+        return handle
+    x, y, w, h = crop
+    sizes = dict(handle.sizes)
+    mapping = _axis_map(sizes)
+    x_key = mapping.get("X")
+    y_key = mapping.get("Y")
+    raw_w = int(sizes[x_key]) if x_key else w
+    raw_h = int(sizes[y_key]) if y_key else h
+    x0 = min(max(x, 0), max(raw_w - 1, 0))
+    y0 = min(max(y, 0), max(raw_h - 1, 0))
+    cw = max(1, min(w, raw_w - x0))
+    ch = max(1, min(h, raw_h - y0))
+    if x_key:
+        sizes[x_key] = cw
+    if y_key:
+        sizes[y_key] = ch
+    handle.sizes = sizes
+    handle.crop = (x0, y0, cw, ch)
+    return handle
+
+
 def open_nd2(path: Path) -> OpenNd2:
     key = str(path.resolve())
     with _OPEN_LOCK:
         if key in _OPEN:
-            _OPEN.move_to_end(key)
-            return _OPEN[key]
+            cached = _OPEN[key]
+            if cached.crop == read_crop(path):
+                _OPEN.move_to_end(key)
+                return cached
+            _OPEN.pop(key, None)
+            cached.close()
         if lifio.is_lif(path):
             handle = _open_lif(path)
+        elif _is_tiff(path):
+            handle = _open_tiff(path)
         else:
             nd = nd2.ND2File(path)
             try:
@@ -157,6 +237,7 @@ def open_nd2(path: Path) -> OpenNd2:
             except Exception:
                 nd.close()
                 raise
+        handle = _with_crop(handle)
         _OPEN[key] = handle
         while len(_OPEN) > _MAX_OPEN:
             _, old = _OPEN.popitem(last=False)
@@ -169,7 +250,14 @@ def open_uncached(path: Path) -> Iterator[OpenNd2]:
     """A private, lazily-read handle (background preparation): it neither evicts the
     viewer's cached handles nor loads the whole file into memory."""
     if lifio.is_lif(path):
-        handle = _open_lif(path)
+        handle = _with_crop(_open_lif(path))
+        try:
+            yield handle
+        finally:
+            handle.close()
+        return
+    if _is_tiff(path):
+        handle = _with_crop(_open_tiff(path))
         try:
             yield handle
         finally:
@@ -177,7 +265,7 @@ def open_uncached(path: Path) -> Iterator[OpenNd2]:
         return
     nd = nd2.ND2File(path)
     try:
-        yield OpenNd2(path=path, nd=nd, sizes=dict(nd.sizes), array=nd.to_dask(), is_rgb=bool(nd.is_rgb))
+        yield _with_crop(OpenNd2(path=path, nd=nd, sizes=dict(nd.sizes), array=nd.to_dask(), is_rgb=bool(nd.is_rgb)))
     finally:
         nd.close()
 
@@ -400,6 +488,25 @@ def _compute(arr: Any) -> np.ndarray:
     return np.asarray(arr)
 
 
+def _crop_planes(planes: list[np.ndarray], crop: tuple[int, int, int, int] | None) -> list[np.ndarray]:
+    if not crop:
+        return planes
+    x, y, w, h = crop
+    out: list[np.ndarray] = []
+    for plane in planes:
+        arr = np.asarray(plane)
+        if arr.ndim >= 2:
+            ph, pw = arr.shape[-2], arr.shape[-1]
+            x0 = min(max(x, 0), max(pw - 1, 0))
+            y0 = min(max(y, 0), max(ph - 1, 0))
+            x1 = min(pw, max(x0 + 1, x0 + w))
+            y1 = min(ph, max(y0 + 1, y0 + h))
+            out.append(np.ascontiguousarray(arr[..., y0:y1, x0:x1]))
+        else:
+            out.append(arr)
+    return out
+
+
 def extract_channels(
     handle: OpenNd2,
     t: int = 0,
@@ -435,22 +542,22 @@ def extract_channels(
     if is_rgb:
         if slab.ndim == 3 and slab.shape[-1] in (3, 4):
             planes = [slab[..., 0], slab[..., 1], slab[..., 2]]
-            return planes, sizes
+            return _crop_planes(planes, handle.crop), sizes
         if slab.ndim == 3 and slab.shape[0] in (3, 4):
-            return [slab[0], slab[1], slab[2]], sizes
+            return _crop_planes([slab[0], slab[1], slab[2]], handle.crop), sizes
     if slab.ndim == 2:
-        return [slab], sizes
+        return _crop_planes([slab], handle.crop), sizes
     # Identify C vs YX
     c_name = mapping.get("C")
     if c_name and c_name in remain:
         c_axis = remain.index(c_name)
         planes = [np.take(slab, i, axis=c_axis) for i in range(slab.shape[c_axis])]
         planes = [np.squeeze(p) for p in planes]
-        return planes, sizes
+        return _crop_planes(planes, handle.crop), sizes
     if slab.ndim == 3:
         # guess smallest non-spatial as C
-        return [np.squeeze(slab[i]) for i in range(slab.shape[0])], sizes
-    return [np.squeeze(slab)], sizes
+        return _crop_planes([np.squeeze(slab[i]) for i in range(slab.shape[0])], handle.crop), sizes
+    return _crop_planes([np.squeeze(slab)], handle.crop), sizes
 
 
 def iter_coords(sizes: dict[str, int]) -> Iterator[tuple[int, int, int]]:
@@ -504,17 +611,15 @@ def projection(
         reduced = slab.max(axis=reduce_at)
     reduced = np.squeeze(reduced)
     if reduced.ndim == 2:
-        return [reduced]
+        return _crop_planes([reduced], handle.crop)
     c_name = mapping.get("C")
     if c_name and c_name in remain and remain.index(c_name) != reduce_at:
         # C still present
-        c_axis = 0 if remain.index(c_name) < reduce_at else 0
-        # After reduction, C is likely axis 0
         if reduced.ndim == 3:
-            return [reduced[i] for i in range(reduced.shape[0])]
+            return _crop_planes([reduced[i] for i in range(reduced.shape[0])], handle.crop)
     if reduced.ndim == 3:
-        return [reduced[i] for i in range(reduced.shape[0])]
-    return [reduced]
+        return _crop_planes([reduced[i] for i in range(reduced.shape[0])], handle.crop)
+    return _crop_planes([reduced], handle.crop)
 
 
 def pack_planes(planes: list[np.ndarray], channels: list[dict[str, Any]]) -> bytes:

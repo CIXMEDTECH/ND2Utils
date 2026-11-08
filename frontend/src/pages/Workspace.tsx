@@ -2,17 +2,22 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useNavigate } from "react-router-dom";
 import {
   ArrowClockwise,
+  ArrowCounterClockwise,
   ArrowsLeftRight,
   Check,
+  CheckCircle,
   Copy,
+  Crop,
   Export as ExportIcon,
   Eye,
   File as FileIcon,
   FolderPlus,
   FolderSimplePlus,
+  LockSimple,
   MagnifyingGlass,
   PencilSimple,
   SlidersHorizontal,
+  Sparkle,
   Stack,
   Trash,
   UploadSimple,
@@ -20,6 +25,7 @@ import {
 } from "@phosphor-icons/react";
 import { ChannelToggles } from "../components/ChannelToggles";
 import { ContextMenu, type MenuItem, type MenuState } from "../components/ContextMenu";
+import { CropOverlay, defaultCropBox, fitCropToAspect, type CropBox } from "../components/CropOverlay";
 import { folderInputId } from "../components/DropZone";
 import { ExportPanel } from "../components/ExportPanel";
 import { FileTree, type TreeTarget } from "../components/FileTree";
@@ -35,6 +41,7 @@ import { t } from "../i18n";
 import {
   clientSettings,
   createFolder,
+  cropFile,
   deleteFile,
   deleteFolder,
   getFile,
@@ -45,14 +52,27 @@ import {
 } from "../lib/api";
 import { forget as forgetPreviews, getDisplay, prefetch as prefetchPreviews } from "../lib/previewCache";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
-import { createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
+import { createPreviewLayers, drawPreview, niceScaleUm, unpackPlane } from "../lib/plane";
 import { readPref, writePref } from "../lib/storage";
 import { countFilesIn, orderedFiles } from "../lib/tree";
-import type { SlideViewer, ViewState } from "../lib/slide";
+import type { Rect, SlideViewer, ViewState } from "../lib/slide";
 import type { ExportTarget, FileSummary, LutSetting, PackedPlane, SlideInfo } from "../lib/types";
 import { useApp } from "../store";
 
 type WorkspaceTab = "identify" | "metadata" | "export";
+
+type AspectPreset = "free" | "1:1" | "2:1" | "1:2" | "4:3" | "3:4" | "16:9" | "custom";
+
+const ASPECT_PRESETS: { key: AspectPreset; label?: string; ratio?: number }[] = [
+  { key: "free" },
+  { key: "1:1", label: "1:1", ratio: 1 },
+  { key: "2:1", label: "2:1", ratio: 2 },
+  { key: "1:2", label: "1:2", ratio: 0.5 },
+  { key: "4:3", label: "4:3", ratio: 4 / 3 },
+  { key: "3:4", label: "3:4", ratio: 3 / 4 },
+  { key: "16:9", label: "16:9", ratio: 16 / 9 },
+  { key: "custom" },
+];
 
 interface LocalPreview {
   fileId: string;
@@ -69,7 +89,7 @@ type DeleteAction = { type: "folder"; path: string } | { type: "file"; file: Fil
 
 const UPLOAD_INPUT = "workspace-nd2-upload";
 const TREE_WIDTH_KEY = "nd2utils.treeWidth";
-const TREE_WIDTH_DEFAULT = 340;
+const TREE_WIDTH_DEFAULT = 330;
 const TREE_WIDTH_MIN = 240;
 
 function clampTreeWidth(width: number) {
@@ -96,6 +116,11 @@ export function Workspace() {
   const reveal = useApp((s) => s.reveal);
   const folders = useApp((s) => s.folders);
   const isAdmin = useApp((s) => s.user?.role === "admin");
+  const channelLocked = useApp((s) => s.channelLocked);
+  const lockedChannels = useApp((s) => s.lockedChannels);
+  const resolveVisibleChannels = useApp((s) => s.resolveVisibleChannels);
+  const updateLockedChannels = useApp((s) => s.updateLockedChannels);
+
   const nav = useNavigate();
   const [mayRebuild, setMayRebuild] = useState(false);
   const [tab, setTab] = useState<WorkspaceTab>("identify");
@@ -119,6 +144,17 @@ export function Workspace() {
   const [slide, setSlide] = useState<SlideInfo | null>(null);
   const [slideViewer, setSlideViewer] = useState<SlideViewer | null>(null);
   const [slideView, setSlideView] = useState<ViewState | null>(null);
+
+  // Crop tool state
+  const [cropping, setCropping] = useState(false);
+  const [cropBox, setCropBox] = useState<CropBox>({ x: 0, y: 0, w: 100, h: 100 });
+  const [aspectPreset, setAspectPreset] = useState<AspectPreset>("1:1");
+  const [customRatioW, setCustomRatioW] = useState<number>(2);
+  const [customRatioH, setCustomRatioH] = useState<number>(1);
+  const [cropName, setCropName] = useState("");
+  const [croppingBusy, setCroppingBusy] = useState(false);
+  const [cropToast, setCropToast] = useState<FileSummary | null>(null);
+
   const closeMenu = useCallback(() => setMenu(null), []);
 
   useEffect(() => {
@@ -159,17 +195,26 @@ export function Workspace() {
     setPendingDelete(null);
   }, [selectedId]);
 
+  const selected = files.find((file) => file.id === selectedId) ?? null;
+
+  // Apply channel visibility on file switch or when channel lock changes
   const previewFileId = useRef<string | null>(null);
   useEffect(() => {
-    if (previewFileId.current === selectedId) return;
-    previewFileId.current = selectedId;
     const file = files.find((item) => item.id === selectedId);
-    setVisible(file?.channels.map(() => true) ?? []);
-    setComposite(true);
-    setScaleBar(true);
-  }, [files, selectedId]);
+    if (!file) {
+      previewFileId.current = null;
+      setVisible([]);
+      return;
+    }
+    if (previewFileId.current !== selectedId) {
+      previewFileId.current = selectedId;
+      setVisible(resolveVisibleChannels(file.channels));
+      setCropping(false);
+    } else if (channelLocked) {
+      setVisible(resolveVisibleChannels(file.channels));
+    }
+  }, [channelLocked, files, lockedChannels, resolveVisibleChannels, selectedId]);
 
-  const selected = files.find((file) => file.id === selectedId) ?? null;
   const channelVisible = useMemo(
     () => selected?.channels.map((_, index) => visible[index] ?? true) ?? [],
     [selected, visible],
@@ -177,6 +222,96 @@ export function Workspace() {
   const previewReady = Boolean(selected && localPreview?.fileId === selected.id);
   const selectedIsSlide = isSlide(selected);
   const slideReady = Boolean(selected && selectedIsSlide && slide?.id === selected.id && selected.prepare !== "pending");
+
+  // Compute active numeric aspect ratio for cropping
+  const activeAspectRatio = useMemo<number | null>(() => {
+    if (aspectPreset === "free") return null;
+    if (aspectPreset === "custom") {
+      const w = Number(customRatioW);
+      const h = Number(customRatioH);
+      return w > 0 && h > 0 ? w / h : null;
+    }
+    return ASPECT_PRESETS.find((p) => p.key === aspectPreset)?.ratio ?? null;
+  }, [aspectPreset, customRatioW, customRatioH]);
+
+  const activeRatioLabel = useMemo(() => {
+    if (aspectPreset === "free") return "";
+    if (aspectPreset === "custom") return `${customRatioW}:${customRatioH}`;
+    return aspectPreset;
+  }, [aspectPreset, customRatioW, customRatioH]);
+
+  // True image pixel dimensions for cropping
+  const imageDimensions = useMemo(() => {
+    if (selectedIsSlide && slide && slide.id === selected?.id) {
+      return { width: slide.width, height: slide.height };
+    }
+    if (selected && localPreview?.fileId === selected.id) {
+      return localPreview.dimensions;
+    }
+    return {
+      width: selected?.width ?? 0,
+      height: selected?.height ?? 0,
+    };
+  }, [localPreview, selected, selectedIsSlide, slide]);
+
+  // Initialize or adjust crop box when entering crop mode or changing aspect ratio
+  useEffect(() => {
+    if (!cropping || imageDimensions.width <= 0 || imageDimensions.height <= 0) return;
+    setCropBox((prev) => {
+      if (prev.w <= 0 || prev.h <= 0 || prev.x + prev.w > imageDimensions.width || prev.y + prev.h > imageDimensions.height) {
+        return defaultCropBox(imageDimensions.width, imageDimensions.height, activeAspectRatio);
+      }
+      if (activeAspectRatio && activeAspectRatio > 0) {
+        return fitCropToAspect(prev, imageDimensions.width, imageDimensions.height, activeAspectRatio);
+      }
+      return prev;
+    });
+  }, [activeAspectRatio, cropping, imageDimensions.height, imageDimensions.width]);
+
+  function startCropping() {
+    if (!selected) return;
+    const w = imageDimensions.width;
+    const h = imageDimensions.height;
+    if (w <= 0 || h <= 0) return;
+    if (!selectedIsSlide && !composite) {
+      setComposite(true);
+    }
+    setCropBox(defaultCropBox(w, h, activeAspectRatio));
+    setCropName("");
+    setCropping(true);
+  }
+
+  function resetCropBox() {
+    if (imageDimensions.width <= 0 || imageDimensions.height <= 0) return;
+    setCropBox(defaultCropBox(imageDimensions.width, imageDimensions.height, activeAspectRatio));
+  }
+
+  async function handleCreateCrop() {
+    if (!selected || croppingBusy) return;
+    setCroppingBusy(true);
+    setError(null);
+    try {
+      const created = await cropFile(selected.id, {
+        x: Math.round(cropBox.x),
+        y: Math.round(cropBox.y),
+        w: Math.round(cropBox.w),
+        h: Math.round(cropBox.h),
+        ratio_label: activeRatioLabel,
+        name: cropName.trim() || undefined,
+      });
+      await refreshFiles();
+      setCropping(false);
+      setCropToast(created);
+      select(created.id);
+      window.setTimeout(() => {
+        setCropToast((current) => (current?.id === created.id ? null : current));
+      }, 5000);
+    } catch (err) {
+      setError(detailMessage(err, lang));
+    } finally {
+      setCroppingBusy(false);
+    }
+  }
 
   // Slides are shown with the tiled viewer, zoomable down to full resolution.
   useEffect(() => {
@@ -209,8 +344,6 @@ export function Workspace() {
     let cancelled = false;
     const file = selected;
     setLoadingPreview(true);
-    // The server prepared these 8-bit, auto-contrasted channels when the file was imported;
-    // usually they come straight from the browser's local cache.
     void getDisplay(file)
       .then((buffer) => {
         if (cancelled) return;
@@ -225,7 +358,6 @@ export function Workspace() {
         const layers = createPreviewLayers(packed, luts);
         setLocalPreview({
           fileId: file.id,
-          // Large images are prepared at reduced size: the scale bar needs the true width.
           dimensions: {
             width: Math.max(file.width ?? 0, packed.width),
             height: Math.max(file.height ?? 0, packed.height),
@@ -244,11 +376,12 @@ export function Workspace() {
     return () => {
       cancelled = true;
     };
-    // A rebuilt cache (new prepared_at) replaces the preview once it is ready.
   }, [lang, selected?.id, selected?.prepared_at]);
 
-  // Decode the neighbours so stepping through a folder never waits.
-  const order = useMemo(() => orderedFiles(folders, files).filter((f) => !isSlide(f)), [folders, files]);
+  // Ordered files for keyboard navigation and neighbour prefetching
+  const allOrdered = useMemo(() => orderedFiles(folders, files), [folders, files]);
+  const order = useMemo(() => allOrdered.filter((f) => !isSlide(f)), [allOrdered]);
+
   useEffect(() => {
     if (!previewReady || !selectedId) return;
     const at = order.findIndex((f) => f.id === selectedId);
@@ -257,9 +390,39 @@ export function Workspace() {
       prefetchPreviews(
         [order[at + 1], order[at + 2], order[at - 1]].filter((f): f is FileSummary => Boolean(f) && f.prepare === "ready"),
       );
-    }, 150);
+    }, 120);
     return () => window.clearTimeout(handle);
   }, [order, previewReady, selectedId]);
+
+  // ArrowUp / ArrowDown continuous file stepping
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      const el = event.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) {
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      if (allOrdered.length === 0) return;
+      event.preventDefault();
+      const idx = allOrdered.findIndex((f) => f.id === selectedId);
+      const nextIdx =
+        event.key === "ArrowDown"
+          ? idx < 0
+            ? 0
+            : Math.min(allOrdered.length - 1, idx + 1)
+          : idx <= 0
+            ? 0
+            : idx - 1;
+      const nextFile = allOrdered[nextIdx];
+      if (nextFile && nextFile.id !== selectedId) {
+        select(nextFile.id);
+        setCurrentFolder(nextFile.folder);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [allOrdered, select, selectedId, setCurrentFolder]);
 
   function resizeTree(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -293,14 +456,15 @@ export function Workspace() {
     const canvas = previewCanvasRef.current;
     if (!canvas || !selected || localPreview?.fileId !== selected.id) return;
     drawPreview(canvas, localPreview.dimensions, localPreview.layers, {
-      composite,
-      scaleBar,
+      composite: cropping ? true : composite,
+      // When cropping is active, the CropOverlay renders its own adaptive scale bar inside the crop box
+      scaleBar: cropping ? false : scaleBar,
       visible: channelVisible,
       umPerPixel: Number(selected.voxel_um?.[0] || 0),
     });
-  }, [channelVisible, composite, localPreview, scaleBar, selected]);
+  }, [channelVisible, composite, cropping, localPreview, scaleBar, selected]);
+
   const selectedIds = files.filter((file) => checked[file.id]).map((file) => file.id);
-  // Slides are exported from the slide viewer (by region / channel / resolution), not in batches.
   const exportIds = (selectedIds.length ? selectedIds : selected ? [selected.id] : []).filter(
     (id) => !isSlide(files.find((file) => file.id === id)),
   );
@@ -343,6 +507,9 @@ export function Workspace() {
       const count = selected?.channels.length ?? prev.length;
       const next = Array.from({ length: count }, (_, i) => prev[i] ?? true);
       next[index] = !next[index];
+      if (selected) {
+        updateLockedChannels(selected.channels, next);
+      }
       return next;
     });
   }
@@ -405,6 +572,15 @@ export function Workspace() {
     const exportChecked = checked[file.id] && checkedFiles.length > 1;
     items.push(
       { key: "open", label: t(lang, "open"), icon: <Eye size={15} />, onSelect: () => select(file.id) },
+      {
+        key: "crop",
+        label: t(lang, "cropTitle"),
+        icon: <Crop size={15} />,
+        onSelect: () => {
+          select(file.id);
+          window.setTimeout(() => startCropping(), 80);
+        },
+      },
       isSlide(file)
         ? { key: "slide", label: t(lang, "openSlide"), icon: <Stack size={15} />, onSelect: () => nav(`/slide/${file.id}`) }
         : { key: "advanced", label: t(lang, "openAdvanced"), icon: <SlidersHorizontal size={15} />, onSelect: () => nav(`/advanced/${file.id}`) },
@@ -450,7 +626,6 @@ export function Workspace() {
       setError(null);
       forgetPreviews(affected.map((f) => f.id));
       await rebuildCache(body);
-      // The files now show as preparing; the list keeps refreshing until they are ready again.
       await refreshFiles();
     } catch (err) {
       setError(detailMessage(err, lang));
@@ -471,7 +646,6 @@ export function Workspace() {
       }
       reveal(renamed.path);
     } else {
-      // Images of a LIF project are named by LAS X and have no extension ("Series 1.5x" is not ".5x").
       const ext = nameAction.file.format === "lif" ? "" : fileExtension(nameAction.file.name) || ".nd2";
       const name = !ext || value.toLowerCase().endsWith(ext.toLowerCase()) ? value : `${value}${ext}`;
       await updateFile(nameAction.file.id, { name });
@@ -502,13 +676,141 @@ export function Workspace() {
     }
   }
 
+  const umPerPx = Number(selected?.voxel_um?.[0] || slide?.um_per_px || 0);
+  const newScaleBarUm = umPerPx > 0 && cropBox.w > 0 ? niceScaleUm(umPerPx, cropBox.w)[0] : 0;
+
+  // Shared Crop Control Bar rendered when cropping is active
+  const cropToolbar = cropping && selected && (
+    <div
+      data-no-pan
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      className="fade-in absolute inset-x-3 top-14 z-30 mx-auto max-w-3xl"
+    >
+      <Glass tone="dark" shape="island" className="flex flex-col gap-2.5 p-3 text-[11.5px] text-white shadow-2xl">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-sky-400/20 text-sky-300">
+              <Crop size={14} weight="bold" />
+            </span>
+            <span className="font-semibold tracking-tight">{t(lang, "cropTitle")}</span>
+            <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-sky-200">
+              {Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
+            </span>
+            {newScaleBarUm > 0 && (
+              <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-emerald-300">
+                {t(lang, "cropNewScale")}: {formatUm(newScaleBarUm)}
+              </span>
+            )}
+          </div>
+          <span className="hidden text-[11px] text-white/50 sm:inline">{t(lang, "cropRegionInfo")}</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-[11px] text-white/60">{t(lang, "cropRatio")}:</span>
+          {ASPECT_PRESETS.map((preset) => {
+            const active = aspectPreset === preset.key;
+            const label =
+              preset.key === "free"
+                ? t(lang, "cropFree")
+                : preset.key === "custom"
+                  ? t(lang, "cropCustom")
+                  : preset.label;
+            return (
+              <button
+                key={preset.key}
+                type="button"
+                onClick={() => setAspectPreset(preset.key)}
+                aria-pressed={active}
+                className={`cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors ${
+                  active
+                    ? "bg-sky-400 font-semibold text-slate-950 shadow-sm"
+                    : "bg-white/8 text-white/75 hover:bg-white/15 hover:text-white"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+
+          {aspectPreset === "custom" && (
+            <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-white/15 bg-black/40 px-1.5 py-0.5 font-mono text-[11px]">
+              <input
+                type="number"
+                min={0.1}
+                step="any"
+                value={customRatioW}
+                onChange={(e) => setCustomRatioW(Math.max(0.1, Number(e.target.value) || 1))}
+                aria-label={t(lang, "cropWidthRatio")}
+                className="w-11 bg-transparent text-center text-white focus:outline-none"
+              />
+              <span className="text-white/40">:</span>
+              <input
+                type="number"
+                min={0.1}
+                step="any"
+                value={customRatioH}
+                onChange={(e) => setCustomRatioH(Math.max(0.1, Number(e.target.value) || 1))}
+                aria-label={t(lang, "cropHeightRatio")}
+                className="w-11 bg-transparent text-center text-white focus:outline-none"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-2">
+          <label className="flex min-w-[180px] flex-1 items-center gap-2 rounded-lg border border-white/12 bg-black/35 px-2.5 py-1">
+            <span className="shrink-0 text-[11px] text-white/55">{t(lang, "fileName")}</span>
+            <input
+              type="text"
+              value={cropName}
+              onChange={(e) => setCropName(e.target.value)}
+              placeholder={`${selected.name.replace(/\.[^.]+$/, "")}_crop_${Math.round(cropBox.w)}x${Math.round(cropBox.h)}`}
+              aria-label={t(lang, "cropNamePlaceholder")}
+              className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-white placeholder:text-white/30 focus:outline-none"
+            />
+          </label>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={resetCropBox}
+              className="inline-flex h-7 items-center gap-1 rounded-lg bg-white/8 px-2.5 text-[11px] text-white/75 transition-colors hover:bg-white/15 hover:text-white"
+            >
+              <ArrowCounterClockwise size={13} />
+              {t(lang, "cropReset")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCropping(false)}
+              className="inline-flex h-7 items-center gap-1 rounded-lg bg-white/8 px-2.5 text-[11px] text-white/75 transition-colors hover:bg-white/15 hover:text-white"
+            >
+              <X size={13} />
+              {t(lang, "cropCancel")}
+            </button>
+            <button
+              type="button"
+              disabled={croppingBusy}
+              onClick={() => void handleCreateCrop()}
+              className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-sky-400 px-3 text-[11px] font-semibold text-slate-950 shadow-sm transition-all hover:bg-sky-300 disabled:opacity-50"
+            >
+              <Sparkle size={13} weight="fill" />
+              {croppingBusy ? t(lang, "cropCreating") : t(lang, "cropSaveNew")}
+            </button>
+          </div>
+        </div>
+      </Glass>
+    </div>
+  );
+
   return (
     <Shell dense>
       <div
-        className="grid min-h-[calc(100dvh-4rem)] grid-cols-1 lg:h-[calc(100dvh-4rem)] lg:min-h-0 lg:grid-cols-[var(--tree-w)_minmax(0,1fr)_340px]"
+        className="grid min-h-[calc(100dvh-3.35rem)] grid-cols-1 lg:h-[calc(100dvh-3.35rem)] lg:min-h-0 lg:grid-cols-[var(--tree-w)_minmax(0,1fr)_350px]"
         style={{ "--tree-w": `${treeWidth}px` } as React.CSSProperties}
       >
-        <Glass as="aside" shape="panel" className="relative flex min-h-0 flex-col overflow-visible border-b lg:border-b-0">
+        {/* Left Pane: File Tree */}
+        <Glass as="aside" shape="panel" className="relative flex min-h-0 flex-col overflow-visible border-b lg:border-b-0 lg:border-r">
           <div
             role="separator"
             aria-orientation="vertical"
@@ -527,16 +829,18 @@ export function Workspace() {
             <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-[var(--accent)] group-focus-visible:bg-[var(--accent)] group-active:bg-[var(--accent)]" />
           </div>
           <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-[12px] text-[var(--text-dim)]">
-            <span className="inline-flex items-center gap-2">
+            <span className="inline-flex items-center gap-2 font-medium text-[var(--text)]">
               {t(lang, "files")}
-              <span className="font-mono text-[10px]">{files.length}</span>
+              <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--accent)]">
+                {files.length}
+              </span>
             </span>
             <span className="flex items-center gap-0.5">
               {files.length > 0 && (
                 <button
                   type="button"
                   onClick={() => checkAll(!allChecked)}
-                  className="rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                  className="rounded-md px-1.5 py-1 text-[11px] transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
                 >
                   {t(lang, allChecked ? "clearSelection" : "selectAll")}
                 </button>
@@ -557,7 +861,7 @@ export function Workspace() {
           </div>
 
           {error && (
-            <p role="alert" className="mx-3 mb-2 text-[12px] leading-5 text-[var(--danger)]">
+            <p role="alert" className="mx-3 mb-2 rounded-lg bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-2.5 py-1.5 text-[12px] leading-5 text-[var(--danger)]">
               {error}
             </p>
           )}
@@ -565,8 +869,8 @@ export function Workspace() {
           <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--line)] max-lg:max-h-[70dvh]">
             <FileTree onMenu={openMenu} />
             {files.length === 0 && (
-              <p className="mx-3 mb-3 rounded-xl border border-dashed border-[var(--line)] px-4 py-6 text-center text-[12px] leading-5 text-[var(--text-dim)]">
-                <FileIcon size={22} weight="duotone" className="mx-auto mb-2 text-[var(--accent)]" />
+              <p className="mx-3 my-4 rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[12px] leading-5 text-[var(--text-dim)]">
+                <FileIcon size={24} weight="duotone" className="mx-auto mb-2 text-[var(--accent)]" />
                 {t(lang, "emptyFiles")}
               </p>
             )}
@@ -574,15 +878,56 @@ export function Workspace() {
           <p className="border-t border-[var(--line)] px-3 py-2 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, "treeHint")}</p>
         </Glass>
 
-        <main className="min-h-[430px] bg-[var(--well)]">
+        {/* Center Pane: Optical Viewport */}
+        <main className="relative min-h-[450px] bg-[var(--well)]">
+          {cropToast && (
+            <div className="fade-in absolute right-3 top-14 z-30 flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-slate-950/90 px-3 py-2 text-[12px] text-emerald-200 shadow-xl backdrop-blur">
+              <CheckCircle size={16} weight="fill" className="shrink-0 text-emerald-400" />
+              <span>
+                {t(lang, "cropSuccess")}: <strong className="font-mono text-white">{cropToast.name}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  select(cropToast.id);
+                  setTab("export");
+                  setCropToast(null);
+                }}
+                className="ml-1 rounded-md bg-emerald-400/20 px-2 py-0.5 text-[11px] font-medium text-emerald-200 hover:bg-emerald-400/30"
+              >
+                {t(lang, "export")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCropToast(null)}
+                className="text-white/50 hover:text-white"
+                aria-label={t(lang, "close")}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          )}
+
           {selected && selectedIsSlide ? (
-            <div className="flex h-full min-h-[430px] flex-col">
-              <div className="flex min-h-11 items-center gap-1 border-b border-white/[0.06] bg-black/20 px-3 text-[11px] text-white/58">
+            <div className="flex h-full min-h-[450px] flex-col">
+              <div className="flex min-h-10 items-center gap-1.5 border-b border-white/[0.07] bg-black/30 px-3 text-[11px] text-white/65">
                 <SlideZoomControls viewer={slideViewer} view={slideReady ? slideView : null} />
+                <span className="mx-1 h-4 w-px bg-white/10" aria-hidden />
+                <button
+                  type="button"
+                  onClick={() => (cropping ? setCropping(false) : startCropping())}
+                  aria-pressed={cropping}
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium transition-colors ${
+                    cropping ? "bg-sky-400 text-slate-950 shadow-sm" : "text-white/75 hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  <Crop size={14} weight="bold" />
+                  {t(lang, "cropTool")}
+                </button>
                 <button
                   type="button"
                   onClick={() => nav(`/slide/${selected.id}`)}
-                  className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-lg px-2 transition-colors hover:bg-white/10 hover:text-white"
+                  className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 transition-colors hover:bg-white/10 hover:text-white"
                 >
                   <Stack size={14} /> {t(lang, "openSlide")}
                 </button>
@@ -592,6 +937,22 @@ export function Workspace() {
                   info={slide}
                   display={slideDisplay}
                   scaleBar={scaleBar}
+                  tool={cropping ? "select" : "pan"}
+                  selection={cropping ? (cropBox as Rect) : null}
+                  onSelection={(rect) => {
+                    if (!rect) return;
+                    const nextBox: CropBox = {
+                      x: Math.round(rect.x),
+                      y: Math.round(rect.y),
+                      w: Math.max(8, Math.round(rect.w)),
+                      h: Math.max(8, Math.round(rect.h)),
+                    };
+                    setCropBox(
+                      activeAspectRatio
+                        ? fitCropToAspect(nextBox, slide.width, slide.height, activeAspectRatio)
+                        : nextBox,
+                    );
+                  }}
                   onViewer={setSlideViewer}
                   onView={setSlideView}
                 >
@@ -600,13 +961,16 @@ export function Workspace() {
                       type="button"
                       onClick={() => setScaleBar((value) => !value)}
                       aria-pressed={scaleBar}
-                      className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${scaleBar ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
+                      className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                        scaleBar ? "bg-sky-400 text-slate-950 shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"
+                      }`}
                     >
                       {t(lang, "scaleBar")}
                     </button>
                   </Glass>
+                  {cropToolbar}
                   {selected.channels.length > 0 && (
-                    <Glass tone="dark" shape="chip" className="absolute bottom-3 left-3 z-20 max-w-[min(100%-10rem,32rem)] overflow-visible p-1">
+                    <Glass tone="dark" shape="chip" className="absolute bottom-3 left-3 z-20 max-w-[min(100%-10rem,34rem)] overflow-visible p-1">
                       <ChannelToggles channels={selected.channels} visible={channelVisible} onToggle={toggleChannel} />
                     </Glass>
                   )}
@@ -616,46 +980,93 @@ export function Workspace() {
               )}
             </div>
           ) : (
-          <ZoomStage
-            src={null}
-            alt={t(lang, "previewAlt")}
-            mediaReady={previewReady}
-            mediaLoading={loadingPreview}
-            media={
-              <canvas
-                ref={previewCanvasRef}
-                role="img"
-                aria-label={t(lang, "previewAlt")}
-                className="block max-h-none max-w-none"
-              />
-            }
-          >
-            <Glass tone="dark" shape="chip" className="absolute left-3 top-3 flex gap-1 overflow-visible p-1">
-              {([
-                ["overlay", composite, () => setComposite(true)],
-                ["split", !composite, () => setComposite(false)],
-                ["scaleBar", scaleBar, () => setScaleBar((value) => !value)],
-              ] as const).map(([key, active, action]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={action}
-                  aria-pressed={active}
-                  className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${active ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
-                >
-                  {t(lang, key)}
-                </button>
-              ))}
-            </Glass>
-            {selected && selected.channels.length > 0 && (
-              <Glass tone="dark" shape="chip" className="absolute bottom-3 left-3 max-w-[min(100%-1.5rem,32rem)] overflow-visible p-1">
-                <ChannelToggles channels={selected.channels} visible={channelVisible} onToggle={toggleChannel} />
+            <ZoomStage
+              src={null}
+              alt={t(lang, "previewAlt")}
+              mediaReady={previewReady}
+              mediaLoading={loadingPreview}
+              media={
+                <canvas
+                  ref={previewCanvasRef}
+                  role="img"
+                  aria-label={t(lang, "previewAlt")}
+                  className="block max-h-none max-w-none"
+                />
+              }
+              mediaOverlay={
+                cropping && previewReady && imageDimensions.width > 0 && imageDimensions.height > 0 ? (
+                  <CropOverlay
+                    imageWidth={imageDimensions.width}
+                    imageHeight={imageDimensions.height}
+                    umPerPixel={umPerPx}
+                    crop={cropBox}
+                    aspectRatio={activeAspectRatio}
+                    scaleBar={scaleBar}
+                    onChange={setCropBox}
+                  />
+                ) : null
+              }
+            >
+              <Glass tone="dark" shape="chip" className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1 overflow-visible p-1">
+                {(
+                  [
+                    ["overlay", composite, () => setComposite(true)],
+                    [
+                      "split",
+                      !composite,
+                      () => {
+                        setCropping(false);
+                        setComposite(false);
+                      },
+                    ],
+                    ["scaleBar", scaleBar, () => setScaleBar((value) => !value)],
+                  ] as const
+                ).map(([key, active, action]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={action}
+                    aria-pressed={active}
+                    className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                      active ? "bg-white text-slate-950 shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    {t(lang, key)}
+                  </button>
+                ))}
+                {selected && previewReady && (
+                  <>
+                    <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden />
+                    <button
+                      type="button"
+                      onClick={() => (cropping ? setCropping(false) : startCropping())}
+                      aria-pressed={cropping}
+                      className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                        cropping
+                          ? "bg-sky-400 text-slate-950 shadow-sm"
+                          : "text-sky-300 hover:bg-sky-400/15 hover:text-sky-200"
+                      }`}
+                      title={t(lang, "cropTitle")}
+                    >
+                      <Crop size={13} weight="bold" />
+                      {t(lang, "cropTool")}
+                    </button>
+                  </>
+                )}
               </Glass>
-            )}
-          </ZoomStage>
+
+              {cropToolbar}
+
+              {selected && selected.channels.length > 0 && (
+                <Glass tone="dark" shape="chip" className="absolute bottom-3 left-3 z-20 max-w-[min(100%-1.5rem,36rem)] overflow-visible p-1">
+                  <ChannelToggles channels={selected.channels} visible={channelVisible} onToggle={toggleChannel} />
+                </Glass>
+              )}
+            </ZoomStage>
           )}
         </main>
 
+        {/* Right Pane: Inspector & Export */}
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-t lg:border-l lg:border-t-0">
           <div className="flex gap-1 border-b border-[var(--line)] p-2 text-[12px]" role="tablist">
             {WORKSPACE_TABS.map(({ key, label }) => (
@@ -665,7 +1076,11 @@ export function Workspace() {
                 role="tab"
                 aria-selected={tab === key}
                 onClick={() => setTab(key)}
-                className={`flex-1 rounded-lg px-2 py-2 transition-colors ${tab === key ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
+                className={`flex-1 rounded-lg px-2 py-1.5 font-medium transition-colors ${
+                  tab === key
+                    ? "bg-[var(--accent-soft)] text-[var(--accent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_28%,transparent)]"
+                    : "text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                }`}
               >
                 {t(lang, label)}
               </button>
@@ -674,185 +1089,233 @@ export function Workspace() {
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
             {!selected && (
-              <div className="flex min-h-44 flex-col items-center justify-center text-center text-[13px] leading-5 text-[var(--text-dim)]">
-                <FileIcon size={24} weight="duotone" className="mb-3 text-[var(--accent)]" />
+              <div className="flex min-h-48 flex-col items-center justify-center text-center text-[13px] leading-5 text-[var(--text-dim)]">
+                <FileIcon size={26} weight="duotone" className="mb-3 text-[var(--accent)]" />
                 <p className="max-w-[27ch]">{t(lang, "noneSelected")}</p>
               </div>
             )}
 
             {selected && (
               <div>
-                  {tab === "identify" && (
-                    <>
-                      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 text-[13px]">
-                        {isSlide(selected) ? (
-                          <>
-                            <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
-                            <dd className="font-mono tabular-nums">
-                              {selected.format === "tiff" ? "TIFF" : "OME-TIFF"}
-                              {selected.levels?.length ? ` · ${selected.levels.length} ${t(lang, "pyramidLevels")}` : ""}
-                            </dd>
-                          </>
-                        ) : selected.format === "lif" ? (
-                          <>
-                            <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
-                            <dd className="font-mono tabular-nums">Leica LIF</dd>
-                          </>
-                        ) : (
-                          <>
-                            <dt className="text-[var(--text-dim)]">{t(lang, "version")}</dt>
-                            <dd className="font-mono tabular-nums">{selected.version?.join(".") ?? "–"}</dd>
-                          </>
+                {tab === "identify" && (
+                  <>
+                    {/* Header Summary Card */}
+                    <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--bg)]/60 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <h2 className="truncate text-[13px] font-semibold tracking-tight text-[var(--text)]" title={selected.name}>
+                          {selected.name}
+                        </h2>
+                        {selected.cropped && (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
+                            <Crop size={11} weight="bold" />
+                            {t(lang, "croppedBadge")}
+                            {selected.crop?.ratio_label ? ` ${selected.crop.ratio_label}` : ""}
+                          </span>
                         )}
-                        <dt className="text-[var(--text-dim)]">{t(lang, "dtype")}</dt>
-                        <dd className="font-mono tabular-nums">
-                          {selected.dtype ?? "–"} {selected.bits_significant ? `(${selected.bits_significant}-bit)` : ""}
-                        </dd>
-                        <dt className="text-[var(--text-dim)]">{t(lang, "shape")}</dt>
-                        <dd className="break-words font-mono tabular-nums">
-                          {selected.axes?.map((axis) => `${axis.name}${axis.size}`).join(" ") || selected.shape.join("×")}
-                        </dd>
-                        <dt className="text-[var(--text-dim)]">{t(lang, "channels")}</dt>
-                        <dd>
-                          <ChannelToggles
-                            variant="list"
-                            channels={selected.channels}
-                            visible={channelVisible}
-                            onToggle={toggleChannel}
-                          />
-                        </dd>
-                        <dt className="text-[var(--text-dim)]">{t(lang, "objective")}</dt>
-                        <dd>
-                          {selected.objective ?? "–"}
-                          {selected.na ? ` · NA ${selected.na}` : ""}
-                        </dd>
-                        <dt className="text-[var(--text-dim)]">{t(lang, "voxel")}</dt>
-                        <dd className="font-mono tabular-nums">{formatUm(selected.voxel_um?.[0])}/px</dd>
-                        <dt className="text-[var(--text-dim)]">{t(lang, "instrument")}</dt>
-                        <dd>{selected.instrument ?? "–"}</dd>
-                        <dt className="text-[var(--text-dim)]">{t(lang, "software")}</dt>
-                        <dd>{selected.software ?? "–"}</dd>
-                        <dt className="text-[var(--text-dim)]">{t(lang, "acquired")}</dt>
-                        <dd className="font-mono text-[11px] tabular-nums">{selected.acquired ?? "–"}</dd>
-                      </dl>
+                      </div>
+                      <p className="mt-1 font-mono text-[11px] tabular-nums text-[var(--text-dim)]">
+                        {selected.width ?? "–"} × {selected.height ?? "–"} px
+                        {selected.voxel_um?.[0]
+                          ? ` · ${formatUm((selected.width ?? 0) * selected.voxel_um[0])} × ${formatUm((selected.height ?? 0) * selected.voxel_um[0])}`
+                          : ""}
+                      </p>
+                    </div>
 
-                      <div className="mt-7 flex flex-wrap gap-2">
-                        {isSlide(selected) ? (
-                          <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 px-4 text-[12px]">
-                            {t(lang, "openSlide")}
-                          </button>
-                        ) : (
-                          <button type="button" onClick={() => nav(`/advanced/${selected.id}`)} className="primary-action min-h-9 px-4 text-[12px]">
-                            {t(lang, "openAdvanced")}
-                          </button>
+                    {/* Channels Card with Lock */}
+                    <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-[11.5px] font-semibold text-[var(--text-dim)]">{t(lang, "channels")}</span>
+                        {channelLocked && (
+                          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-500">
+                            <LockSimple size={11} weight="fill" />
+                            {t(lang, "channelsLocked")}
+                          </span>
                         )}
-                        {pendingDelete !== selected.id && (
-                          <button
-                            type="button"
-                            onClick={() => setPendingDelete(selected.id)}
-                            className="inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-[12px] text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_9%,transparent)]"
-                          >
-                            <Trash size={14} /> {t(lang, "delete")}
+                      </div>
+                      <ChannelToggles
+                        variant="list"
+                        channels={selected.channels}
+                        visible={channelVisible}
+                        onToggle={toggleChannel}
+                      />
+                    </div>
+
+                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/30 p-3 text-[12.5px]">
+                      {isSlide(selected) ? (
+                        <>
+                          <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
+                          <dd className="font-mono tabular-nums">
+                            {selected.format === "tiff" ? "TIFF" : "OME-TIFF"}
+                            {selected.levels?.length ? ` · ${selected.levels.length} ${t(lang, "pyramidLevels")}` : ""}
+                          </dd>
+                        </>
+                      ) : selected.format === "lif" ? (
+                        <>
+                          <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
+                          <dd className="font-mono tabular-nums">Leica LIF</dd>
+                        </>
+                      ) : selected.format === "ome-tiff" || selected.format === "tiff" ? (
+                        <>
+                          <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
+                          <dd className="font-mono tabular-nums">{selected.format === "tiff" ? "TIFF" : "OME-TIFF"}</dd>
+                        </>
+                      ) : (
+                        <>
+                          <dt className="text-[var(--text-dim)]">{t(lang, "version")}</dt>
+                          <dd className="font-mono tabular-nums">{selected.version?.join(".") ?? "–"}</dd>
+                        </>
+                      )}
+                      <dt className="text-[var(--text-dim)]">{t(lang, "dtype")}</dt>
+                      <dd className="font-mono tabular-nums">
+                        {selected.dtype ?? "–"} {selected.bits_significant ? `(${selected.bits_significant}-bit)` : ""}
+                      </dd>
+                      <dt className="text-[var(--text-dim)]">{t(lang, "shape")}</dt>
+                      <dd className="break-words font-mono tabular-nums">
+                        {selected.axes?.map((axis) => `${axis.name}${axis.size}`).join(" ") || selected.shape.join("×")}
+                      </dd>
+                      <dt className="text-[var(--text-dim)]">{t(lang, "objective")}</dt>
+                      <dd>
+                        {selected.objective ?? "–"}
+                        {selected.na ? ` · NA ${selected.na}` : ""}
+                      </dd>
+                      <dt className="text-[var(--text-dim)]">{t(lang, "voxel")}</dt>
+                      <dd className="font-mono tabular-nums">{formatUm(selected.voxel_um?.[0])}/px</dd>
+                      <dt className="text-[var(--text-dim)]">{t(lang, "instrument")}</dt>
+                      <dd>{selected.instrument ?? "–"}</dd>
+                      <dt className="text-[var(--text-dim)]">{t(lang, "software")}</dt>
+                      <dd>{selected.software ?? "–"}</dd>
+                      <dt className="text-[var(--text-dim)]">{t(lang, "acquired")}</dt>
+                      <dd className="font-mono text-[11px] tabular-nums">{selected.acquired ?? "–"}</dd>
+                    </dl>
+
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      {isSlide(selected) ? (
+                        <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 flex-1 px-3 text-[12px]">
+                          <Stack size={15} />
+                          {t(lang, "openSlide")}
+                        </button>
+                      ) : (
+                        <button type="button" onClick={() => nav(`/advanced/${selected.id}`)} className="primary-action min-h-9 flex-1 px-3 text-[12px]">
+                          <SlidersHorizontal size={15} />
+                          {t(lang, "openAdvanced")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => (cropping ? setCropping(false) : startCropping())}
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      >
+                        <Crop size={14} weight="bold" />
+                        {t(lang, "cropTool")}
+                      </button>
+                      {pendingDelete !== selected.id && (
+                        <button
+                          type="button"
+                          onClick={() => setPendingDelete(selected.id)}
+                          className="inline-flex min-h-9 items-center gap-1.5 rounded-xl px-2.5 text-[12px] text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)]"
+                          title={t(lang, "delete")}
+                        >
+                          <Trash size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {pendingDelete === selected.id && (
+                      <div className="mt-4 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_28%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg))] p-3">
+                        <p className="text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "deleteHint")}</p>
+                        <div className="mt-3 flex gap-2">
+                          <button type="button" onClick={() => void confirmDelete()} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--danger)] px-3 text-[11px] font-medium text-white">
+                            <Check size={13} /> {t(lang, "confirmDelete")}
+                          </button>
+                          <button type="button" onClick={() => setPendingDelete(null)} className="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-[11px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+                            <X size={13} /> {t(lang, "cancel")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {tab === "metadata" && (
+                  <div className="flex flex-col gap-3">
+                    {loadingDetail && <p className="text-[12px] text-[var(--text-dim)]">{t(lang, "loadingFile")}</p>}
+                    {!loadingDetail && detail && (
+                      <>
+                        <label className="relative block">
+                          <MagnifyingGlass size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+                          <input
+                            value={q}
+                            onChange={(event) => setQ(event.target.value)}
+                            placeholder={t(lang, "searchMeta")}
+                            className="h-9 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-9 pr-3 text-[12.5px] transition-colors focus:border-[var(--accent)] focus:outline-none"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(metaBlob);
+                            setCopied(true);
+                            window.setTimeout(() => setCopied(false), 1200);
+                          }}
+                          className="inline-flex min-h-8 items-center gap-1.5 self-start rounded-lg px-2 text-[12px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                        >
+                          {copied ? <Check size={14} weight="bold" /> : <Copy size={14} />}
+                          {copied ? t(lang, "copied") : t(lang, "copyJson")}
+                        </button>
+
+                        {filteredText.map((row) => (
+                          <section key={row.k}>
+                            <h3 className="text-[11.5px] font-semibold text-[var(--text-dim)]">{row.k}</h3>
+                            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5 font-mono text-[10px] leading-relaxed">
+                              {row.v}
+                            </pre>
+                          </section>
+                        ))}
+                        {detail.events?.length ? (
+                          <section>
+                            <h3 className="text-[11.5px] font-semibold text-[var(--text-dim)]">{t(lang, "events")}</h3>
+                            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5 font-mono text-[10px] leading-relaxed">
+                              {JSON.stringify(detail.events, null, 2)}
+                            </pre>
+                          </section>
+                        ) : null}
+                        {filteredText.length === 0 && !detail.events?.length && (
+                          <p className="py-6 text-center text-[12px] text-[var(--text-dim)]">
+                            {t(lang, q ? "noSearchResults" : "noMetadata")}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {tab === "export" && (
+                  <>
+                    <p className="mb-3 truncate font-mono text-[11.5px] text-[var(--text-dim)]" title={exportIds.length === 1 ? joinPath(selected.folder, selected.name) : undefined}>
+                      {selectedIds.length
+                        ? `${t(lang, "checkedCount")} ${selectedIds.length} ${t(lang, "nFiles")}`
+                        : joinPath(selected.folder, selected.name)}
+                    </p>
+                    {exportIds.length > 0 ? (
+                      <ExportPanel fileIds={exportIds} visible={channelVisible} />
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        <Guide title="export" body="slideExportHint" />
+                        {isSlide(selected) && (
+                          <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 self-start px-4 text-[12px]">
+                            {t(lang, "openSlide")}
                           </button>
                         )}
                       </div>
-
-                      {pendingDelete === selected.id && (
-                        <div className="mt-4 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_28%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg))] p-3">
-                          <p className="text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "deleteHint")}</p>
-                          <div className="mt-3 flex gap-2">
-                            <button type="button" onClick={() => void confirmDelete()} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--danger)] px-3 text-[11px] font-medium text-white">
-                              <Check size={13} /> {t(lang, "confirmDelete")}
-                            </button>
-                            <button type="button" onClick={() => setPendingDelete(null)} className="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-[11px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
-                              <X size={13} /> {t(lang, "cancel")}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {tab === "metadata" && (
-                    <div className="flex flex-col gap-3">
-                      {loadingDetail && <p className="text-[12px] text-[var(--text-dim)]">{t(lang, "loadingFile")}</p>}
-                      {!loadingDetail && detail && (
-                        <>
-                          <label className="relative block">
-                            <MagnifyingGlass size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
-                            <input
-                              value={q}
-                              onChange={(event) => setQ(event.target.value)}
-                              placeholder={t(lang, "searchMeta")}
-                              className="h-10 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-9 pr-3 text-[13px] transition-colors focus:border-[var(--accent)]"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              await navigator.clipboard.writeText(metaBlob);
-                              setCopied(true);
-                              window.setTimeout(() => setCopied(false), 1200);
-                            }}
-                            className="inline-flex min-h-8 items-center gap-1.5 self-start rounded-lg px-2 text-[12px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
-                          >
-                            {copied ? <Check size={14} weight="bold" /> : <Copy size={14} />}
-                            {copied ? t(lang, "copied") : t(lang, "copyJson")}
-                          </button>
-
-                          {filteredText.map((row) => (
-                            <section key={row.k}>
-                              <h3 className="text-[12px] font-semibold text-[var(--text-dim)]">{row.k}</h3>
-                              <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--bg)] p-2.5 font-mono text-[10px] leading-relaxed">
-                                {row.v}
-                              </pre>
-                            </section>
-                          ))}
-                          {detail.events?.length ? (
-                            <section>
-                              <h3 className="text-[12px] font-semibold text-[var(--text-dim)]">{t(lang, "events")}</h3>
-                              <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--bg)] p-2.5 font-mono text-[10px] leading-relaxed">
-                                {JSON.stringify(detail.events, null, 2)}
-                              </pre>
-                            </section>
-                          ) : null}
-                          {filteredText.length === 0 && !detail.events?.length && (
-                            <p className="py-6 text-center text-[12px] text-[var(--text-dim)]">
-                              {t(lang, q ? "noSearchResults" : "noMetadata")}
-                            </p>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  {tab === "export" && (
-                    <>
-                      <p className="mb-3 truncate text-[12px] text-[var(--text-dim)]" title={exportIds.length === 1 ? joinPath(selected.folder, selected.name) : undefined}>
-                        {selectedIds.length
-                          ? `${t(lang, "checkedCount")} ${selectedIds.length} ${t(lang, "nFiles")}`
-                          : joinPath(selected.folder, selected.name)}
-                      </p>
-                      {exportIds.length > 0 ? (
-                        <ExportPanel fileIds={exportIds} />
-                      ) : (
-                        <div className="flex flex-col gap-3">
-                          <Guide title="export" body="slideExportHint" />
-                          {isSlide(selected) && (
-                            <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 self-start px-4 text-[12px]">
-                              {t(lang, "openSlide")}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )}
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>
 
           {selected && (
-            <p className="border-t border-[var(--line)] px-4 py-2.5 font-mono text-[10px] text-[var(--text-dim)] tabular-nums">
+            <p className="border-t border-[var(--line)] px-4 py-2 font-mono text-[10px] text-[var(--text-dim)] tabular-nums">
               T{axisSize(selected.axes, "T")} · Z{axisSize(selected.axes, "Z")} · C{axisSize(selected.axes, "C")} · P{axisSize(selected.axes, "P")}
             </p>
           )}
@@ -889,6 +1352,7 @@ export function Workspace() {
             fileIds={exportTarget.fileIds}
             folders={exportTarget.folders}
             fileCount={exportTarget.folders.reduce((sum, f) => sum + countFilesIn(files, f), exportTarget.fileIds.length)}
+            visible={channelVisible}
           />
         )}
       </Modal>

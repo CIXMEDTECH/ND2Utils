@@ -85,6 +85,15 @@ class MeasureRequest(Coord):
     channel: int | None = None
 
 
+class CropRequest(Coord):
+    x: int
+    y: int
+    w: int
+    h: int
+    name: str | None = None
+    folder: str | None = None
+
+
 class ExportRequest(BaseModel):
     file_ids: list[str] = []
     # Workspace folders to export recursively; resolved to file_ids by the API.

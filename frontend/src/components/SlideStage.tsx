@@ -188,11 +188,12 @@ export function SlideStage({
     const onWheel = (event: WheelEvent) => {
       if (isControl(event.target)) return;
       event.preventDefault();
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
-      // Trackpad pinch arrives as ctrl+wheel with small deltas.
-      const speed = event.ctrlKey ? 0.012 : 0.002;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 120 : 1;
+      const rawDelta = Math.max(-72, Math.min(72, event.deltaY * unit));
+      // Trackpad pinch arrives as ctrl+wheel with small deltas; keep wheel zoom smooth and gentle.
+      const speed = event.ctrlKey ? 0.006 : 0.0012;
       const box = stage.getBoundingClientRect();
-      viewer.zoomBy(Math.exp(-event.deltaY * unit * speed), { x: event.clientX - box.left, y: event.clientY - box.top }, false);
+      viewer.zoomBy(Math.exp(-rawDelta * speed), { x: event.clientX - box.left, y: event.clientY - box.top }, false);
     };
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
@@ -285,9 +286,9 @@ export function SlideStage({
     if (!viewer || isControl(event.target)) return;
     const step = 80;
     const actions: Record<string, () => void> = {
-      "+": () => viewer.zoomBy(1.6),
-      "=": () => viewer.zoomBy(1.6),
-      "-": () => viewer.zoomBy(1 / 1.6),
+      "+": () => viewer.zoomBy(1.25),
+      "=": () => viewer.zoomBy(1.25),
+      "-": () => viewer.zoomBy(1 / 1.25),
       "0": () => viewer.fit(),
       "1": () => viewer.zoomTo(1),
       ArrowLeft: () => viewer.panBy(step, 0),
@@ -364,7 +365,7 @@ export function SlideZoomControls({ viewer, view, dark = true }: { viewer: Slide
       <button
         type="button"
         className={`${button} w-7 px-0`}
-        onClick={() => viewer?.zoomBy(1 / 1.6)}
+        onClick={() => viewer?.zoomBy(1 / 1.25)}
         aria-label={t(lang, "zoomOut")}
         disabled={!viewer || (view?.scale ?? 1) <= viewer.minScale * 1.001}
       >
@@ -376,7 +377,7 @@ export function SlideZoomControls({ viewer, view, dark = true }: { viewer: Slide
       <button
         type="button"
         className={`${button} w-7 px-0`}
-        onClick={() => viewer?.zoomBy(1.6)}
+        onClick={() => viewer?.zoomBy(1.25)}
         aria-label={t(lang, "zoomIn")}
         disabled={!viewer || (view?.scale ?? 1) >= MAX_SCALE * 0.999}
       >

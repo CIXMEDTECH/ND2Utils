@@ -52,14 +52,17 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
       <a href="#main-content" className="skip-link">
         {lang === "zh" ? "跳到主要内容" : "Skip to main content"}
       </a>
-      <div className="app-chrome">
+      <div className={`app-chrome ${dense ? "app-chrome--dense" : ""}`}>
         <Glass as="header" shape="island" className="app-header">
           <Link to="/" className="group flex items-center gap-2.5 text-[var(--accent)]" aria-label="ND2Utils">
             <Mark />
             <span className="font-semibold tracking-[-0.025em] text-[var(--text)]">ND2Utils</span>
+            <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
+              v1.0
+            </span>
           </Link>
 
-          <nav className="hidden items-center gap-0.5 md:flex" aria-label={lang === "zh" ? "主导航" : "Primary navigation"}>
+          <nav className="hidden items-center gap-1 md:flex" aria-label={lang === "zh" ? "主导航" : "Primary navigation"}>
             {nav.map(({ to, key, Icon }) => (
               <NavLink key={to} to={to} className="nav-link">
                 {({ isActive }) => (
@@ -77,7 +80,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
             {user && (
               <Link
                 to="/settings"
-                className="mr-1 hidden max-w-[11rem] items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11px] text-[var(--text-dim)] transition-colors hover:bg-[var(--bg-elev)] hover:text-[var(--text)] sm:inline-flex"
+                className="mr-1 hidden max-w-[11rem] items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)]/60 px-2.5 py-1 text-[11px] text-[var(--text-dim)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text)] sm:inline-flex"
                 title={t(lang, "accountTitle")}
               >
                 {user.role === "admin" && <ShieldCheck size={14} weight="fill" className="shrink-0 text-[var(--accent)]" />}

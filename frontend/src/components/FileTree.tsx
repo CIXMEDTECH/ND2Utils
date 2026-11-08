@@ -3,6 +3,7 @@ import {
   ArrowsInLineVertical,
   ArrowsOutLineVertical,
   CaretRight,
+  Crop,
   DotsThree,
   Folder,
   FolderOpen,
@@ -218,7 +219,18 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
             title={`${joinPath(file.folder, file.name)} · ${file.width ?? "–"}×${file.height ?? "–"} · ${formatBytes(file.size_bytes, lang)}`}
           >
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12.5px] tracking-[-0.01em]">{file.name}</span>
+              <span className="flex items-center gap-1.5">
+                <span className="truncate text-[12.5px] tracking-[-0.01em]">{file.name}</span>
+                {file.cropped && (
+                  <span
+                    className="inline-flex shrink-0 items-center gap-0.5 rounded bg-[var(--accent-soft)] px-1 py-0.5 font-mono text-[9px] font-medium text-[var(--accent)]"
+                    title={`${t(lang, "croppedBadge")}${file.crop ? ` · ${file.crop.w}×${file.crop.h}` : ""}`}
+                  >
+                    <Crop size={10} weight="bold" />
+                    {t(lang, "croppedBadge")}
+                  </span>
+                )}
+              </span>
               {showPath && <span className="block truncate font-mono text-[10px] text-[var(--text-dim)]">/{file.folder}</span>}
             </span>
             {file.prepare === "pending" && (

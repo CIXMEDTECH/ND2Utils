@@ -164,7 +164,7 @@ def _build(rec: dict[str, Any], handle: OpenNd2, coords: tuple[int, int, int]) -
 
 
 def is_slide(rec: dict[str, Any]) -> bool:
-    return rec.get("format") in ("ome-tiff", "tiff")
+    return rec.get("format") in ("ome-tiff", "tiff") and not rec.get("cropped")
 
 
 def ensure_slide(file_id: str, source: Path) -> ometiff.Slide:
