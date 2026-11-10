@@ -15,7 +15,7 @@ from nd2utils.config import settings
 from nd2utils.jsonutil import jsonable
 from nd2utils.models import ExportRequest
 from nd2utils.nd2io import axis_size, extract_channels, iter_coords, open_nd2
-from nd2utils.render import build_luts, composite_rgb, draw_scale_bar, encode_image
+from nd2utils.render import build_luts, composite_rgb, draw_scale_bar, encode_image, render_standalone_scale_bars
 from nd2utils.store import get_file_detail, get_owned_job, source_path, upsert_job
 
 _FORMAT_LABELS = {
@@ -311,6 +311,7 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
     written: list[Path] = []
     taken: set[Path] = set()
     readme_dirs: set[Path] = set()
+    seen_scale_specs: set[tuple[Path, int, int, float, int]] = set()
     stems_used: list[str] = []
     total = max(len(req.file_ids), 1)
     # OME-TIFF keeps native values. TIFF/PNG/JPEG are 8-bit display images.
@@ -328,8 +329,12 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
             sizes = handle.sizes
             stem = _safe_stem(meta.get("name") or file_id)
             stems_used.append(stem)
-            # Exported files sit in the same folder as the ND2 file in the workspace.
-            folder = out_dir / _archive_folder(meta.get("folder") or "") if meta.get("folder") else out_dir
+            # Exported files sit in the same folder as the ND2 file unless flat_structure is requested.
+            folder = (
+                out_dir
+                if req.flat_structure or not meta.get("folder")
+                else out_dir / _archive_folder(meta.get("folder") or "")
+            )
             folder.mkdir(parents=True, exist_ok=True)
 
             def target(name: str) -> Path:
@@ -337,7 +342,29 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                 written.append(path)
                 return path
 
-            channels = meta.get("channels") or []
+            channels = [dict(c) for c in (meta.get("channels") or [])]
+            # Apply optional per-file channel edits passed from Studio live session
+            file_ch_edits = (req.channel_edits_by_file or {}).get(file_id)
+            if file_ch_edits:
+                for idx, ed in enumerate(file_ch_edits):
+                    target_idx = ed.index if ed.index is not None else idx
+                    if 0 <= target_idx < len(channels):
+                        ch = channels[target_idx]
+                        if ed.brightness is not None:
+                            ch["brightness"] = float(ed.brightness)
+                        if ed.min_pct is not None:
+                            ch["min_pct"] = float(ed.min_pct)
+                        if ed.max_pct is not None:
+                            ch["max_pct"] = float(ed.max_pct)
+                        if ed.gamma is not None:
+                            ch["lut_gamma"] = float(ed.gamma)
+                        if ed.visible is not None:
+                            ch["visible"] = bool(ed.visible)
+                        if ed.color and len(ed.color) >= 3:
+                            ch["color"] = [int(ed.color[0]) & 255, int(ed.color[1]) & 255, int(ed.color[2]) & 255]
+
+            file_crop = (req.crops_by_file or {}).get(file_id)
+
             names = [c.get("name") or f"C{i}" for i, c in enumerate(channels)]
             colors = [c.get("color") or [255, 255, 255] for c in channels]
             voxel = meta.get("voxel_um") or [1, 1, 1]
@@ -355,6 +382,14 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
             display_fmt = "tiff" if write_raw else req.format
             for ci, (t, z, p) in enumerate(coords_list):
                 planes, _ = extract_channels(handle, t=t, z=z, p=p)
+                if file_crop and planes:
+                    ph, pw = int(planes[0].shape[-2]), int(planes[0].shape[-1])
+                    cx0 = max(0, min(pw - 2, int(file_crop.x)))
+                    cy0 = max(0, min(ph - 2, int(file_crop.y)))
+                    cx1 = max(cx0 + 2, min(pw, cx0 + int(file_crop.w)))
+                    cy1 = max(cy0 + 2, min(ph, cy0 + int(file_crop.h)))
+                    planes = [np.ascontiguousarray(pl[..., cy0:cy1, cx0:cx1]) for pl in planes]
+                    meta = {**meta, "width": cx1 - cx0, "height": cy1 - cy0}
                 tag = _coord_tag(t, z, p, sizes)
                 luts = build_luts(planes, channels, req.luts, req.visible)
                 shown = _visible_channels(len(planes), luts, req.visible)
@@ -397,6 +432,22 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                             ch_rgb = draw_scale_bar(ch_rgb, float(voxel[0]))
                         dest = target(_export_filename(stem, tag=tag, role=ch_names[i], ext=ext))
                         _save_display(dest, ch_rgb, display_fmt, req.jpeg_quality, voxel)
+
+                # Standalone scale bar images (one set per unique scale bar specification)
+                if req.separate_scale_bar and planes and voxel and float(voxel[0] or 0) > 0:
+                    img_h, img_w = int(planes[0].shape[-2]), int(planes[0].shape[-1])
+                    um_val, px_val, bar_pngs = render_standalone_scale_bars(img_w, img_h, float(voxel[0]))
+                    scale_dir = folder if req.flat_structure else (folder / "scale_bars")
+                    spec_key = (scale_dir, img_w, img_h, round(um_val, 4), px_val)
+                    if spec_key not in seen_scale_specs:
+                        seen_scale_specs.add(spec_key)
+                        scale_dir.mkdir(parents=True, exist_ok=True)
+                        um_str = f"{um_val:g}".replace(".", "p")
+                        for style_name, png_bytes in bar_pngs.items():
+                            bar_name = f"scalebar_{um_str}um_{px_val}px_{img_w}x{img_h}_{style_name}.png"
+                            bar_path = _unique(scale_dir / bar_name, taken)
+                            bar_path.write_bytes(png_bytes)
+                            written.append(bar_path)
                 rec["progress"] = 0.05 + 0.85 * ((fi + (ci + 1) / n_coords) / total)
                 upsert_job(rec)
             if req.include_metadata:

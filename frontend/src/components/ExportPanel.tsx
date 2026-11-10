@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { t } from "../i18n";
 import { startExport } from "../lib/api";
 import { detailMessage } from "../lib/format";
-import type { LutSetting } from "../lib/types";
+import type { ChannelEdit, LutSetting } from "../lib/types";
 import { useApp } from "../store";
 import { Guide } from "./Guide";
 
@@ -15,6 +15,8 @@ export function ExportPanel({
   coords,
   luts,
   visible,
+  cropsByFile,
+  channelEditsByFile,
 }: {
   fileIds: string[];
   /** Workspace folders to export recursively (resolved on the server). */
@@ -24,6 +26,8 @@ export function ExportPanel({
   coords?: { t: number; z: number; p: number };
   luts?: LutSetting[];
   visible?: boolean[];
+  cropsByFile?: Record<string, { x: number; y: number; w: number; h: number; ratio_label?: string }>;
+  channelEditsByFile?: Record<string, ChannelEdit[]>;
 }) {
   const lang = useApp((s) => s.lang);
   const nav = useNavigate();
@@ -32,6 +36,8 @@ export function ExportPanel({
   const [scope, setScope] = useState<"current" | "all">("current");
   const [channelsMode, setChannelsMode] = useState<"composite" | "split" | "both">("composite");
   const [scaleBar, setScaleBar] = useState(true);
+  const [separateScaleBar, setSeparateScaleBar] = useState(true);
+  const [flatStructure, setFlatStructure] = useState(false);
   const [includeMetadata, setIncludeMetadata] = useState(true);
   const [jpegQuality, setJpegQuality] = useState(90);
   const [busy, setBusy] = useState(false);
@@ -53,12 +59,16 @@ export function ExportPanel({
         channels_mode: channelsMode,
         // OME-TIFF packages also contain viewable 8-bit companions; they get the scale bar too.
         scale_bar: scaleBar,
+        separate_scale_bar: separateScaleBar,
+        flat_structure: flatStructure,
         include_metadata: includeMetadata,
         burn_lut: false,
         jpeg_quality: jpegQuality,
         coords: coords ?? { t: 0, z: 0, p: 0 },
         luts: luts ? Object.fromEntries(luts.map((lut, index) => [String(index), lut])) : undefined,
         visible: visible ?? luts?.map((lut) => lut.visible),
+        crops_by_file: cropsByFile,
+        channel_edits_by_file: channelEditsByFile,
       });
       await refreshJobs();
       nav("/jobs");
@@ -111,6 +121,14 @@ export function ExportPanel({
         <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
           <input type="checkbox" checked={scaleBar} onChange={(event) => setScaleBar(event.target.checked)} className="mt-0.5" />
           {t(lang, "scaleBar")}
+        </label>
+        <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
+          <input type="checkbox" checked={separateScaleBar} onChange={(event) => setSeparateScaleBar(event.target.checked)} className="mt-0.5" />
+          {t(lang, "separateScaleBar")}
+        </label>
+        <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
+          <input type="checkbox" checked={flatStructure} onChange={(event) => setFlatStructure(event.target.checked)} className="mt-0.5" />
+          {t(lang, "flatStructure")}
         </label>
       </div>
 

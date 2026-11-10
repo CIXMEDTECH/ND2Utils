@@ -212,10 +212,92 @@ def draw_scale_bar(rgb: np.ndarray, um_per_px: float) -> np.ndarray:
     y0 = y - 4
     draw.rectangle([x0 - 6, y0 - 18, x1 + 6, y + 4], fill=(8, 8, 10))
     draw.rectangle([x0, y0, x1, y0 + 3], fill=(240, 244, 248))
-    label = f"{um:g} um"
+    label = f"{um:g} µm"
     font = _font(12)
     draw.text((x0, y0 - 16), label, fill=(240, 244, 248), font=font)
     return np.asarray(img)
+
+
+def _save_png_bytes(img: Image.Image) -> bytes:
+    buf = BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def render_standalone_scale_bars(
+    width: int,
+    height: int,
+    um_per_px: float,
+) -> tuple[float, int, dict[str, bytes]]:
+    """Render standalone transparent PNG scale bar images for each scale bar style."""
+    w = max(32, int(width))
+    h = max(32, int(height))
+    um, px = nice_scale_um(um_per_px, w)
+    pad = min(16, max(4, min(w, h) // 8))
+    y = h - pad
+    x1 = w - pad
+    x0 = max(4, x1 - px)
+    bar_h = max(3, min(8, round(max(w, h) * 0.006)))
+    y0 = max(20, y - bar_h)
+    font_size = max(12, min(28, round(max(w, h) * 0.024)))
+    font = _font(font_size)
+    label = f"{um:g} µm"
+    text_y = max(2, y0 - font_size - 4)
+
+    out: dict[str, bytes] = {}
+
+    # 1. White scale bar + white label on full transparent canvas (1:1 overlay alignment)
+    img_wl = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d_wl = ImageDraw.Draw(img_wl)
+    d_wl.rectangle([x0, y0, x1, y0 + bar_h], fill=(255, 255, 255, 255))
+    d_wl.text((x0, text_y), label, fill=(255, 255, 255, 255), font=font)
+    out["white_labeled"] = _save_png_bytes(img_wl)
+
+    # 2. Pure white scale bar only (no text) on full transparent canvas
+    img_wb = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d_wb = ImageDraw.Draw(img_wb)
+    d_wb.rectangle([x0, y0, x1, y0 + bar_h], fill=(255, 255, 255, 255))
+    out["white_bar_only"] = _save_png_bytes(img_wb)
+
+    # 3. Black scale bar + black label on full transparent canvas (for brightfield/light backgrounds)
+    img_bl = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d_bl = ImageDraw.Draw(img_bl)
+    d_bl.rectangle([x0, y0, x1, y0 + bar_h], fill=(15, 23, 42, 255))
+    d_bl.text((x0, text_y), label, fill=(15, 23, 42, 255), font=font)
+    out["black_labeled"] = _save_png_bytes(img_bl)
+
+    # 4. Dark pill badge + white scale bar + white label on full transparent canvas
+    img_badge = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d_badge = ImageDraw.Draw(img_badge)
+    box_x0 = max(0, x0 - 8)
+    box_y0 = max(0, text_y - 4)
+    box_x1 = min(w, x1 + 8)
+    box_y1 = min(h, y0 + bar_h + 6)
+    d_badge.rectangle([box_x0, box_y0, box_x1, box_y1], fill=(8, 10, 14, 215))
+    d_badge.rectangle([x0, y0, x1, y0 + bar_h], fill=(240, 244, 248, 255))
+    d_badge.text((x0, text_y), label, fill=(240, 244, 248, 255), font=font)
+    out["dark_badge"] = _save_png_bytes(img_badge)
+
+    # 5. Tightly-cropped standalone scale bar elements (no surrounding empty canvas)
+    crop_w = max(px + 20, 48)
+    crop_h = max(font_size + bar_h + 16, 28)
+    img_crop_wl = Image.new("RGBA", (crop_w, crop_h), (0, 0, 0, 0))
+    dc_wl = ImageDraw.Draw(img_crop_wl)
+    cx0 = (crop_w - px) // 2
+    cx1 = cx0 + px
+    cy0 = crop_h - bar_h - 5
+    dc_wl.rectangle([cx0, cy0, cx1, cy0 + bar_h], fill=(255, 255, 255, 255))
+    dc_wl.text((cx0, max(2, cy0 - font_size - 3)), label, fill=(255, 255, 255, 255), font=font)
+    out["cropped_white_labeled"] = _save_png_bytes(img_crop_wl)
+
+    crop_bar_h = max(bar_h + 10, 12)
+    img_crop_wb = Image.new("RGBA", (crop_w, crop_bar_h), (0, 0, 0, 0))
+    dc_wb = ImageDraw.Draw(img_crop_wb)
+    by0 = (crop_bar_h - bar_h) // 2
+    dc_wb.rectangle([cx0, by0, cx1, by0 + bar_h], fill=(255, 255, 255, 255))
+    out["cropped_white_bar_only"] = _save_png_bytes(img_crop_wb)
+
+    return um, px, out
 
 
 def encode_image(rgb: np.ndarray, fmt: str = "jpeg", quality: int = 88) -> bytes:

@@ -836,3 +836,52 @@ def test_batch_apply_inplace_and_new_with_brightness_and_reset(client, sample_fi
     assert restored["width"] == w0 and restored["height"] == h0
     assert abs(restored["channels"][0].get("brightness", 1.0) - 1.0) < 1e-4
 
+
+def test_export_separate_scale_bars_flat_structure_and_studio_live_crop(client, sample_files):
+    f1 = _upload(client, sample_files[0], "exp/day1/groupA")
+    w0, h0 = int(f1["width"]), int(f1["height"])
+    cw, ch = max(40, w0 // 2), max(40, h0 // 2)
+
+    # Export with flat_structure=True, separate_scale_bar=True, and Studio live crops_by_file + channel_edits_by_file
+    _, zf = _export(
+        client,
+        {
+            "file_ids": [f1["id"]],
+            "format": "png",
+            "scale_bar": True,
+            "separate_scale_bar": True,
+            "flat_structure": True,
+            "crops_by_file": {f1["id"]: {"x": 10, "y": 10, "w": cw, "h": ch, "ratio_label": "1:1"}},
+            "channel_edits_by_file": {f1["id"]: [{"index": 0, "brightness": 0.4}]},
+        },
+    )
+    names = zf.namelist()
+    # Because flat_structure=True, no files are nested inside subdirectories
+    assert all("/" not in name for name in names), names
+
+    # Check standalone scale bar images exist for each scale bar style
+    scalebar_files = [n for n in names if n.startswith("scalebar_") and n.endswith(".png")]
+    assert len(scalebar_files) == 6
+    expected_styles = {
+        "white_labeled",
+        "white_bar_only",
+        "black_labeled",
+        "dark_badge",
+        "cropped_white_labeled",
+        "cropped_white_bar_only",
+    }
+    for style in expected_styles:
+        matched = [n for n in scalebar_files if n.endswith(f"x{ch}_{style}.png")]
+        assert len(matched) == 1
+        sb_img = Image.open(BytesIO(zf.read(matched[0])))
+        assert sb_img.mode == "RGBA"
+        if not style.startswith("cropped_"):
+            assert sb_img.size == (cw, ch)
+
+    # Check main exported PNG has the live Studio crop size
+    main_pngs = [n for n in names if n.endswith(".png") and not n.startswith("scalebar_")]
+    assert len(main_pngs) == 1
+    main_img = Image.open(BytesIO(zf.read(main_pngs[0])))
+    assert main_img.size == (cw, ch)
+
+

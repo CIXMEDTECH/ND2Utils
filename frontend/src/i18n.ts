@@ -484,6 +484,10 @@ const dict = {
     restoreSuccess: "已恢复为原始未裁剪/未调色状态",
     editedBadge: "已编辑",
     exportProjectFiles: "导出项目文件",
+    exportSingleFile: "导出当前图片",
+    exportThisImage: "导出此图",
+    separateScaleBar: "单独输出比例尺图片（每一种比例尺类型一张）",
+    flatStructure: "不按原文件结构目录（平铺到压缩包根目录）",
     gridCols: "网格列数",
   },
   en: {
@@ -969,6 +973,10 @@ const dict = {
     restoreSuccess: "Restored original uncropped/unedited image",
     editedBadge: "Edited",
     exportProjectFiles: "Export project files",
+    exportSingleFile: "Export current image",
+    exportThisImage: "Export this image",
+    separateScaleBar: "Export standalone scale bar images (one per scale bar type)",
+    flatStructure: "Do not preserve original folder structure (flatten to root)",
     gridCols: "Grid columns",
   },
 } as const;

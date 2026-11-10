@@ -160,6 +160,8 @@ interface StudioCardCanvasProps {
   onCropChange: (next: CropBox) => void;
   onSelectNucleus: (nuc: NucleusRoi) => void;
   onAutoNucleusSingle: () => void;
+  onExportSingle: () => void;
+  onClearOverride?: () => void;
   onResetOriginal?: () => void;
 }
 
@@ -179,6 +181,8 @@ function StudioImageCard({
   onCropChange,
   onSelectNucleus,
   onAutoNucleusSingle,
+  onExportSingle,
+  onClearOverride,
   onResetOriginal,
 }: StudioCardCanvasProps) {
   const lang = useApp((s) => s.lang);
@@ -257,19 +261,27 @@ function StudioImageCard({
             {file.name}
           </span>
           {file.cropped && (
-            <span className="shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-sky-300">
+            <span className="shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
               {t(lang, "croppedBadge")}
             </span>
           )}
           {file.edited && !file.cropped && (
-            <span className="shrink-0 rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-emerald-300">
+            <span className="shrink-0 rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
               {t(lang, "editedBadge")}
             </span>
           )}
           {hasOverride && (
-            <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-amber-300">
-              {t(lang, "individualOverride")}
-            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClearOverride?.();
+              }}
+              title={t(lang, "clearIndividualOverride")}
+              className="shrink-0 cursor-pointer rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 transition-colors hover:bg-amber-500/35"
+            >
+              {t(lang, "individualOverride")} ×
+            </button>
           )}
         </div>
 
@@ -281,10 +293,22 @@ function StudioImageCard({
               onAutoNucleusSingle();
             }}
             title={t(lang, "autoNucleusCenter")}
-            className="inline-flex h-6 items-center gap-1 rounded-md bg-amber-400/15 px-2 font-mono text-[10px] font-medium text-amber-300 transition-colors hover:bg-amber-400/25"
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-amber-400/15 px-2 text-[10.5px] font-medium text-amber-300 transition-colors hover:bg-amber-400/25"
           >
             <Crosshair size={12} weight="bold" />
             {nuclei.length > 0 ? `${nuclei.length}` : t(lang, "auto")}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onExportSingle();
+            }}
+            title={t(lang, "exportThisImage")}
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-sky-400/15 px-2 text-[10.5px] font-medium text-sky-300 transition-colors hover:bg-sky-400/25"
+          >
+            <ExportIcon size={12} />
+            {t(lang, "export")}
           </button>
           {(file.edited || file.cropped) && onResetOriginal && (
             <button
@@ -404,7 +428,7 @@ export function Studio() {
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<ProjectInfo | null>(null);
   const [addImagesModal, setAddImagesModal] = useState(false);
   const [pickerChecked, setPickerChecked] = useState<Record<string, boolean>>({});
-  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportTargetFiles, setExportTargetFiles] = useState<FileSummary[] | null>(null);
 
   // Loaded PackedPlanes per fileId
   const [planesByFile, setPlanesByFile] = useState<Record<string, PackedPlane>>({});
@@ -430,10 +454,12 @@ export function Studio() {
   const [nucleiByFile, setNucleiByFile] = useState<Record<string, NucleusResult>>({});
   const [activeNucleusByFile, setActiveNucleusByFile] = useState<Record<string, number | null>>({});
 
-  // Unified vs Individual Channel Adjustments
+  // Unified vs Individual Channel Adjustments (sparse per-channel property overrides)
   const [editScope, setEditScope] = useState<"unified" | "individual">("unified");
   const [unifiedAdjustments, setUnifiedAdjustments] = useState<ChannelAdjustment[]>([]);
-  const [individualAdjustments, setIndividualAdjustments] = useState<Record<string, ChannelAdjustment[]>>({});
+  const [individualOverrides, setIndividualOverrides] = useState<
+    Record<string, Record<number, Partial<ChannelAdjustment>>>
+  >({});
 
   // Apply / Save state
   const [applyBusy, setApplyBusy] = useState(false);
@@ -734,16 +760,22 @@ export function Studio() {
     [projectFiles, selectedFileId],
   );
 
-  // Resolve adjustments for a given file
+  const hasFileOverride = useCallback(
+    (fileId: string): boolean => {
+      const map = individualOverrides[fileId];
+      if (!map) return false;
+      return Object.values(map).some((patch) => patch && Object.keys(patch).length > 0);
+    },
+    [individualOverrides],
+  );
+
+  // Resolve adjustments for a given file by merging unifiedAdjustments with sparse per-file overrides
   const getAdjustmentsForFile = useCallback(
     (file: FileSummary): ChannelAdjustment[] => {
-      const custom = individualAdjustments[file.id];
-      const base = custom ?? unifiedAdjustments;
-      if (!base.length) return defaultAdjustmentsFromFile(file);
+      const base = unifiedAdjustments.length > 0 ? unifiedAdjustments : defaultAdjustmentsFromFile(file);
+      const fileOver = individualOverrides[file.id];
       return file.channels.map((ch, idx) => {
-        const found = base[idx];
-        if (found) return found;
-        return {
+        const baseCh = base[idx] ?? {
           index: idx,
           name: ch.name || `Channel ${idx + 1}`,
           color: ch.color?.length >= 3 ? [...ch.color] : [255, 255, 255],
@@ -753,9 +785,11 @@ export function Studio() {
           max_pct: 100,
           gamma: 1.0,
         };
+        const over = fileOver?.[idx];
+        return over ? { ...baseCh, ...over } : baseCh;
       });
     },
-    [individualAdjustments, unifiedAdjustments],
+    [individualOverrides, unifiedAdjustments],
   );
 
   const activeAdjustments = useMemo(() => {
@@ -769,19 +803,58 @@ export function Studio() {
   const updateChannelAdjustment = useCallback(
     (chIdx: number, patch: Partial<ChannelAdjustment>) => {
       if (editScope === "individual" && selectedFile) {
-        setIndividualAdjustments((prev) => {
-          const current = prev[selectedFile.id] ?? getAdjustmentsForFile(selectedFile);
-          const next = current.map((item, idx) => (idx === chIdx ? { ...item, ...patch } : item));
-          return { ...prev, [selectedFile.id]: next };
+        setIndividualOverrides((prev) => {
+          const curFile = prev[selectedFile.id] ?? {};
+          const curCh = curFile[chIdx] ?? {};
+          return {
+            ...prev,
+            [selectedFile.id]: {
+              ...curFile,
+              [chIdx]: { ...curCh, ...patch },
+            },
+          };
         });
       } else {
         setUnifiedAdjustments((prev) => {
           const base = prev.length ? prev : defaultAdjustmentsFromFile(selectedFile ?? projectFiles[0]);
           return base.map((item, idx) => (idx === chIdx ? { ...item, ...patch } : item));
         });
+        // Clear any individual overrides on the modified keys for chIdx so all images follow the unified adjustment
+        const patchedKeys = Object.keys(patch) as (keyof ChannelAdjustment)[];
+        if (patchedKeys.length > 0) {
+          setIndividualOverrides((prev) => {
+            if (Object.keys(prev).length === 0) return prev;
+            let changed = false;
+            const next: Record<string, Record<number, Partial<ChannelAdjustment>>> = {};
+            for (const [fId, chMap] of Object.entries(prev)) {
+              const chOver = chMap[chIdx];
+              if (!chOver) {
+                next[fId] = chMap;
+                continue;
+              }
+              const nextChOver = { ...chOver };
+              for (const k of patchedKeys) {
+                if (k in nextChOver) {
+                  delete nextChOver[k];
+                  changed = true;
+                }
+              }
+              const nextChMap = { ...chMap };
+              if (Object.keys(nextChOver).length > 0) {
+                nextChMap[chIdx] = nextChOver;
+              } else {
+                delete nextChMap[chIdx];
+              }
+              if (Object.keys(nextChMap).length > 0) {
+                next[fId] = nextChMap;
+              }
+            }
+            return changed ? next : prev;
+          });
+        }
       }
     },
-    [editScope, getAdjustmentsForFile, projectFiles, selectedFile],
+    [editScope, projectFiles, selectedFile],
   );
 
   const resetChannelAdjustments = useCallback(() => {
@@ -796,14 +869,14 @@ export function Studio() {
       visible: true,
     }));
     if (editScope === "individual" && selectedFile) {
-      setIndividualAdjustments((prev) => {
+      setIndividualOverrides((prev) => {
         const next = { ...prev };
         delete next[selectedFile.id];
         return next;
       });
     } else {
       setUnifiedAdjustments(fresh);
-      setIndividualAdjustments({});
+      setIndividualOverrides({});
     }
   }, [editScope, projectFiles, selectedFile]);
 
@@ -811,7 +884,7 @@ export function Studio() {
     if (!selectedFile) return;
     const current = getAdjustmentsForFile(selectedFile);
     setUnifiedAdjustments(current.map((c) => ({ ...c })));
-    setIndividualAdjustments({});
+    setIndividualOverrides({});
     setEditScope("unified");
   }, [getAdjustmentsForFile, selectedFile]);
 
@@ -1096,17 +1169,30 @@ export function Studio() {
                             {box ? ` → ${box.w}×${box.h}px` : ""}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void handleRemoveFileFromProject(file.id);
-                          }}
-                          title={t(lang, "removeFromProject")}
-                          className="rounded p-1 text-[var(--text-dim)] opacity-0 transition-opacity hover:text-[var(--danger)] group-hover:opacity-100"
-                        >
-                          <X size={13} />
-                        </button>
+                        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExportTargetFiles([file]);
+                            }}
+                            title={t(lang, "exportThisImage")}
+                            className="rounded p-1 text-[var(--text-dim)] hover:text-[var(--accent)]"
+                          >
+                            <ExportIcon size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleRemoveFileFromProject(file.id);
+                            }}
+                            title={t(lang, "removeFromProject")}
+                            className="rounded p-1 text-[var(--text-dim)] hover:text-[var(--danger)]"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
                       </div>
                     );
                   })
@@ -1495,7 +1581,7 @@ export function Studio() {
                       nucleiResult={nucleiByFile[file.id]}
                       activeNucleusId={activeNucleusByFile[file.id] ?? null}
                       selected={selectedFile?.id === file.id}
-                      hasOverride={Boolean(individualAdjustments[file.id])}
+                      hasOverride={hasFileOverride(file.id)}
                       onSelect={() => setSelectedFileId(file.id)}
                       onCropChange={(next) => handleCardCropChange(file, next)}
                       onSelectNucleus={(nuc) => handleSelectNucleus(file, nuc)}
@@ -1507,6 +1593,14 @@ export function Studio() {
                           showToast(`${file.name}: ${t(lang, "nucleusNone")}`);
                         }
                       }}
+                      onExportSingle={() => setExportTargetFiles([file])}
+                      onClearOverride={() =>
+                        setIndividualOverrides((prev) => {
+                          const next = { ...prev };
+                          delete next[file.id];
+                          return next;
+                        })
+                      }
                       onResetOriginal={() => void handleRestoreOriginal(file)}
                     />
                   );
@@ -1551,11 +1645,11 @@ export function Studio() {
                   {selectedFile.name}
                 </span>
                 <div className="flex shrink-0 items-center gap-1">
-                  {individualAdjustments[selectedFile.id] && (
+                  {hasFileOverride(selectedFile.id) && (
                     <button
                       type="button"
                       onClick={() =>
-                        setIndividualAdjustments((prev) => {
+                        setIndividualOverrides((prev) => {
                           const next = { ...prev };
                           delete next[selectedFile.id];
                           return next;
@@ -1778,15 +1872,26 @@ export function Studio() {
                 </button>
               </div>
 
-              <button
-                type="button"
-                disabled={projectFiles.length === 0}
-                onClick={() => setExportModalOpen(true)}
-                className="inline-flex min-h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/80 px-3 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
-              >
-                <ExportIcon size={15} />
-                {t(lang, "exportProjectFiles")} ({projectFiles.length})
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={!selectedFile}
+                  onClick={() => selectedFile && setExportTargetFiles([selectedFile])}
+                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/80 px-2.5 text-[11.5px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+                >
+                  <ExportIcon size={14} />
+                  {t(lang, "exportSingleFile")}
+                </button>
+                <button
+                  type="button"
+                  disabled={projectFiles.length === 0}
+                  onClick={() => setExportTargetFiles(projectFiles)}
+                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/80 px-2.5 text-[11.5px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+                >
+                  <ExportIcon size={14} />
+                  {t(lang, "exportProjectFiles")} ({projectFiles.length})
+                </button>
+              </div>
             </div>
           </div>
         </Glass>
@@ -1919,18 +2024,49 @@ export function Studio() {
         </div>
       </Modal>
 
-      {/* Export Project Files Modal */}
+      {/* Export Single or Project Files Modal */}
       <Modal
-        open={exportModalOpen}
-        title={t(lang, "exportProjectFiles")}
-        subtitle={activeProject?.name}
-        onClose={() => setExportModalOpen(false)}
+        open={Boolean(exportTargetFiles && exportTargetFiles.length > 0)}
+        title={
+          exportTargetFiles && exportTargetFiles.length === 1
+            ? t(lang, "exportSingleFile")
+            : t(lang, "exportProjectFiles")
+        }
+        subtitle={
+          exportTargetFiles && exportTargetFiles.length === 1
+            ? exportTargetFiles[0].name
+            : activeProject?.name
+        }
+        onClose={() => setExportTargetFiles(null)}
         width={460}
       >
-        <ExportPanel
-          fileIds={projectFiles.map((f) => f.id)}
-          visible={activeAdjustments.map((c) => c.visible)}
-        />
+        {exportTargetFiles && exportTargetFiles.length > 0 && (
+          <ExportPanel
+            fileIds={exportTargetFiles.map((f) => f.id)}
+            visible={getAdjustmentsForFile(exportTargetFiles[0]).map((c) => c.visible)}
+            cropsByFile={Object.fromEntries(
+              exportTargetFiles.map((f) => {
+                const packed = planesByFile[f.id];
+                const imgW = Math.max(f.width ?? 0, packed?.width ?? 0, 100);
+                const imgH = Math.max(f.height ?? 0, packed?.height ?? 0, 100);
+                const box = cropsByFile[f.id] ?? defaultCropBox(imgW, imgH, activeAspectRatio);
+                return [
+                  f.id,
+                  {
+                    x: Math.round(box.x),
+                    y: Math.round(box.y),
+                    w: Math.round(box.w),
+                    h: Math.round(box.h),
+                    ratio_label: activeRatioLabel || undefined,
+                  },
+                ];
+              }),
+            )}
+            channelEditsByFile={Object.fromEntries(
+              exportTargetFiles.map((f) => [f.id, adjustmentsToChannelEdits(getAdjustmentsForFile(f))]),
+            )}
+          />
+        )}
       </Modal>
     </Shell>
   );

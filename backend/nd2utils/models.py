@@ -181,11 +181,15 @@ class ExportRequest(BaseModel):
     channels_mode: Literal["composite", "split", "both"] = "composite"
     burn_lut: bool = False
     scale_bar: bool = True
+    separate_scale_bar: bool = False
+    flat_structure: bool = False
     include_metadata: bool = True
     jpeg_quality: int = 90
     coords: Coord = Coord()
     luts: dict[str, LutSetting] | None = None
     visible: list[bool] | None = None
+    crops_by_file: dict[str, CropBoxSpec] | None = None
+    channel_edits_by_file: dict[str, list[ChannelEdit]] | None = None
 
 
 class JobInfo(BaseModel):
