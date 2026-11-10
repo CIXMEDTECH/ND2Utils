@@ -22,18 +22,34 @@ from pydantic import BaseModel
 from nd2utils import __version__, auth, lifio, ometiff, perf, prepare, slide_render
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import _write_ome_tiff, new_job_id, run_export
-from nd2utils.models import CropRequest, ExportRequest, MeasureRequest
+from nd2utils.models import (
+    BatchApplyRequest,
+    BatchItemApply,
+    ChannelEdit,
+    CropBoxSpec,
+    CropRequest,
+    ExportRequest,
+    MeasureRequest,
+    NucleusParams,
+    ProjectCreate,
+    ProjectPatch,
+)
 from nd2utils.nd2io import (
     Nd2Error,
     axis_size,
+    clear_crop,
+    clear_edits,
     close_all,
+    close_nd2,
     extract_channels,
     identify_path,
     open_nd2,
     pack_planes,
     projection,
     read_crop,
+    read_edits,
     write_crop,
+    write_edits,
 )
 from nd2utils.lifio import LifError
 from nd2utils.ometiff import SlideError
@@ -44,14 +60,17 @@ from nd2utils.render import (
     measure_planes,
     parse_visible_mask,
     preview_rgb,
+    segment_nuclei,
 )
 from nd2utils.slide_export import SlideExportError, SlideExportRequest, run_slide_export
 from nd2utils.slide_export import plan as plan_slide_export
 from nd2utils.store import (
     PathError,
     create_folder,
+    create_project,
     delete_file,
     delete_folder,
+    delete_project,
     delete_workspace,
     file_dir,
     files_in_folder,
@@ -59,9 +78,11 @@ from nd2utils.store import (
     get_file_detail,
     get_owned_file,
     get_owned_job,
+    get_owned_project,
     list_files,
     list_folders,
     list_jobs,
+    list_projects,
     migrate_index,
     normalize_filename,
     normalize_folder,
@@ -71,6 +92,7 @@ from nd2utils.store import (
     source_path,
     transfer,
     update_file,
+    update_project,
     upsert_file,
     upsert_files,
     upsert_job,
@@ -641,7 +663,7 @@ _SUMMARY_KEYS = (
     "shape", "axes", "width", "height", "channels", "voxel_um",
     "objective", "magnification", "na", "acquired", "instrument",
     "software", "bits_significant", "is_rgb", "created_at", "prepare", "prepared_at",
-    "cropped", "crop",
+    "cropped", "crop", "edited", "edits", "orig_width", "orig_height",
 )
 
 
@@ -845,26 +867,244 @@ def _unique_filename(owner_id: str, folder: str, desired: str) -> str:
         n += 1
 
 
-@app.post("/api/files/{file_id}/crop")
-def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str, Any]:
+def _apply_channel_edits_to_list(
+    channels: list[dict[str, Any]],
+    edits: list[ChannelEdit] | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    out = [dict(ch) for ch in channels]
+    if not edits:
+        return out, False
+    changed = False
+    for edit in edits:
+        target_indices: list[int] = []
+        if edit.index is not None and 0 <= int(edit.index) < len(out):
+            target_indices.append(int(edit.index))
+        elif edit.name:
+            ename = edit.name.strip().lower()
+            for i, ch in enumerate(out):
+                cname = str(ch.get("name") or "").strip().lower()
+                if cname == ename or ename in cname:
+                    target_indices.append(i)
+            if not target_indices and ename in ("blue", "dapi", "hoechst", "405"):
+                for i, ch in enumerate(out):
+                    color = ch.get("color") or [255, 255, 255]
+                    if len(color) >= 3 and int(color[2]) > 150 and int(color[0]) < 100:
+                        target_indices.append(i)
+        for idx in target_indices:
+            ch = out[idx]
+            if edit.brightness is not None:
+                ch["brightness"] = round(max(0.0, min(3.0, float(edit.brightness))), 4)
+                changed = True
+            if edit.min_pct is not None:
+                ch["min_pct"] = round(max(0.0, min(99.0, float(edit.min_pct))), 2)
+                changed = True
+            if edit.max_pct is not None:
+                ch["max_pct"] = round(max(1.0, min(100.0, float(edit.max_pct))), 2)
+                changed = True
+            if edit.lut_min is not None:
+                ch["lut_min"] = float(edit.lut_min)
+                changed = True
+            if edit.lut_max is not None:
+                ch["lut_max"] = float(edit.lut_max)
+                changed = True
+            if edit.gamma is not None and float(edit.gamma) > 0:
+                ch["lut_gamma"] = round(max(0.1, min(5.0, float(edit.gamma))), 3)
+                changed = True
+            if edit.visible is not None:
+                ch["visible"] = bool(edit.visible)
+                changed = True
+            if edit.color is not None and len(edit.color) >= 3:
+                ch["color"] = [int(edit.color[0]) & 255, int(edit.color[1]) & 255, int(edit.color[2]) & 255]
+                changed = True
+    return out, changed
+
+
+def _execute_crop_or_edit(
+    file_id: str,
+    owner_id: str,
+    *,
+    crop: CropBoxSpec | None,
+    channel_edits: list[ChannelEdit] | None,
+    mode: Literal["new", "inplace"] = "new",
+    name: str | None = None,
+    folder: str | None = None,
+    t: int = 0,
+    z: int = 0,
+) -> dict[str, Any]:
     rec = _need(file_id, owner_id)
     detail = get_file_detail(file_id, owner_id) or dict(rec)
     src_w = int(rec.get("width") or 0)
     src_h = int(rec.get("height") or 0)
     if src_w < 2 or src_h < 2:
         raise HTTPException(status_code=400, detail={"code": "bad_crop", "message": "Source image dimensions are invalid."})
-    x = max(0, min(int(body.x), src_w - 2))
-    y = max(0, min(int(body.y), src_h - 2))
-    w = max(2, min(int(body.w), src_w - x))
-    h = max(2, min(int(body.h), src_h - y))
 
-    folder = _folder_arg(body.folder) if body.folder is not None else (rec.get("folder") or "")
+    has_crop = crop is not None
+    if crop is not None:
+        x = max(0, min(int(crop.x), src_w - 2))
+        y = max(0, min(int(crop.y), src_h - 2))
+        w = max(2, min(int(crop.w), src_w - x))
+        h = max(2, min(int(crop.h), src_h - y))
+        ratio_label = crop.ratio_label or None
+        is_full_box = x == 0 and y == 0 and w == src_w and h == src_h
+    else:
+        x, y, w, h = 0, 0, src_w, src_h
+        ratio_label = None
+        is_full_box = True
+
+    src_dir = file_dir(file_id)
+    src_file = src_dir / "source.nd2"
     orig_name = str(rec.get("name") or "image.nd2")
     fmt = rec.get("format") or "nd2"
+    voxel = list(rec.get("voxel_um") or [1.0, 1.0, 1.0])
+    channels, ch_changed = _apply_channel_edits_to_list(rec.get("channels") or [], channel_edits)
 
-    if body.name and body.name.strip():
+    if mode == "inplace":
+        saved = read_edits(src_dir) or {}
+        orig_state = saved.get("orig") or {
+            "width": src_w,
+            "height": src_h,
+            "axes": list(rec.get("axes") or []),
+            "sizes": dict(detail.get("sizes") or {}),
+            "shape": list(rec.get("shape") or []),
+            "size_bytes": int(rec.get("size_bytes") or 0),
+            "channels": [dict(ch) for ch in (rec.get("channels") or [])],
+            "voxel_um": list(rec.get("voxel_um") or [1.0, 1.0, 1.0]),
+            "levels": rec.get("levels"),
+            "cropped": bool(rec.get("cropped")),
+            "crop": rec.get("crop"),
+        }
+
+        abs_x, abs_y = x, y
+        axes = list(rec.get("axes") or [])
+        sizes = dict(detail.get("sizes") or {})
+        shape = list(rec.get("shape") or [])
+        size_bytes = int(rec.get("size_bytes") or 0)
+        cropped_flag = bool(rec.get("cropped"))
+        crop_meta = rec.get("crop")
+
+        if has_crop and not is_full_box:
+            if prepare.is_slide(rec):
+                slide = prepare.ensure_slide(file_id, src_file)
+                lv_idx = 0
+                for idx, lv in enumerate(slide.levels):
+                    ds = slide.width / max(lv.width, 1)
+                    if max(w / ds, h / ds) <= 4096 or idx == len(slide.levels) - 1:
+                        lv_idx = idx
+                        break
+                lv = slide.levels[lv_idx]
+                ds_x = slide.width / max(lv.width, 1)
+                ds_y = slide.height / max(lv.height, 1)
+                lx = max(0, min(int(round(x / ds_x)), lv.width - 1))
+                ly = max(0, min(int(round(y / ds_y)), lv.height - 1))
+                lw = max(2, min(int(round(w / ds_x)), lv.width - lx))
+                lh = max(2, min(int(round(h / ds_y)), lv.height - ly))
+                planes = [
+                    ometiff.read_region(slide, lv_idx, c, lx, ly, lw, lh, t=int(t), z=int(z))
+                    for c in range(slide.n_channels)
+                ]
+                if len(voxel) >= 2:
+                    voxel = [float(voxel[0]) * ds_x, float(voxel[1]) * ds_y, *(voxel[2:] or [1.0])]
+                names = [str(ch.get("name") or f"C{i}") for i, ch in enumerate(channels)]
+                colors = [list(ch.get("color") or [255, 255, 255]) for ch in channels]
+                orig_backup = src_dir / "source.orig.nd2"
+                if not orig_backup.exists():
+                    _link_or_copy(src_file, orig_backup)
+                ometiff.close_slide(src_file)
+                close_nd2(src_file)
+                tmp_tif = src_dir / "source.crop.tmp.tif"
+                _write_ome_tiff(tmp_tif, planes, names, colors, voxel, rec.get("bits_significant"))
+                tmp_tif.replace(src_file)
+                w, h = lw, lh
+                abs_x, abs_y = x, y
+                size_bytes = src_file.stat().st_size
+                axes = [{"name": "C", "size": len(planes)}, {"name": "Y", "size": h}, {"name": "X", "size": w}]
+                sizes = {"C": len(planes), "Y": h, "X": w}
+                shape = [len(planes), h, w]
+            else:
+                prev_crop = read_crop(src_file)
+                abs_x = (prev_crop[0] if prev_crop else 0) + x
+                abs_y = (prev_crop[1] if prev_crop else 0) + y
+                write_crop(src_dir, abs_x, abs_y, w, h, {"ratio_label": ratio_label} if ratio_label else None)
+                close_nd2(src_file)
+                orig_area = max(src_w * src_h, 1)
+                size_bytes = max(1024, int(round(float(rec.get("size_bytes") or 0) * ((w * h) / orig_area))))
+                old_sizes = dict(detail.get("sizes") or {})
+                for ax_info in rec.get("axes") or []:
+                    old_sizes.setdefault(ax_info["name"], ax_info["size"])
+                sizes = dict(old_sizes)
+                for k in list(sizes.keys()):
+                    if k.upper() == "X":
+                        sizes[k] = w
+                    elif k.upper() == "Y":
+                        sizes[k] = h
+                if not any(k.upper() == "X" for k in sizes):
+                    sizes["X"] = w
+                if not any(k.upper() == "Y" for k in sizes):
+                    sizes["Y"] = h
+                axes = [{"name": k, "size": int(v)} for k, v in sizes.items()]
+                shape = [int(v) for v in sizes.values()]
+
+            cropped_flag = True
+            crop_meta = {
+                "x": abs_x,
+                "y": abs_y,
+                "w": w,
+                "h": h,
+                "ratio_label": ratio_label,
+                "source_id": file_id,
+                "source_name": orig_name,
+            }
+        else:
+            w, h = src_w, src_h
+
+        now = time.time()
+        write_edits(
+            src_dir,
+            {
+                "orig": orig_state,
+                "channels": channels,
+                "crop": crop_meta,
+                "updated_at": now,
+            },
+        )
+        text_info = dict(detail.get("text_info") or {})
+        if cropped_flag and crop_meta:
+            text_info["Crop region"] = f"x={crop_meta['x']}, y={crop_meta['y']}, w={w}, h={h} (in-place)"
+        updated_rec: dict[str, Any] = {
+            **detail,
+            "width": w,
+            "height": h,
+            "axes": axes,
+            "sizes": sizes,
+            "shape": shape,
+            "size_bytes": size_bytes,
+            "voxel_um": voxel,
+            "channels": channels,
+            "cropped": cropped_flag,
+            "crop": crop_meta,
+            "edited": True,
+            "orig_width": int(orig_state.get("width") or src_w),
+            "orig_height": int(orig_state.get("height") or src_h),
+            "text_info": text_info,
+            "_owner": owner_id,
+        }
+        if cropped_flag:
+            updated_rec.pop("levels", None)
+        upsert_file(updated_rec)
+        # Drop existing display/autoscale cache and rebuild synchronously so preview updates immediately
+        for kind in ("display", "autoscale"):
+            (settings.cache_dir / file_id / f"{kind}_0_0_0.{'json' if kind == 'autoscale' else 'bin.gz'}").unlink(missing_ok=True)
+        slide_render.forget(file_id)
+        prepare.get(file_id, updated_rec, src_file, "display", (0, 0, 0))
+        ready_at = round(time.time(), 3)
+        final_rec = update_file(file_id, owner_id, {"prepare": "ready", "prepared_at": ready_at})
+        return _public(final_rec or {**updated_rec, "prepare": "ready", "prepared_at": ready_at})
+
+    # mode == "new"
+    target_folder = _folder_arg(folder) if folder is not None else (rec.get("folder") or "")
+    if name and name.strip():
         try:
-            raw_name = normalize_filename(body.name.strip())
+            raw_name = normalize_filename(name.strip())
         except PathError as exc:
             raise _bad_path(exc) from exc
     else:
@@ -874,31 +1114,28 @@ def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str,
             if lower.endswith(suffix):
                 stem = orig_name[: -len(suffix)]
                 break
+        tag = f"crop_{w}x{h}" if (has_crop and not is_full_box) else "edited"
         if fmt == "lif":
-            raw_name = f"{stem}_crop_{w}x{h}"
+            raw_name = f"{stem}_{tag}"
         elif fmt in ("ome-tiff", "tiff"):
-            raw_name = f"{stem}_crop_{w}x{h}.ome.tif"
+            raw_name = f"{stem}_{tag}.ome.tif"
         else:
-            raw_name = f"{stem}_crop_{w}x{h}.nd2"
+            raw_name = f"{stem}_{tag}.nd2"
 
     if fmt == "lif":
-        final_name = _unique_filename(owner_id, folder, raw_name)
+        final_name = _unique_filename(owner_id, target_folder, raw_name)
     elif fmt in ("ome-tiff", "tiff"):
         if not ometiff.is_tiff_name(raw_name):
             raw_name = f"{raw_name}.ome.tif"
-        final_name = _unique_filename(owner_id, folder, raw_name)
+        final_name = _unique_filename(owner_id, target_folder, raw_name)
     else:
         if not raw_name.lower().endswith(".nd2"):
             raw_name = f"{raw_name}.nd2"
-        final_name = _unique_filename(owner_id, folder, raw_name)
+        final_name = _unique_filename(owner_id, target_folder, raw_name)
 
     new_id = uuid.uuid4().hex
-    src_dir = file_dir(file_id)
     dst_dir = file_dir(new_id)
-    src_file = src_dir / "source.nd2"
     dst_file = dst_dir / "source.nd2"
-    voxel = list(rec.get("voxel_um") or [1.0, 1.0, 1.0])
-    channels = [dict(ch) for ch in (rec.get("channels") or [])]
 
     try:
         if prepare.is_slide(rec):
@@ -917,7 +1154,7 @@ def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str,
             lw = max(2, min(int(round(w / ds_x)), lv.width - lx))
             lh = max(2, min(int(round(h / ds_y)), lv.height - ly))
             planes = [
-                ometiff.read_region(slide, lv_idx, c, lx, ly, lw, lh, t=int(body.t), z=int(body.z))
+                ometiff.read_region(slide, lv_idx, c, lx, ly, lw, lh, t=int(t), z=int(z))
                 for c in range(slide.n_channels)
             ]
             if len(voxel) >= 2:
@@ -938,7 +1175,8 @@ def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str,
             prev_crop = read_crop(src_file)
             abs_x = (prev_crop[0] if prev_crop else 0) + x
             abs_y = (prev_crop[1] if prev_crop else 0) + y
-            write_crop(dst_dir, abs_x, abs_y, w, h)
+            if has_crop and (not is_full_box or prev_crop is not None):
+                write_crop(dst_dir, abs_x, abs_y, w, h, {"ratio_label": ratio_label} if ratio_label else None)
             orig_area = max(src_w * src_h, 1)
             size_bytes = max(1024, int(round(float(rec.get("size_bytes") or 0) * ((w * h) / orig_area))))
             old_sizes = dict(detail.get("sizes") or {})
@@ -958,8 +1196,11 @@ def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str,
             shape = [int(v) for v in sizes.values()]
 
         now = time.time()
+        if ch_changed:
+            write_edits(dst_dir, {"channels": channels, "updated_at": now})
         text_info = dict(detail.get("text_info") or {})
-        text_info["Crop region"] = f"x={abs_x}, y={abs_y}, w={w}, h={h} (from {orig_name})"
+        if has_crop:
+            text_info["Crop region"] = f"x={abs_x}, y={abs_y}, w={w}, h={h} (from {orig_name})"
         groups = dict(detail.get("groups") or {})
         if "file" in groups and isinstance(groups["file"], dict):
             groups["file"] = {
@@ -974,7 +1215,7 @@ def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str,
             **detail,
             "id": new_id,
             "name": final_name,
-            "folder": folder,
+            "folder": target_folder,
             "format": fmt,
             "size_bytes": size_bytes,
             "status": "ready",
@@ -988,15 +1229,19 @@ def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str,
             "channels": channels,
             "created_at": now,
             "_owner": owner_id,
-            "cropped": True,
+            "cropped": bool(has_crop),
+            "edited": bool(ch_changed or has_crop),
             "crop": {
                 "x": abs_x,
                 "y": abs_y,
                 "w": w,
                 "h": h,
+                "ratio_label": ratio_label,
                 "source_id": file_id,
                 "source_name": orig_name,
-            },
+            }
+            if has_crop
+            else rec.get("crop"),
             "text_info": text_info,
             "groups": groups,
             "prepare": "pending",
@@ -1010,6 +1255,245 @@ def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str,
     except Exception:
         remove_file_data(new_id)
         raise
+
+
+@app.post("/api/files/{file_id}/crop")
+def api_crop_file(file_id: str, body: CropRequest, owner_id: Owner) -> dict[str, Any]:
+    return _execute_crop_or_edit(
+        file_id,
+        owner_id,
+        crop=CropBoxSpec(x=body.x, y=body.y, w=body.w, h=body.h, ratio_label=body.ratio_label),
+        channel_edits=body.channel_edits,
+        mode=body.mode,
+        name=body.name,
+        folder=body.folder,
+        t=body.t,
+        z=body.z,
+    )
+
+
+@app.post("/api/files/{file_id}/reset")
+def api_reset_file(file_id: str, owner_id: Owner) -> dict[str, Any]:
+    """Restore an in-place cropped/edited file back to its original uncropped/unedited state."""
+    rec = _need(file_id, owner_id)
+    detail = get_file_detail(file_id, owner_id) or dict(rec)
+    src_dir = file_dir(file_id)
+    src_file = src_dir / "source.nd2"
+    orig_backup = src_dir / "source.orig.nd2"
+    saved = read_edits(src_dir) or {}
+    orig = saved.get("orig")
+
+    if orig_backup.is_file():
+        ometiff.close_slide(src_file)
+        close_nd2(src_file)
+        orig_backup.replace(src_file)
+
+    clear_crop(src_dir)
+    clear_edits(src_dir)
+    close_nd2(src_file)
+    ometiff.close_slide(src_file)
+    slide_render.forget(file_id)
+
+    if orig and isinstance(orig, dict):
+        restored: dict[str, Any] = {
+            **detail,
+            "width": orig.get("width") or rec.get("orig_width") or rec.get("width"),
+            "height": orig.get("height") or rec.get("orig_height") or rec.get("height"),
+            "axes": orig.get("axes") or rec.get("axes"),
+            "sizes": orig.get("sizes") or detail.get("sizes"),
+            "shape": orig.get("shape") or rec.get("shape"),
+            "size_bytes": orig.get("size_bytes") or rec.get("size_bytes"),
+            "channels": orig.get("channels") or rec.get("channels"),
+            "voxel_um": orig.get("voxel_um") or rec.get("voxel_um"),
+            "cropped": bool(orig.get("cropped", False)),
+            "crop": orig.get("crop"),
+            "edited": False,
+            "orig_width": None,
+            "orig_height": None,
+            "_owner": owner_id,
+        }
+        if orig.get("levels"):
+            restored["levels"] = orig["levels"]
+    else:
+        handle = open_nd2(src_file)
+        w = axis_size(handle.sizes, "X")
+        h = axis_size(handle.sizes, "Y")
+        axes = [{"name": k, "size": int(v)} for k, v in handle.sizes.items()]
+        restored = {
+            **detail,
+            "width": w,
+            "height": h,
+            "axes": axes,
+            "sizes": dict(handle.sizes),
+            "shape": [int(v) for v in handle.sizes.values()],
+            "cropped": False,
+            "crop": None,
+            "edited": False,
+            "orig_width": None,
+            "orig_height": None,
+            "_owner": owner_id,
+        }
+
+    upsert_file(restored)
+    for kind in ("display", "autoscale"):
+        (settings.cache_dir / file_id / f"{kind}_0_0_0.{'json' if kind == 'autoscale' else 'bin.gz'}").unlink(missing_ok=True)
+    prepare.get(file_id, restored, src_file, "display", (0, 0, 0))
+    ready_at = round(time.time(), 3)
+    final_rec = update_file(file_id, owner_id, {"prepare": "ready", "prepared_at": ready_at})
+    return _public(final_rec or {**restored, "prepare": "ready", "prepared_at": ready_at})
+
+
+@app.post("/api/files/{file_id}/nuclei")
+def api_file_nuclei(
+    file_id: str,
+    owner_id: Owner,
+    body: NucleusParams | None = None,
+) -> dict[str, Any]:
+    """Detect and segment nuclei using the Foci_Counter.groovy pipeline."""
+    params = body or NucleusParams()
+    rec = _need(file_id, owner_id)
+    src = source_path(file_id)
+    if prepare.is_slide(rec):
+        slide = prepare.ensure_slide(file_id, src)
+        planes = ometiff.overview_planes(slide, t=params.t, z=params.z)
+        ov_w = int(planes[0].shape[-1]) if planes else slide.width
+        ds = slide.width / max(ov_w, 1)
+        um = float((rec.get("voxel_um") or [0])[0] or 0) * ds
+        res = segment_nuclei(planes, rec.get("channels") or [], um_per_px=um, params=params)
+        if ds > 1.0:
+            for nuc in res["nuclei"]:
+                nuc["cx"] = round(nuc["cx"] * ds, 1)
+                nuc["cy"] = round(nuc["cy"] * ds, 1)
+                nuc["area_px"] = int(round(nuc["area_px"] * ds * ds))
+                nuc["bounds"] = {
+                    "x": int(round(nuc["bounds"]["x"] * ds)),
+                    "y": int(round(nuc["bounds"]["y"] * ds)),
+                    "w": int(round(nuc["bounds"]["w"] * ds)),
+                    "h": int(round(nuc["bounds"]["h"] * ds)),
+                }
+                nuc["contour"] = [[round(pt[0] * ds, 1), round(pt[1] * ds, 1)] for pt in nuc["contour"]]
+            if res.get("recommended_center"):
+                res["recommended_center"] = {
+                    "x": int(round(res["recommended_center"]["x"] * ds)),
+                    "y": int(round(res["recommended_center"]["y"] * ds)),
+                }
+        res["width"] = slide.width
+        res["height"] = slide.height
+        return res
+    handle = open_nd2(src)
+    planes, _ = extract_channels(handle, t=params.t, z=params.z, p=params.p)
+    um = float((rec.get("voxel_um") or [0])[0] or 0)
+    res = segment_nuclei(planes, rec.get("channels") or [], um_per_px=um, params=params)
+    res["width"] = int(rec.get("width") or (planes[0].shape[-1] if planes else 0))
+    res["height"] = int(rec.get("height") or (planes[0].shape[-2] if planes else 0))
+    return res
+
+
+@app.post("/api/files/batch-apply")
+def api_batch_apply(body: BatchApplyRequest, owner_id: Owner) -> dict[str, Any]:
+    """Apply unified and/or per-image channel edits and crops across multiple files."""
+    items: list[BatchItemApply] = list(body.items or [])
+    seen_ids = {item.file_id for item in items}
+    for fid in body.file_ids:
+        if fid not in seen_ids:
+            items.append(BatchItemApply(file_id=fid))
+            seen_ids.add(fid)
+    if not items:
+        raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select at least one image."})
+
+    results: list[dict[str, Any]] = []
+    for item in items:
+        rec = _need(item.file_id, owner_id)
+        src_w = int(rec.get("width") or 0)
+        src_h = int(rec.get("height") or 0)
+
+        merged_edits: list[ChannelEdit] = []
+        if body.unified_channel_edits:
+            merged_edits.extend(body.unified_channel_edits)
+        if item.channel_edits:
+            merged_edits.extend(item.channel_edits)
+
+        crop_spec = item.crop
+        if crop_spec is None and (body.auto_nucleus or (body.crop_width and body.crop_height)):
+            cw = int(body.crop_width or round(src_w * 0.6))
+            ch = int(body.crop_height or round(src_h * 0.6))
+            cw = max(2, min(cw, src_w))
+            ch = max(2, min(ch, src_h))
+            cx, cy = src_w // 2, src_h // 2
+            if body.auto_nucleus:
+                nuc_res = api_file_nuclei(item.file_id, owner_id, body.nucleus_params)
+                center = nuc_res.get("recommended_center")
+                if center:
+                    cx = int(center["x"])
+                    cy = int(center["y"])
+            x0 = max(0, min(src_w - cw, int(round(cx - cw / 2))))
+            y0 = max(0, min(src_h - ch, int(round(cy - ch / 2))))
+            crop_spec = CropBoxSpec(
+                x=x0,
+                y=y0,
+                w=cw,
+                h=ch,
+                ratio_label=body.ratio_label,
+            )
+        elif crop_spec is not None and not crop_spec.ratio_label and body.ratio_label:
+            crop_spec = crop_spec.model_copy(update={"ratio_label": body.ratio_label})
+
+        out = _execute_crop_or_edit(
+            item.file_id,
+            owner_id,
+            crop=crop_spec,
+            channel_edits=merged_edits or None,
+            mode=body.mode,
+            name=item.name,
+            folder=body.folder,
+        )
+        results.append(out)
+
+    return {"files": results, "mode": body.mode, "count": len(results)}
+
+
+# --- projects (Studio multi-image editing) ----------------------------------
+
+
+@app.get("/api/projects")
+def api_list_projects(owner_id: Owner) -> dict[str, Any]:
+    return {"projects": [_public(p) for p in list_projects(owner_id)]}
+
+
+@app.post("/api/projects")
+def api_create_project(body: ProjectCreate, owner_id: Owner) -> dict[str, Any]:
+    proj = create_project(
+        owner_id,
+        name=body.name,
+        description=body.description,
+        file_ids=body.file_ids,
+        project_settings=body.settings,
+    )
+    return _public(proj)
+
+
+@app.get("/api/projects/{project_id}")
+def api_get_project(project_id: str, owner_id: Owner) -> dict[str, Any]:
+    proj = get_owned_project(project_id, owner_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Project not found."})
+    return _public(proj)
+
+
+@app.patch("/api/projects/{project_id}")
+def api_update_project(project_id: str, body: ProjectPatch, owner_id: Owner) -> dict[str, Any]:
+    changes = {field: getattr(body, field) for field in body.model_fields_set}
+    proj = update_project(project_id, owner_id, changes)
+    if not proj:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Project not found."})
+    return _public(proj)
+
+
+@app.delete("/api/projects/{project_id}")
+def api_delete_project(project_id: str, owner_id: Owner) -> dict[str, str]:
+    if not delete_project(project_id, owner_id):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Project not found."})
+    return {"id": project_id, "status": "deleted"}
 
 
 @app.delete("/api/files/{file_id}")

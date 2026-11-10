@@ -19,6 +19,7 @@ from nd2utils.jsonutil import jsonable
 MAGIC = b"ND2 FILE SIGNATURE"
 PLANE_MAGIC = b"ND2P"
 CROP_SIDECAR = "crop.json"
+EDITS_SIDECAR = "edits.json"
 _TIFF_MAGICS = (b"II*\0", b"MM\0*", b"II+\0", b"MM\0+")
 
 
@@ -37,11 +38,41 @@ def read_crop(path: Path) -> tuple[int, int, int, int] | None:
     return None
 
 
-def write_crop(directory: Path, x: int, y: int, w: int, h: int) -> None:
+def write_crop(directory: Path, x: int, y: int, w: int, h: int, extra: dict[str, Any] | None = None) -> None:
+    payload: dict[str, Any] = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+    if extra:
+        payload.update(extra)
     (directory / CROP_SIDECAR).write_text(
-        json.dumps({"x": int(x), "y": int(y), "w": int(w), "h": int(h)}),
+        json.dumps(payload),
         encoding="utf-8",
     )
+
+
+def clear_crop(directory: Path) -> None:
+    (directory / CROP_SIDECAR).unlink(missing_ok=True)
+
+
+def read_edits(path: Path) -> dict[str, Any] | None:
+    """Return edits dict from edits.json alongside `path` (or inside directory) if present."""
+    sidecar = (path if path.is_dir() else path.parent) / EDITS_SIDECAR
+    if not sidecar.is_file():
+        return None
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def write_edits(directory: Path, payload: dict[str, Any]) -> None:
+    (directory / EDITS_SIDECAR).write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def clear_edits(directory: Path) -> None:
+    (directory / EDITS_SIDECAR).unlink(missing_ok=True)
 
 
 def _is_tiff(path: Path) -> bool:

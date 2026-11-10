@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { niceScaleUm } from "../lib/plane";
 import { formatUm } from "../lib/format";
+import type { NucleusRoi } from "../lib/types";
 
 export interface CropBox {
   x: number;
@@ -67,6 +68,38 @@ export function defaultCropBox(imageWidth: number, imageHeight: number, aspectRa
   return fitCropToAspect(initial, imageWidth, imageHeight, aspectRatio);
 }
 
+export function centerCropBoxAt(
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+  imageWidth: number,
+  imageHeight: number,
+  aspectRatio: number | null = null,
+): CropBox {
+  if (imageWidth < 2 || imageHeight < 2) return { x: 0, y: 0, w: 2, h: 2 };
+  let cw = Math.max(2, Math.min(imageWidth, Math.round(w)));
+  let ch = Math.max(2, Math.min(imageHeight, Math.round(h)));
+  if (aspectRatio && aspectRatio > 0) {
+    if (cw / ch > aspectRatio) {
+      cw = Math.max(2, Math.min(imageWidth, Math.round(ch * aspectRatio)));
+    } else {
+      ch = Math.max(2, Math.min(imageHeight, Math.round(cw / aspectRatio)));
+    }
+    if (cw > imageWidth) {
+      cw = imageWidth;
+      ch = Math.max(2, Math.round(cw / aspectRatio));
+    }
+    if (ch > imageHeight) {
+      ch = imageHeight;
+      cw = Math.max(2, Math.round(ch * aspectRatio));
+    }
+  }
+  const x = Math.max(0, Math.min(imageWidth - cw, Math.round(cx - cw / 2)));
+  const y = Math.max(0, Math.min(imageHeight - ch, Math.round(cy - ch / 2)));
+  return { x, y, w: cw, h: ch };
+}
+
 export function CropOverlay({
   imageWidth,
   imageHeight,
@@ -74,6 +107,10 @@ export function CropOverlay({
   crop,
   aspectRatio,
   scaleBar,
+  nuclei,
+  activeNucleusId,
+  onSelectNucleus,
+  compact = false,
   onChange,
 }: {
   imageWidth: number;
@@ -82,6 +119,10 @@ export function CropOverlay({
   crop: CropBox;
   aspectRatio: number | null;
   scaleBar: boolean;
+  nuclei?: NucleusRoi[];
+  activeNucleusId?: number | null;
+  onSelectNucleus?: (nuc: NucleusRoi) => void;
+  compact?: boolean;
   onChange: (next: CropBox) => void;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -254,6 +295,71 @@ export function CropOverlay({
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
     >
+      {/* Detected Nuclei Contours & Clickable Centroids */}
+      {nuclei && nuclei.length > 0 && (
+        <svg
+          viewBox={`0 0 ${imageWidth} ${imageHeight}`}
+          preserveAspectRatio="none"
+          className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible"
+        >
+          {nuclei.map((nuc) => {
+            const isActive = activeNucleusId === nuc.id;
+            const pathD =
+              nuc.contour.length >= 3
+                ? `M ${nuc.contour.map(([px, py]) => `${px} ${py}`).join(" L ")} Z`
+                : "";
+            return (
+              <g key={nuc.id}>
+                {pathD && (
+                  <path
+                    d={pathD}
+                    fill={isActive ? "rgba(250, 204, 21, 0.14)" : "rgba(56, 189, 248, 0.08)"}
+                    stroke={isActive ? "#facc15" : "#38bdf8"}
+                    strokeWidth={Math.max(1.2, Math.min(imageWidth, imageHeight) * 0.0035)}
+                    strokeDasharray={isActive ? undefined : `${Math.max(3, imageWidth * 0.008)} ${Math.max(2, imageWidth * 0.006)}`}
+                    className={onSelectNucleus ? "pointer-events-auto cursor-pointer" : ""}
+                    onPointerDown={(e) => {
+                      if (!onSelectNucleus) return;
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onSelectNucleus(nuc);
+                    }}
+                  />
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      )}
+
+      {/* Clickable Nucleus Center Badges */}
+      {nuclei &&
+        nuclei.map((nuc) => {
+          const isActive = activeNucleusId === nuc.id;
+          const cxPct = (nuc.cx / imageWidth) * 100;
+          const cyPct = (nuc.cy / imageHeight) * 100;
+          return (
+            <button
+              key={`badge-${nuc.id}`}
+              type="button"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                onSelectNucleus?.(nuc);
+              }}
+              style={{ left: `${cxPct}%`, top: `${cyPct}%` }}
+              title={`#${nuc.id} (${nuc.area_um2} µm², circ ${nuc.circularity})`}
+              className={`pointer-events-auto absolute z-30 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-bold leading-none shadow-md transition-transform hover:scale-110 ${
+                isActive
+                  ? "bg-amber-400 text-slate-950 ring-2 ring-white"
+                  : "bg-slate-950/85 text-sky-300 ring-1 ring-sky-400/60 hover:bg-sky-400 hover:text-slate-950"
+              }`}
+            >
+              #{nuc.id}
+            </button>
+          );
+        })}
+
       <div
         style={{
           left: `${leftPct}%`,
@@ -278,12 +384,22 @@ export function CropOverlay({
           <div />
         </div>
 
+        {/* Center Crosshair */}
+        <div className="pointer-events-none absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2">
+          <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-sky-300/70" />
+          <div className="absolute left-0 top-1/2 h-px w-full -translate-y-1/2 bg-sky-300/70" />
+        </div>
+
         {/* Live Dimensions Readout Pill */}
-        <div className="pointer-events-none absolute left-2 top-2 flex flex-wrap items-center gap-1.5 rounded-md bg-black/80 px-2 py-0.5 font-mono text-[10px] text-white shadow-md ring-1 ring-white/15 backdrop-blur-xs">
+        <div
+          className={`pointer-events-none absolute left-1.5 top-1.5 flex flex-wrap items-center gap-1 rounded-md bg-black/80 px-1.5 py-0.5 font-mono text-white shadow-md ring-1 ring-white/15 backdrop-blur-xs ${
+            compact ? "text-[9px]" : "text-[10px]"
+          }`}
+        >
           <span className="font-semibold text-sky-300">
             {crop.w} × {crop.h} px
           </span>
-          {umPerPixel > 0 && (
+          {!compact && umPerPixel > 0 && (
             <span className="text-white/70">
               ({formatUm(crop.w * umPerPixel)} × {formatUm(crop.h * umPerPixel)})
             </span>

@@ -11,6 +11,10 @@ export interface ChannelInfo {
   lut_min: number | null;
   lut_max: number | null;
   lut_gamma: number;
+  brightness?: number;
+  min_pct?: number;
+  max_pct?: number;
+  visible?: boolean;
   suggested_min: number;
   suggested_max: number;
 }
@@ -56,6 +60,10 @@ export interface FileSummary {
   prepared_at?: number | null;
   /** True when created by cropping another image in the workspace. */
   cropped?: boolean | null;
+  /** True when modified by in-place or studio channel/crop edits. */
+  edited?: boolean | null;
+  orig_width?: number | null;
+  orig_height?: number | null;
   crop?: {
     x: number;
     y: number;
@@ -67,6 +75,19 @@ export interface FileSummary {
   } | null;
 }
 
+export interface ChannelEdit {
+  index?: number;
+  name?: string;
+  brightness?: number;
+  min_pct?: number;
+  max_pct?: number;
+  lut_min?: number;
+  lut_max?: number;
+  gamma?: number;
+  visible?: boolean;
+  color?: number[];
+}
+
 export interface CropRequest {
   x: number;
   y: number;
@@ -75,9 +96,82 @@ export interface CropRequest {
   ratio_label?: string;
   name?: string;
   folder?: string;
+  mode?: "new" | "inplace";
+  channel_edits?: ChannelEdit[];
   t?: number;
   z?: number;
   p?: number;
+}
+
+export type ThresholdMethod = "Otsu" | "Li" | "Huang" | "Triangle" | "Mean" | "IsoData" | "Moments";
+
+export interface NucleusParams {
+  channel_index?: number | null;
+  threshold_method: ThresholdMethod;
+  smooth_um: number;
+  min_area_um2: number;
+  max_area_um2: number;
+  min_circularity: number;
+  watershed: boolean;
+  ws_solidity: number;
+  exclude_edges: boolean;
+  t?: number;
+  z?: number;
+  p?: number;
+}
+
+export interface NucleusRoi {
+  id: number;
+  cx: number;
+  cy: number;
+  area_px: number;
+  area_um2: number;
+  circularity: number;
+  solidity: number;
+  mean_intensity: number;
+  sum_intensity: number;
+  touches_edge: boolean;
+  bounds: { x: number; y: number; w: number; h: number };
+  contour: [number, number][];
+}
+
+export interface NucleusResult {
+  channel_index: number;
+  threshold: number;
+  nuclei: NucleusRoi[];
+  recommended_center: { x: number; y: number } | null;
+  width?: number;
+  height?: number;
+}
+
+export interface BatchItemApply {
+  file_id: string;
+  crop?: { x: number; y: number; w: number; h: number; ratio_label?: string } | null;
+  channel_edits?: ChannelEdit[];
+  name?: string;
+}
+
+export interface BatchApplyRequest {
+  items?: BatchItemApply[];
+  file_ids?: string[];
+  mode: "inplace" | "new";
+  folder?: string;
+  ratio_label?: string;
+  unified_channel_edits?: ChannelEdit[];
+  auto_nucleus?: boolean;
+  nucleus_params?: Partial<NucleusParams>;
+  crop_width?: number;
+  crop_height?: number;
+}
+
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  description: string;
+  file_ids: string[];
+  settings: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface FileDetail extends FileSummary {
@@ -95,6 +189,9 @@ export interface LutSetting {
   min: number;
   max: number;
   gamma: number;
+  brightness?: number;
+  min_pct?: number;
+  max_pct?: number;
   visible: boolean;
   color: number[];
 }

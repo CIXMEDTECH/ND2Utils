@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   SignOut,
   SlidersHorizontal,
+  SquaresFour,
   Sun,
   Translate,
 } from "@phosphor-icons/react";
@@ -20,6 +21,7 @@ import { Mark } from "./Mark";
 
 const nav = [
   { to: "/workspace", key: "basic" as const, Icon: GridFour },
+  { to: "/studio", key: "studio" as const, Icon: SquaresFour },
   { to: "/advanced", key: "advanced" as const, Icon: SlidersHorizontal },
   { to: "/jobs", key: "jobs" as const, Icon: ClockCounterClockwise },
   { to: "/settings", key: "settings" as const, Icon: GearSix },
@@ -58,7 +60,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
             <Mark />
             <span className="font-semibold tracking-[-0.025em] text-[var(--text)]">ND2Utils</span>
             <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
-              v1.0
+              v1.0.1
             </span>
           </Link>
 

@@ -8,6 +8,7 @@ import {
   CheckCircle,
   Copy,
   Crop,
+  Crosshair,
   Export as ExportIcon,
   Eye,
   File as FileIcon,
@@ -18,6 +19,7 @@ import {
   PencilSimple,
   SlidersHorizontal,
   Sparkle,
+  SquaresFour,
   Stack,
   Trash,
   UploadSimple,
@@ -25,7 +27,7 @@ import {
 } from "@phosphor-icons/react";
 import { ChannelToggles } from "../components/ChannelToggles";
 import { ContextMenu, type MenuItem, type MenuState } from "../components/ContextMenu";
-import { CropOverlay, defaultCropBox, fitCropToAspect, type CropBox } from "../components/CropOverlay";
+import { CropOverlay, centerCropBoxAt, defaultCropBox, fitCropToAspect, type CropBox } from "../components/CropOverlay";
 import { folderInputId } from "../components/DropZone";
 import { ExportPanel } from "../components/ExportPanel";
 import { FileTree, type TreeTarget } from "../components/FileTree";
@@ -41,22 +43,26 @@ import { t } from "../i18n";
 import {
   clientSettings,
   createFolder,
+  createProject,
   cropFile,
   deleteFile,
   deleteFolder,
+  detectNuclei,
   getFile,
   rebuildCache,
   renameFolder,
+  resetFile,
   slideInfo,
   updateFile,
 } from "../lib/api";
 import { forget as forgetPreviews, getDisplay, prefetch as prefetchPreviews } from "../lib/previewCache";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
+import { segmentNucleiFromPacked } from "../lib/nucleus";
 import { createPreviewLayers, drawPreview, niceScaleUm, unpackPlane } from "../lib/plane";
 import { readPref, writePref } from "../lib/storage";
 import { countFilesIn, orderedFiles } from "../lib/tree";
 import type { Rect, SlideViewer, ViewState } from "../lib/slide";
-import type { ExportTarget, FileSummary, LutSetting, PackedPlane, SlideInfo } from "../lib/types";
+import type { ExportTarget, FileSummary, LutSetting, NucleusResult, PackedPlane, SlideInfo } from "../lib/types";
 import { useApp } from "../store";
 
 type WorkspaceTab = "identify" | "metadata" | "export";
@@ -78,6 +84,7 @@ interface LocalPreview {
   fileId: string;
   dimensions: Pick<PackedPlane, "width" | "height">;
   layers: ReturnType<typeof createPreviewLayers>;
+  packed: PackedPlane;
 }
 
 type NameAction =
@@ -154,6 +161,10 @@ export function Workspace() {
   const [cropName, setCropName] = useState("");
   const [croppingBusy, setCroppingBusy] = useState(false);
   const [cropToast, setCropToast] = useState<FileSummary | null>(null);
+  const [nucleiResult, setNucleiResult] = useState<NucleusResult | null>(null);
+  const [activeNucleusId, setActiveNucleusId] = useState<number | null>(null);
+  const [detectingNucleus, setDetectingNucleus] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
@@ -210,6 +221,8 @@ export function Workspace() {
       previewFileId.current = selectedId;
       setVisible(resolveVisibleChannels(file.channels));
       setCropping(false);
+      setNucleiResult(null);
+      setActiveNucleusId(null);
     } else if (channelLocked) {
       setVisible(resolveVisibleChannels(file.channels));
     }
@@ -278,15 +291,71 @@ export function Workspace() {
     }
     setCropBox(defaultCropBox(w, h, activeAspectRatio));
     setCropName("");
+    setNucleiResult(null);
+    setActiveNucleusId(null);
     setCropping(true);
   }
 
   function resetCropBox() {
     if (imageDimensions.width <= 0 || imageDimensions.height <= 0) return;
     setCropBox(defaultCropBox(imageDimensions.width, imageDimensions.height, activeAspectRatio));
+    setActiveNucleusId(null);
   }
 
-  async function handleCreateCrop() {
+  async function handleDetectNucleus() {
+    if (!selected || detectingNucleus) return;
+    setDetectingNucleus(true);
+    setError(null);
+    try {
+      let res: NucleusResult;
+      if (localPreview && localPreview.fileId === selected.id && localPreview.packed) {
+        res = segmentNucleiFromPacked(localPreview.packed, selected.channels, Number(selected.voxel_um?.[0] || 0));
+      } else {
+        res = await detectNuclei(selected.id);
+      }
+      setNucleiResult(res);
+      const first = res.nuclei[0];
+      if (first && imageDimensions.width > 0 && imageDimensions.height > 0) {
+        setActiveNucleusId(first.id);
+        setCropBox((prev) =>
+          centerCropBoxAt(
+            first.cx,
+            first.cy,
+            prev.w,
+            prev.h,
+            imageDimensions.width,
+            imageDimensions.height,
+            activeAspectRatio,
+          ),
+        );
+      } else {
+        setActiveNucleusId(null);
+      }
+    } catch (err) {
+      setError(detailMessage(err, lang));
+    } finally {
+      setDetectingNucleus(false);
+    }
+  }
+
+  function handleSelectNucleus(id: number) {
+    const nuc = nucleiResult?.nuclei.find((n) => n.id === id);
+    if (!nuc || imageDimensions.width <= 0 || imageDimensions.height <= 0) return;
+    setActiveNucleusId(id);
+    setCropBox((prev) =>
+      centerCropBoxAt(
+        nuc.cx,
+        nuc.cy,
+        prev.w,
+        prev.h,
+        imageDimensions.width,
+        imageDimensions.height,
+        activeAspectRatio,
+      ),
+    );
+  }
+
+  async function handleCreateCrop(mode: "new" | "inplace" = "new") {
     if (!selected || croppingBusy) return;
     setCroppingBusy(true);
     setError(null);
@@ -297,9 +366,18 @@ export function Workspace() {
         w: Math.round(cropBox.w),
         h: Math.round(cropBox.h),
         ratio_label: activeRatioLabel,
-        name: cropName.trim() || undefined,
+        name: mode === "new" ? cropName.trim() || undefined : undefined,
+        mode,
       });
+      if (mode === "inplace") {
+        forgetPreviews([selected.id]);
+      }
       await refreshFiles();
+      if (mode === "inplace") {
+        void getFile(selected.id)
+          .then(setDetail)
+          .catch(() => undefined);
+      }
       setCropping(false);
       setCropToast(created);
       select(created.id);
@@ -310,6 +388,40 @@ export function Workspace() {
       setError(detailMessage(err, lang));
     } finally {
       setCroppingBusy(false);
+    }
+  }
+
+  async function handleRestoreOriginal(fileId: string) {
+    if (restoring) return;
+    setRestoring(true);
+    setError(null);
+    try {
+      await resetFile(fileId);
+      forgetPreviews([fileId]);
+      await refreshFiles();
+      if (selectedId === fileId) {
+        const next = await getFile(fileId);
+        setDetail(next);
+      }
+    } catch (err) {
+      setError(detailMessage(err, lang));
+    } finally {
+      setRestoring(false);
+    }
+  }
+
+  async function handleOpenInStudio(ids: string[]) {
+    const targetIds = ids.filter((id) => Boolean(files.find((f) => f.id === id)));
+    if (targetIds.length === 0) return;
+    try {
+      setError(null);
+      const proj = await createProject({
+        name: `${t(lang, "newProject")} ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+        file_ids: targetIds,
+      });
+      nav(`/studio/${proj.id}`);
+    } catch (err) {
+      setError(detailMessage(err, lang));
     }
   }
 
@@ -363,6 +475,7 @@ export function Workspace() {
             height: Math.max(file.height ?? 0, packed.height),
           },
           layers,
+          packed,
         });
       })
       .catch((err) => {
@@ -581,9 +694,25 @@ export function Workspace() {
           window.setTimeout(() => startCropping(), 80);
         },
       },
+      {
+        key: "studio",
+        label: exportChecked ? `${t(lang, "addToProject")} (${checkedFiles.length})` : t(lang, "addToProject"),
+        icon: <SquaresFour size={15} />,
+        onSelect: () => void handleOpenInStudio((exportChecked ? checkedFiles : [file]).map((f) => f.id)),
+      },
       isSlide(file)
         ? { key: "slide", label: t(lang, "openSlide"), icon: <Stack size={15} />, onSelect: () => nav(`/slide/${file.id}`) }
         : { key: "advanced", label: t(lang, "openAdvanced"), icon: <SlidersHorizontal size={15} />, onSelect: () => nav(`/advanced/${file.id}`) },
+      ...(file.cropped || file.edited
+        ? [
+            {
+              key: "restore",
+              label: t(lang, "restoreOriginal"),
+              icon: <ArrowCounterClockwise size={15} />,
+              onSelect: () => void handleRestoreOriginal(file.id),
+            },
+          ]
+        : []),
       {
         key: "export",
         label: exportChecked ? `${t(lang, "exportSelected")} (${checkedFiles.length})` : t(lang, "exportEllipsis"),
@@ -756,6 +885,40 @@ export function Workspace() {
               />
             </div>
           )}
+
+          <span className="mx-1 h-4 w-px bg-white/15" aria-hidden />
+          <button
+            type="button"
+            disabled={detectingNucleus}
+            onClick={() => void handleDetectNucleus()}
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-emerald-400/20 px-2.5 py-1 text-[11px] font-medium text-emerald-200 transition-colors hover:bg-emerald-400/30 disabled:opacity-50"
+            title={t(lang, "autoNucleusCenter")}
+          >
+            <Crosshair size={13} weight="bold" />
+            {detectingNucleus ? t(lang, "applyingChanges") : t(lang, "autoNucleusCenter")}
+          </button>
+
+          {nucleiResult && nucleiResult.nuclei.length > 0 && (
+            <div className="inline-flex items-center gap-1">
+              {nucleiResult.nuclei.slice(0, 6).map((nuc) => {
+                const isTarget = nuc.id === activeNucleusId;
+                return (
+                  <button
+                    key={nuc.id}
+                    type="button"
+                    onClick={() => handleSelectNucleus(nuc.id)}
+                    className={`cursor-pointer rounded px-1.5 py-0.5 font-mono text-[10.5px] transition-colors ${
+                      isTarget
+                        ? "bg-emerald-400 font-bold text-slate-950"
+                        : "bg-white/10 text-emerald-200 hover:bg-white/20"
+                    }`}
+                  >
+                    #{nuc.id}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-2">
@@ -771,7 +934,7 @@ export function Workspace() {
             />
           </label>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={resetCropBox}
@@ -791,7 +954,16 @@ export function Workspace() {
             <button
               type="button"
               disabled={croppingBusy}
-              onClick={() => void handleCreateCrop()}
+              onClick={() => void handleCreateCrop("inplace")}
+              className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-emerald-400/20 px-2.5 text-[11px] font-semibold text-emerald-200 transition-all hover:bg-emerald-400/30 disabled:opacity-50"
+            >
+              <Check size={13} weight="bold" />
+              {croppingBusy ? t(lang, "applyingChanges") : t(lang, "applyInplace")}
+            </button>
+            <button
+              type="button"
+              disabled={croppingBusy}
+              onClick={() => void handleCreateCrop("new")}
               className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-sky-400 px-3 text-[11px] font-semibold text-slate-950 shadow-sm transition-all hover:bg-sky-300 disabled:opacity-50"
             >
               <Sparkle size={13} weight="fill" />
@@ -836,6 +1008,18 @@ export function Workspace() {
               </span>
             </span>
             <span className="flex items-center gap-0.5">
+              {(selectedIds.length > 0 || selected) && (
+                <button
+                  type="button"
+                  onClick={() => void handleOpenInStudio(selectedIds.length > 0 ? selectedIds : selected ? [selected.id] : [])}
+                  className="inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-1 text-[11px] font-medium text-[var(--accent)] transition-colors hover:opacity-90"
+                  title={t(lang, "addToProject")}
+                >
+                  <SquaresFour size={13} weight="duotone" />
+                  {t(lang, "studio")}
+                  {selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}
+                </button>
+              )}
               {files.length > 0 && (
                 <button
                   type="button"
@@ -1002,6 +1186,9 @@ export function Workspace() {
                     crop={cropBox}
                     aspectRatio={activeAspectRatio}
                     scaleBar={scaleBar}
+                    nuclei={nucleiResult?.nuclei}
+                    activeNucleusId={activeNucleusId}
+                    onSelectNucleus={(nuc) => handleSelectNucleus(nuc.id)}
                     onChange={setCropBox}
                   />
                 ) : null
@@ -1105,13 +1292,21 @@ export function Workspace() {
                         <h2 className="truncate text-[13px] font-semibold tracking-tight text-[var(--text)]" title={selected.name}>
                           {selected.name}
                         </h2>
-                        {selected.cropped && (
-                          <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
-                            <Crop size={11} weight="bold" />
-                            {t(lang, "croppedBadge")}
-                            {selected.crop?.ratio_label ? ` ${selected.crop.ratio_label}` : ""}
-                          </span>
-                        )}
+                        <div className="flex shrink-0 items-center gap-1">
+                          {selected.edited && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-medium text-amber-500">
+                              <SlidersHorizontal size={11} weight="bold" />
+                              {t(lang, "editedBadge")}
+                            </span>
+                          )}
+                          {selected.cropped && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
+                              <Crop size={11} weight="bold" />
+                              {t(lang, "croppedBadge")}
+                              {selected.crop?.ratio_label ? ` ${selected.crop.ratio_label}` : ""}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <p className="mt-1 font-mono text-[11px] tabular-nums text-[var(--text-dim)]">
                         {selected.width ?? "–"} × {selected.height ?? "–"} px
@@ -1208,6 +1403,27 @@ export function Workspace() {
                         <Crop size={14} weight="bold" />
                         {t(lang, "cropTool")}
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleOpenInStudio(selectedIds.length > 0 ? selectedIds : [selected.id])}
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                        title={t(lang, "addToProject")}
+                      >
+                        <SquaresFour size={14} weight="duotone" />
+                        {t(lang, "studio")}
+                      </button>
+                      {(selected.cropped || selected.edited) && (
+                        <button
+                          type="button"
+                          disabled={restoring}
+                          onClick={() => void handleRestoreOriginal(selected.id)}
+                          className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-2.5 text-[12px] font-medium text-[var(--text-dim)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50"
+                          title={t(lang, "restoreOriginal")}
+                        >
+                          <ArrowCounterClockwise size={14} />
+                          {t(lang, "restoreOriginal")}
+                        </button>
+                      )}
                       {pendingDelete !== selected.id && (
                         <button
                           type="button"

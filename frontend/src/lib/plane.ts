@@ -79,7 +79,7 @@ function lutTable(size: number, min: number, max: number, gamma: number): Float3
 
 export function renderComposite(
   packed: PackedPlane,
-  luts: { min: number; max: number; gamma: number; visible: boolean; color: number[] }[],
+  luts: { min: number; max: number; gamma: number; brightness?: number; visible: boolean; color: number[] }[],
   target: ImageData,
 ): void {
   const { channels } = packed;
@@ -93,10 +93,12 @@ export function renderComposite(
     const plane = channels[c].data;
     const [cr, cg, cb] = lut.color;
     const gamma = lut.gamma || 1;
+    const brightness = lut.brightness !== undefined ? Math.max(0, lut.brightness) : 1;
     const table = tableSize ? lutTable(tableSize, lut.min, lut.max, gamma) : null;
     for (let i = 0; i < plane.length; i++) {
-      const y = table ? table[plane[i]] : mapLut(plane[i], lut.min, lut.max, gamma);
+      let y = table ? table[plane[i]] : mapLut(plane[i], lut.min, lut.max, gamma);
       if (y === 0) continue;
+      if (brightness !== 1) y = Math.min(1, y * brightness);
       const o = i * 4;
       out[o] = Math.min(255, out[o] + y * cr);
       out[o + 1] = Math.min(255, out[o + 1] + y * cg);
@@ -122,11 +124,20 @@ export function createPreviewLayers(packed: PackedPlane, luts: LutSetting[]): Pr
     const min = lut?.min ?? channel.suggestedMin;
     const max = lut?.max ?? channel.suggestedMax;
     const gamma = lut?.gamma && lut.gamma > 0 ? lut.gamma : 1;
+    const brightness = lut?.brightness !== undefined ? Math.max(0, lut.brightness) : 1;
     const linear = Math.abs(gamma - 1) < 1e-6;
+    const unitBrightness = Math.abs(brightness - 1) < 1e-6;
     const inverseGamma = 1 / gamma;
     const span = Math.max(max - min, 1e-6);
     const [red, green, blue] = lut?.color ?? channel.color;
-    if (previewWidth === packed.width && previewHeight === packed.height && linear && min === 0 && max === 255) {
+    if (
+      previewWidth === packed.width &&
+      previewHeight === packed.height &&
+      linear &&
+      unitBrightness &&
+      min === 0 &&
+      max === 255
+    ) {
       const rScale = red / 255;
       const gScale = green / 255;
       const bScale = blue / 255;
@@ -152,6 +163,9 @@ export function createPreviewLayers(packed: PackedPlane, luts: LutSetting[]): Pr
         if (level <= 0) level = 0;
         else if (level >= 1) level = 1;
         else if (!linear) level = Math.pow(level, inverseGamma);
+        if (!unitBrightness && level > 0) {
+          level = Math.min(1, level * brightness);
+        }
         const offset = pixel * 4;
         output[offset] = level * red;
         output[offset + 1] = level * green;
@@ -254,6 +268,51 @@ export function drawPreview(
   if (options.scaleBar) {
     const scaledUmPerPixel = options.umPerPixel * (source.width / previewWidth);
     drawScaleBar(context, width, height, scaledUmPerPixel);
+  }
+}
+
+export function drawCroppedPreview(
+  target: HTMLCanvasElement,
+  source: Pick<PackedPlane, "width" | "height">,
+  layers: PreviewLayer[],
+  crop: { x: number; y: number; w: number; h: number },
+  options: {
+    scaleBar: boolean;
+    visible: boolean[];
+    umPerPixel: number;
+  },
+): void {
+  const active = layers
+    .map((layer, index) => ({ layer, index }))
+    .filter(({ index }) => options.visible[index] ?? true);
+  const layerW = layers[0]?.canvas.width ?? source.width;
+  const layerH = layers[0]?.canvas.height ?? source.height;
+  const scaleX = layerW / Math.max(1, source.width);
+  const scaleY = layerH / Math.max(1, source.height);
+
+  const sx = Math.max(0, Math.min(layerW - 1, Math.round(crop.x * scaleX)));
+  const sy = Math.max(0, Math.min(layerH - 1, Math.round(crop.y * scaleY)));
+  const sw = Math.max(2, Math.min(layerW - sx, Math.round(crop.w * scaleX)));
+  const sh = Math.max(2, Math.min(layerH - sy, Math.round(crop.h * scaleY)));
+
+  if (target.width !== sw) target.width = sw;
+  if (target.height !== sh) target.height = sh;
+  const context = target.getContext("2d");
+  if (!context) return;
+  context.imageSmoothingEnabled = false;
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "black";
+  context.fillRect(0, 0, sw, sh);
+
+  context.globalCompositeOperation = "lighter";
+  for (const { layer } of active) {
+    context.drawImage(layer.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  }
+  context.globalCompositeOperation = "source-over";
+
+  if (options.scaleBar && options.umPerPixel > 0) {
+    const croppedUmPerPx = options.umPerPixel * (crop.w / sw);
+    drawScaleBar(context, sw, sh, croppedUmPerPx);
   }
 }
 

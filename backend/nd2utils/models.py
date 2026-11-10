@@ -15,6 +15,10 @@ class ChannelInfo(BaseModel):
     lut_min: float | None = None
     lut_max: float | None = None
     lut_gamma: float = 1.0
+    brightness: float = 1.0
+    min_pct: float = 0.0
+    max_pct: float = 100.0
+    visible: bool = True
     suggested_min: float = 0
     suggested_max: float = 65535
 
@@ -28,7 +32,23 @@ class LutSetting(BaseModel):
     min: float
     max: float
     gamma: float = 1.0
+    brightness: float = 1.0
+    min_pct: float | None = None
+    max_pct: float | None = None
     visible: bool = True
+    color: list[int] | None = None
+
+
+class ChannelEdit(BaseModel):
+    index: int | None = None
+    name: str | None = None
+    brightness: float | None = None
+    min_pct: float | None = None
+    max_pct: float | None = None
+    lut_min: float | None = None
+    lut_max: float | None = None
+    gamma: float | None = None
+    visible: bool | None = None
     color: list[int] | None = None
 
 
@@ -90,8 +110,65 @@ class CropRequest(Coord):
     y: int
     w: int
     h: int
+    ratio_label: str | None = None
     name: str | None = None
     folder: str | None = None
+    mode: Literal["new", "inplace"] = "new"
+    channel_edits: list[ChannelEdit] | None = None
+
+
+class NucleusParams(Coord):
+    channel_index: int | None = None
+    threshold_method: Literal["Otsu", "Li", "Huang", "Triangle", "Mean", "IsoData", "Moments"] = "Otsu"
+    smooth_um: float = 0.5
+    min_area_um2: float = 30.0
+    max_area_um2: float = 2000.0
+    min_circularity: float = 0.4
+    watershed: bool = True
+    ws_solidity: float = 0.9
+    exclude_edges: bool = True
+
+
+class CropBoxSpec(BaseModel):
+    x: int
+    y: int
+    w: int
+    h: int
+    ratio_label: str | None = None
+
+
+class BatchItemApply(BaseModel):
+    file_id: str
+    crop: CropBoxSpec | None = None
+    channel_edits: list[ChannelEdit] | None = None
+    name: str | None = None
+
+
+class BatchApplyRequest(BaseModel):
+    items: list[BatchItemApply] = []
+    file_ids: list[str] = []
+    mode: Literal["inplace", "new"] = "inplace"
+    folder: str | None = None
+    ratio_label: str | None = None
+    unified_channel_edits: list[ChannelEdit] | None = None
+    auto_nucleus: bool = False
+    nucleus_params: NucleusParams | None = None
+    crop_width: int | None = None
+    crop_height: int | None = None
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str = ""
+    file_ids: list[str] = []
+    settings: dict[str, Any] = {}
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    file_ids: list[str] | None = None
+    settings: dict[str, Any] | None = None
 
 
 class ExportRequest(BaseModel):

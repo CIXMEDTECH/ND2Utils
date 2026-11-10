@@ -113,13 +113,23 @@ def _limits(planes: list[np.ndarray], channels: list[dict[str, Any]]) -> list[di
         if file_max:
             # Same rule as the viewer: the stored LUT is often on a 16-bit scale for 12-bit data.
             hi = max(min(hi, float(file_max)), lo + 1.0)
+        min_pct = float(meta.get("min_pct") if meta.get("min_pct") is not None else 0.0)
+        max_pct = float(meta.get("max_pct") if meta.get("max_pct") is not None else 100.0)
+        span = max(hi - lo, 1.0)
+        eff_min = lo + (min_pct / 100.0) * span
+        eff_max = max(eff_min + 1e-3, lo + (max_pct / 100.0) * span)
         out.append(
             {
                 "index": i,
                 "name": meta.get("name"),
-                "min": lo,
-                "max": hi,
+                "min": eff_min,
+                "max": eff_max,
+                "raw_min": lo,
+                "raw_max": hi,
                 "gamma": float(meta.get("lut_gamma") or 1.0),
+                "brightness": float(meta.get("brightness") if meta.get("brightness") is not None else 1.0),
+                "min_pct": min_pct,
+                "max_pct": max_pct,
                 "color": meta.get("color"),
             }
         )
@@ -146,6 +156,9 @@ def _display_bytes(planes: list[np.ndarray], channels: list[dict[str, Any]], lim
         gamma = lim["gamma"] if lim["gamma"] > 0 else 1.0
         if abs(gamma - 1.0) > 1e-6:
             y = np.power(y, 1.0 / gamma)
+        brightness = float(lim.get("brightness") if lim.get("brightness") is not None else 1.0)
+        if abs(brightness - 1.0) > 1e-6:
+            y = np.clip(y * max(0.0, brightness), 0.0, 1.0)
         mapped.append((y * 255.0 + 0.5).astype(np.uint8))
     # Already contrast-mapped: the viewer displays 0..255 linearly.
     meta = [{**(channels[i] if i < len(channels) else {}), "suggested_min": 0, "suggested_max": 255} for i in range(len(mapped))]

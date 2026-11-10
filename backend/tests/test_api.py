@@ -682,3 +682,157 @@ def test_crop_file_creates_new_workspace_file_and_exports(client, sample_files):
     assert len(png_names) >= 1
     exported_img = Image.open(BytesIO(zf.read(png_names[0])))
     assert exported_img.size == (cw, ch)
+
+
+def test_projects_crud_and_cleanup(client, sample_files):
+    f1 = _upload(client, sample_files[0], "studio")
+    f2 = _upload(client, sample_files[1], "studio")
+
+    # Create a project with f1 and f2
+    r = client.post(
+        "/api/projects",
+        json={
+            "name": "Fig2 Nucleus & Dim Blue",
+            "file_ids": [f1["id"], f2["id"]],
+            "settings": {"aspectPreset": "1:1"},
+        },
+    )
+    assert r.status_code == 200, r.text
+    proj = r.json()
+    assert proj["name"] == "Fig2 Nucleus & Dim Blue"
+    assert proj["file_ids"] == [f1["id"], f2["id"]]
+    assert proj["settings"]["aspectPreset"] == "1:1"
+
+    # List projects
+    listed = client.get("/api/projects").json()["projects"]
+    assert any(p["id"] == proj["id"] for p in listed)
+
+    # Update project
+    r_patch = client.patch(
+        f"/api/projects/{proj['id']}",
+        json={"name": "Fig2 Updated", "settings": {"aspectPreset": "4:3"}},
+    )
+    assert r_patch.status_code == 200
+    assert r_patch.json()["name"] == "Fig2 Updated"
+    assert r_patch.json()["settings"]["aspectPreset"] == "4:3"
+
+    # Deleting f1 removes it from project.file_ids automatically
+    client.delete(f"/api/files/{f1['id']}")
+    proj_after = client.get(f"/api/projects/{proj['id']}").json()
+    assert proj_after["file_ids"] == [f2["id"]]
+
+    # Delete project
+    assert client.delete(f"/api/projects/{proj['id']}").status_code == 200
+    assert client.get(f"/api/projects/{proj['id']}").status_code == 404
+
+
+def test_segment_nuclei_and_api_endpoint(client, sample_files):
+    from nd2utils.models import NucleusParams
+    from nd2utils.render import identify_nucleus_channel, segment_nuclei
+
+    # Unit test segment_nuclei on a synthetic 256x256 plane with a circular nucleus at (140, 110)
+    yy, xx = np.ogrid[:256, :256]
+    gfp_plane = np.full((256, 256), 10, dtype=np.uint16)
+    dapi_plane = np.full((256, 256), 15, dtype=np.uint16)
+    mask_circle = (xx - 140) ** 2 + (yy - 110) ** 2 <= 28**2
+    dapi_plane[mask_circle] = 900
+
+    channels = [
+        {"index": 0, "name": "GFP", "color": "#00ff00"},
+        {"index": 1, "name": "DAPI", "color": "#4ea8ff"},
+    ]
+    assert identify_nucleus_channel(channels) == 1
+
+    res = segment_nuclei(
+        [gfp_plane, dapi_plane],
+        channels,
+        um_per_px=0.25,
+        params=NucleusParams(min_area_um2=20.0, max_area_um2=2000.0),
+    )
+    assert res["channel_index"] == 1
+    assert len(res["nuclei"]) == 1
+    nuc = res["nuclei"][0]
+    assert abs(nuc["cx"] - 140.0) < 2.0
+    assert abs(nuc["cy"] - 110.0) < 2.0
+    assert nuc["circularity"] > 0.7
+    assert len(nuc["contour"]) >= 8
+
+    # Integration test /api/files/{id}/nuclei on an uploaded file
+    uploaded = _upload(client, sample_files[0], "")
+    r = client.post(
+        f"/api/files/{uploaded['id']}/nuclei",
+        json={"min_area_um2": 1.0, "max_area_um2": 50000.0, "min_circularity": 0.1, "exclude_edges": False},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "channel_index" in body
+    assert isinstance(body["nuclei"], list)
+
+
+def test_batch_apply_inplace_and_new_with_brightness_and_reset(client, sample_files):
+    f1 = _upload(client, sample_files[0], "batch")
+    w0, h0 = int(f1["width"]), int(f1["height"])
+    cw, ch = max(32, w0 // 2), max(32, h0 // 2)
+
+    # First export baseline PNG to compare pixel intensity before dimming
+    _, zf_base = _export(client, {"file_ids": [f1["id"]], "format": "png", "scale_bar": False})
+    base_png = [n for n in zf_base.namelist() if n.endswith(".png")][0]
+    base_arr = np.asarray(Image.open(BytesIO(zf_base.read(base_png))))
+
+    # Apply in-place crop + dim channel 0 brightness to 0.35
+    r = client.post(
+        "/api/files/batch-apply",
+        json={
+            "mode": "inplace",
+            "unified_channel_edits": [{"index": 0, "brightness": 0.35}],
+            "items": [
+                {
+                    "file_id": f1["id"],
+                    "crop": {"x": 8, "y": 8, "w": cw, "h": ch, "ratio_label": "1:1"},
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    updated = r.json()["files"][0]
+    assert updated["id"] == f1["id"]
+    assert updated["cropped"] is True
+    assert updated["edited"] is True
+    assert updated["width"] == cw and updated["height"] == ch
+    assert abs(updated["channels"][0]["brightness"] - 0.35) < 1e-4
+
+    # Export after in-place edit and verify cropped size and dimmed intensity
+    _, zf_dim = _export(client, {"file_ids": [f1["id"]], "format": "png", "scale_bar": False})
+    dim_png = [n for n in zf_dim.namelist() if n.endswith(".png")][0]
+    dim_arr = np.asarray(Image.open(BytesIO(zf_dim.read(dim_png))))
+    assert dim_arr.shape[:2] == (ch, cw)
+    base_crop = base_arr[8 : 8 + ch, 8 : 8 + cw]
+    if base_crop.mean() > 1.0:
+        assert dim_arr.mean() < base_crop.mean()
+
+    # Batch-apply in mode="new" with auto_nucleus=True
+    r_new = client.post(
+        "/api/files/batch-apply",
+        json={
+            "mode": "new",
+            "auto_nucleus": True,
+            "aspect_ratio": 1.0,
+            "crop_size_px": max(24, cw // 2),
+            "ratio_label": "1:1",
+            "items": [{"file_id": f1["id"]}],
+        },
+    )
+    assert r_new.status_code == 200, r_new.text
+    new_file = r_new.json()["files"][0]
+    assert new_file["id"] != f1["id"]
+    assert new_file["cropped"] is True
+
+    # Reset f1 back to its original uncropped and unedited state
+    r_reset = client.post(f"/api/files/{f1['id']}/reset")
+    assert r_reset.status_code == 200, r_reset.text
+    restored = r_reset.json()
+    assert restored["cropped"] is False
+    assert restored["edited"] is False
+    assert restored["width"] == w0 and restored["height"] == h0
+    assert abs(restored["channels"][0].get("brightness", 1.0) - 1.0) < 1e-4
+

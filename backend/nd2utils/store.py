@@ -175,6 +175,14 @@ def delete_file_record(file_id: str, owner_id: str) -> None:
         if _owned(index.get(file_id), owner_id):
             index.pop(file_id, None)
             save_index(index)
+        projects = load_projects()
+        p_changed = False
+        for proj in projects.values():
+            if _owned(proj, owner_id) and file_id in (proj.get("file_ids") or []):
+                proj["file_ids"] = [fid for fid in (proj.get("file_ids") or []) if fid != file_id]
+                p_changed = True
+        if p_changed:
+            save_projects(projects)
 
 
 def list_files(owner_id: str) -> list[dict[str, Any]]:
@@ -371,6 +379,98 @@ def _remove_job_output(job: dict[str, Any]) -> None:
     shutil.rmtree(settings.exports_dir / str(job.get("id")), ignore_errors=True)
 
 
+# --- projects (Studio multi-image editing projects) ------------------------
+
+
+def load_projects() -> dict[str, dict[str, Any]]:
+    ensure_dirs()
+    data = _read_json(settings.projects_path, {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_projects(projects: dict[str, dict[str, Any]]) -> None:
+    _write_json(settings.projects_path, projects)
+
+
+def list_projects(owner_id: str) -> list[dict[str, Any]]:
+    items = [dict(record) for record in load_projects().values() if _owned(record, owner_id)]
+    items.sort(key=lambda r: r.get("updated_at") or r.get("created_at") or 0, reverse=True)
+    return items
+
+
+def get_owned_project(project_id: str, owner_id: str) -> dict[str, Any] | None:
+    record = load_projects().get(project_id)
+    return dict(record) if _owned(record, owner_id) else None
+
+
+def create_project(
+    owner_id: str,
+    name: str,
+    description: str = "",
+    file_ids: list[str] | None = None,
+    project_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    clean_name = (name or "").strip() or "Untitled Project"
+    if len(clean_name) > 160:
+        clean_name = clean_name[:160]
+    now = time.time()
+    owned_ids = [
+        fid
+        for fid in dict.fromkeys(file_ids or [])
+        if get_owned_file(fid, owner_id) is not None
+    ]
+    rec: dict[str, Any] = {
+        "id": uuid.uuid4().hex,
+        "name": clean_name,
+        "description": (description or "").strip()[:500],
+        "file_ids": owned_ids,
+        "settings": dict(project_settings or {}),
+        "created_at": now,
+        "updated_at": now,
+        OWNER_FIELD: owner_id,
+    }
+    with _LOCK:
+        projects = load_projects()
+        projects[rec["id"]] = rec
+        save_projects(projects)
+    return dict(rec)
+
+
+def update_project(project_id: str, owner_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
+    with _LOCK:
+        projects = load_projects()
+        rec = projects.get(project_id)
+        if not _owned(rec, owner_id):
+            return None
+        if "name" in changes and changes["name"] is not None:
+            clean_name = str(changes["name"]).strip()
+            if clean_name:
+                rec["name"] = clean_name[:160]
+        if "description" in changes and changes["description"] is not None:
+            rec["description"] = str(changes["description"]).strip()[:500]
+        if "file_ids" in changes and changes["file_ids"] is not None:
+            rec["file_ids"] = [
+                fid
+                for fid in dict.fromkeys(changes["file_ids"])
+                if get_owned_file(fid, owner_id) is not None
+            ]
+        if "settings" in changes and isinstance(changes["settings"], dict):
+            rec["settings"] = {**(rec.get("settings") or {}), **changes["settings"]}
+        rec["updated_at"] = time.time()
+        save_projects(projects)
+        return dict(rec)
+
+
+def delete_project(project_id: str, owner_id: str) -> bool:
+    with _LOCK:
+        projects = load_projects()
+        if not _owned(projects.get(project_id), owner_id):
+            return False
+        projects.pop(project_id, None)
+        save_projects(projects)
+        return True
+
+
 # --- admin: copy / move between workspaces ---------------------------------
 
 
@@ -516,6 +616,11 @@ def delete_workspace(owner_id: str) -> None:
         folders = _load_folders()
         if folders.pop(owner_id, None) is not None:
             _write_json(settings.folders_path, folders)
+        projects = load_projects()
+        for pid, proj in list(projects.items()):
+            if _owned(proj, owner_id):
+                projects.pop(pid, None)
+        save_projects(projects)
 
 
 def purge_expired(now: float | None = None) -> list[str]:

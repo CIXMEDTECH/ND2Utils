@@ -2,6 +2,7 @@ import { isSupportedName } from "./format";
 import type {
   AccessCode,
   AccessUser,
+  BatchApplyRequest,
   CodeKind,
   CropRequest,
   FileDetail,
@@ -9,8 +10,11 @@ import type {
   JobInfo,
   LutSetting,
   MeasureResult,
+  NucleusParams,
+  NucleusResult,
   PerformanceValues,
   PerformanceView,
+  ProjectInfo,
   RenderModeSetting,
   SlideExportFormat,
   SlideInfo,
@@ -193,6 +197,54 @@ export async function updateFile(id: string, body: { name?: string; folder?: str
 
 export async function cropFile(id: string, body: CropRequest): Promise<FileSummary> {
   return json<FileSummary>(await send(`/api/files/${id}/crop`, "POST", body));
+}
+
+export async function resetFile(id: string): Promise<FileSummary> {
+  return json<FileSummary>(await send(`/api/files/${id}/reset`, "POST"));
+}
+
+export async function detectNuclei(id: string, body?: Partial<NucleusParams>): Promise<NucleusResult> {
+  return json<NucleusResult>(await send(`/api/files/${id}/nuclei`, "POST", body ?? {}));
+}
+
+export async function batchApply(body: BatchApplyRequest): Promise<{ files: FileSummary[]; mode: "inplace" | "new"; count: number }> {
+  return json<{ files: FileSummary[]; mode: "inplace" | "new"; count: number }>(
+    await send("/api/files/batch-apply", "POST", body),
+  );
+}
+
+export async function listProjects(): Promise<ProjectInfo[]> {
+  const data = await json<{ projects: ProjectInfo[] }>(await fetch("/api/projects"));
+  return data.projects;
+}
+
+export async function createProject(body: {
+  name: string;
+  description?: string;
+  file_ids?: string[];
+  settings?: Record<string, unknown>;
+}): Promise<ProjectInfo> {
+  return json<ProjectInfo>(await send("/api/projects", "POST", body));
+}
+
+export async function getProject(id: string): Promise<ProjectInfo> {
+  return json<ProjectInfo>(await fetch(`/api/projects/${id}`));
+}
+
+export async function updateProject(
+  id: string,
+  body: Partial<{
+    name: string;
+    description: string;
+    file_ids: string[];
+    settings: Record<string, unknown>;
+  }>,
+): Promise<ProjectInfo> {
+  return json<ProjectInfo>(await send(`/api/projects/${id}`, "PATCH", body));
+}
+
+export async function deleteProject(id: string): Promise<{ id: string; status: string }> {
+  return json<{ id: string; status: string }>(await send(`/api/projects/${id}`, "DELETE"));
 }
 
 export async function getFile(id: string): Promise<FileDetail> {

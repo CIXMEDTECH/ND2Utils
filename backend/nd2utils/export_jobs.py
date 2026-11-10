@@ -147,6 +147,18 @@ def _ome_channel_color(rgb: list[int]) -> int:
     return value
 
 
+def _apply_raw_brightness(plane: np.ndarray, brightness: float) -> np.ndarray:
+    arr = _as_yx(plane)
+    gain = max(0.0, float(brightness if brightness is not None else 1.0))
+    if abs(gain - 1.0) <= 1e-6:
+        return arr
+    scaled = np.asarray(arr, dtype=np.float32) * gain
+    if np.issubdtype(arr.dtype, np.integer):
+        info = np.iinfo(arr.dtype)
+        return np.clip(scaled + 0.5, info.min, info.max).astype(arr.dtype)
+    return scaled.astype(arr.dtype)
+
+
 def _write_ome_tiff(
     path: Path,
     planes: list[np.ndarray],
@@ -154,8 +166,15 @@ def _write_ome_tiff(
     colors: list[list[int]],
     voxel: list[float],
     bits_significant: int | None = None,
+    brightnesses: list[float] | None = None,
 ) -> None:
-    arr = np.stack([_as_yx(p) for p in planes], axis=0)
+    arr = np.stack(
+        [
+            _apply_raw_brightness(p, brightnesses[i] if brightnesses and i < len(brightnesses) else 1.0)
+            for i, p in enumerate(planes)
+        ],
+        axis=0,
+    )
     metadata: dict = {
         "axes": "CYX",
         "Channel": {
@@ -344,9 +363,10 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                 want_split = req.channels_mode in ("split", "both")
 
                 if write_raw:
+                    ch_gains = [float(getattr(luts[i], "brightness", 1.0)) if i < len(luts) else 1.0 for i in range(len(planes))]
                     if want_composite:
                         dest = target(_export_filename(stem, tag=tag, role=composite_role, ext="ome.tif"))
-                        _write_ome_tiff(dest, planes, names, colors, voxel, bits_sig)
+                        _write_ome_tiff(dest, planes, names, colors, voxel, bits_sig, ch_gains)
                     if want_split:
                         for i in shown:
                             dest = target(_export_filename(stem, tag=tag, role=ch_names[i], ext="ome.tif"))
@@ -357,6 +377,7 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                                 [colors[i] if i < len(colors) else [255, 255, 255]],
                                 voxel,
                                 bits_sig,
+                                [ch_gains[i]],
                             )
                     readme_dirs.add(folder)
 
