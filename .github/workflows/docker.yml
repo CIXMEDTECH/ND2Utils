@@ -54,6 +54,9 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=1.0.2,enable={{is_default_branch}}
             type=raw,value=v1.0.2,enable={{is_default_branch}}
+            type=raw,value=1.0.2-fix1,enable={{is_default_branch}}
+            type=raw,value=v1.0.2-fix1,enable={{is_default_branch}}
+            type=raw,value=fix1,enable={{is_default_branch}}
             type=raw,value=1.0,enable={{is_default_branch}}
             type=ref,event=branch
             type=ref,event=pr

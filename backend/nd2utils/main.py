@@ -1102,6 +1102,8 @@ def _execute_crop_or_edit(
 
     # mode == "new"
     target_folder = _folder_arg(folder) if folder is not None else (rec.get("folder") or "")
+    if target_folder:
+        create_folder(owner_id, target_folder)
     if name and name.strip():
         try:
             raw_name = normalize_filename(name.strip())
@@ -1229,8 +1231,8 @@ def _execute_crop_or_edit(
             "channels": channels,
             "created_at": now,
             "_owner": owner_id,
-            "cropped": bool(has_crop),
-            "edited": bool(ch_changed or has_crop),
+            "cropped": bool((has_crop and not is_full_box) or rec.get("cropped")),
+            "edited": bool(ch_changed or (has_crop and not is_full_box) or rec.get("edited")),
             "crop": {
                 "x": abs_x,
                 "y": abs_y,
@@ -1240,7 +1242,7 @@ def _execute_crop_or_edit(
                 "source_id": file_id,
                 "source_name": orig_name,
             }
-            if has_crop
+            if (has_crop and not is_full_box)
             else rec.get("crop"),
             "text_info": text_info,
             "groups": groups,

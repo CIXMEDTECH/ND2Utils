@@ -885,3 +885,69 @@ def test_export_separate_scale_bars_flat_structure_and_studio_live_crop(client, 
     assert main_img.size == (cw, ch)
 
 
+def test_studio_export_to_workspace_and_no_double_crop(client, sample_files):
+    f1 = _upload(client, sample_files[0], "raw")
+    w0, h0 = int(f1["width"]), int(f1["height"])
+    cw, ch = max(48, int(w0 * 0.6)), max(48, int(h0 * 0.6))
+
+    # 1. Crop in-place in Studio
+    r_inplace = client.post(
+        "/api/files/batch-apply",
+        json={
+            "mode": "inplace",
+            "items": [
+                {
+                    "file_id": f1["id"],
+                    "crop": {"x": 8, "y": 8, "w": cw, "h": ch, "ratio_label": "1:1"},
+                    "channel_edits": [{"index": 0, "brightness": 0.6}],
+                }
+            ],
+        },
+    )
+    assert r_inplace.status_code == 200
+    after_inplace = r_inplace.json()["files"][0]
+    assert after_inplace["width"] == cw and after_inplace["height"] == ch
+
+    # 2. Subsequent channel adjustment in Studio (preview mode: crop=None) must NOT re-crop
+    r_adjust = client.post(
+        "/api/files/batch-apply",
+        json={
+            "mode": "inplace",
+            "items": [
+                {
+                    "file_id": f1["id"],
+                    "channel_edits": [{"index": 0, "brightness": 0.45}],
+                }
+            ],
+        },
+    )
+    assert r_adjust.status_code == 200
+    after_adjust = r_adjust.json()["files"][0]
+    assert after_adjust["width"] == cw and after_adjust["height"] == ch
+
+    # 3. Export processed image to a new Workspace folder ("Studio_Exports/Fig1")
+    r_ws = client.post(
+        "/api/files/batch-apply",
+        json={
+            "mode": "new",
+            "folder": "Studio_Exports/Fig1",
+            "items": [
+                {
+                    "file_id": f1["id"],
+                    "channel_edits": [{"index": 0, "brightness": 0.45}],
+                }
+            ],
+        },
+    )
+    assert r_ws.status_code == 200
+    ws_file = r_ws.json()["files"][0]
+    assert ws_file["id"] != f1["id"]
+    assert ws_file["folder"] == "Studio_Exports/Fig1"
+    assert ws_file["width"] == cw and ws_file["height"] == ch
+    assert ws_file["cropped"] is True
+
+    listing = client.get("/api/files").json()
+    assert "Studio_Exports/Fig1" in listing["folders"]
+
+
+

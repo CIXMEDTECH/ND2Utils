@@ -2,25 +2,29 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowCounterClockwise,
+  ArrowLeft,
+  ArrowRight,
   Check,
   CheckCircle,
   CirclesFour,
+  CornersOut,
   Crosshair,
   Crop,
   Export as ExportIcon,
   Eye,
   EyeSlash,
   FolderOpen,
+  FolderSimplePlus,
   GearSix,
   LockSimple,
   LockSimpleOpen,
   Plus,
   SlidersHorizontal,
-  Sparkle,
   SquaresFour,
   Trash,
   X,
 } from "@phosphor-icons/react";
+import { ChannelToggles } from "../components/ChannelToggles";
 import {
   CropOverlay,
   centerCropBoxAt,
@@ -32,6 +36,7 @@ import { ExportPanel } from "../components/ExportPanel";
 import { Glass } from "../components/Glass";
 import { ConfirmDialog, Modal, NameDialog } from "../components/Modal";
 import { Shell } from "../components/Shell";
+import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
 import {
   batchApply,
@@ -144,23 +149,70 @@ function adjustmentsToChannelEdits(adjs: ChannelAdjustment[]): ChannelEdit[] {
   }));
 }
 
+function resolveImgDimensions(file: FileSummary, packed?: PackedPlane): { width: number; height: number } {
+  const width = file.width && file.width > 0 ? file.width : packed?.width ?? 0;
+  const height = file.height && file.height > 0 ? file.height : packed?.height ?? 0;
+  return { width: Math.max(width, 2), height: Math.max(height, 2) };
+}
+
+function isSubCropBox(box: CropBox | undefined, imgW: number, imgH: number): boolean {
+  if (!box) return false;
+  return (
+    Math.round(box.x) > 0 ||
+    Math.round(box.y) > 0 ||
+    Math.round(box.w) < imgW - 1 ||
+    Math.round(box.h) < imgH - 1
+  );
+}
+
+function buildPreviewLayersForFile(
+  file: FileSummary,
+  packed: PackedPlane | undefined,
+  adjustments: ChannelAdjustment[],
+): { layers: PreviewLayer[]; visible: boolean[] } {
+  if (!packed) return { layers: [], visible: [] };
+  const luts: LutSetting[] = packed.channels.map((ch, idx) => {
+    const adj = adjustments[idx];
+    const baseColor = adj?.color ?? file.channels[idx]?.color ?? ch.color;
+    const minPct = adj?.min_pct ?? 0;
+    const maxPct = adj?.max_pct ?? 100;
+    const span = Math.max(1, (ch.suggestedMax || 255) - (ch.suggestedMin || 0));
+    const minVal = (ch.suggestedMin || 0) + (minPct / 100) * span;
+    const maxVal = Math.max(minVal + 1, (ch.suggestedMin || 0) + (maxPct / 100) * span);
+    return {
+      min: minVal,
+      max: maxVal,
+      gamma: adj?.gamma ?? 1,
+      brightness: adj?.brightness ?? 1,
+      visible: adj?.visible ?? true,
+      color: baseColor,
+    };
+  });
+  return {
+    layers: createPreviewLayers(packed, luts),
+    visible: luts.map((l) => l.visible),
+  };
+}
+
 interface StudioCardCanvasProps {
   file: FileSummary;
   packed: PackedPlane | undefined;
   adjustments: ChannelAdjustment[];
   crop: CropBox;
   aspectRatio: number | null;
-  viewMode: "box" | "cropped";
+  viewMode: "preview" | "box" | "cropped";
   scaleBar: boolean;
   nucleiResult: NucleusResult | undefined;
   activeNucleusId: number | null;
   selected: boolean;
   hasOverride: boolean;
   onSelect: () => void;
+  onInspectStage: () => void;
   onCropChange: (next: CropBox) => void;
   onSelectNucleus: (nuc: NucleusRoi) => void;
   onAutoNucleusSingle: () => void;
   onExportSingle: () => void;
+  onSaveToWorkspaceSingle: () => void;
   onClearOverride?: () => void;
   onResetOriginal?: () => void;
 }
@@ -178,44 +230,25 @@ function StudioImageCard({
   selected,
   hasOverride,
   onSelect,
+  onInspectStage,
   onCropChange,
   onSelectNucleus,
   onAutoNucleusSingle,
   onExportSingle,
+  onSaveToWorkspaceSingle,
   onClearOverride,
   onResetOriginal,
 }: StudioCardCanvasProps) {
   const lang = useApp((s) => s.lang);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const imgW = Math.max(file.width ?? 0, packed?.width ?? 0, 2);
-  const imgH = Math.max(file.height ?? 0, packed?.height ?? 0, 2);
+  const { width: imgW, height: imgH } = resolveImgDimensions(file, packed);
   const umPerPx = Number(file.voxel_um?.[0] || 0);
 
-  const { layers, visible } = useMemo<{ layers: PreviewLayer[]; visible: boolean[] }>(() => {
-    if (!packed) return { layers: [], visible: [] };
-    const luts: LutSetting[] = packed.channels.map((ch, idx) => {
-      const adj = adjustments[idx];
-      const baseColor = adj?.color ?? file.channels[idx]?.color ?? ch.color;
-      const minPct = adj?.min_pct ?? 0;
-      const maxPct = adj?.max_pct ?? 100;
-      const span = Math.max(1, (ch.suggestedMax || 255) - (ch.suggestedMin || 0));
-      const minVal = (ch.suggestedMin || 0) + (minPct / 100) * span;
-      const maxVal = Math.max(minVal + 1, (ch.suggestedMin || 0) + (maxPct / 100) * span);
-      return {
-        min: minVal,
-        max: maxVal,
-        gamma: adj?.gamma ?? 1,
-        brightness: adj?.brightness ?? 1,
-        visible: adj?.visible ?? true,
-        color: baseColor,
-      };
-    });
-    return {
-      layers: createPreviewLayers(packed, luts),
-      visible: luts.map((l) => l.visible),
-    };
-  }, [adjustments, file.channels, packed]);
+  const { layers, visible } = useMemo(
+    () => buildPreviewLayersForFile(file, packed, adjustments),
+    [adjustments, file, packed],
+  );
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -230,19 +263,26 @@ function StudioImageCard({
     } else {
       drawPreview(canvas, dims, layers, {
         composite: true,
-        scaleBar: false,
+        // Show native scale bar cleanly in "preview" mode; in "box" mode CropOverlay renders its own adaptive scale bar
+        scaleBar: viewMode === "preview" ? scaleBar : false,
         visible,
         umPerPixel: umPerPx,
       });
     }
   }, [crop, imgH, imgW, layers, packed, scaleBar, umPerPx, viewMode, visible]);
 
-  const [newScaleUm] = umPerPx > 0 && crop.w > 0 ? niceScaleUm(umPerPx, crop.w) : [0, 0];
+  const effectiveW = viewMode === "preview" ? imgW : crop.w;
+  const effectiveH = viewMode === "preview" ? imgH : crop.h;
+  const [newScaleUm] = umPerPx > 0 && effectiveW > 0 ? niceScaleUm(umPerPx, effectiveW) : [0, 0];
   const nuclei = nucleiResult?.nuclei ?? [];
+  const isLandscape = viewMode === "cropped" ? crop.w >= crop.h : imgW >= imgH;
 
   return (
     <div
       onClick={onSelect}
+      onDoubleClick={() => {
+        if (viewMode === "preview") onInspectStage();
+      }}
       className={`group flex flex-col overflow-hidden rounded-2xl border transition-all ${
         selected
           ? "border-sky-400 bg-slate-900/90 shadow-[0_0_0_1px_rgba(56,189,248,0.4),0_12px_32px_-8px_rgba(2,132,199,0.28)]"
@@ -290,6 +330,17 @@ function StudioImageCard({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              onInspectStage();
+            }}
+            title={t(lang, "inspectInStage")}
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-white/10 px-1.5 text-[10.5px] font-medium text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+          >
+            <CornersOut size={12} weight="bold" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
               onAutoNucleusSingle();
             }}
             title={t(lang, "autoNucleusCenter")}
@@ -297,6 +348,18 @@ function StudioImageCard({
           >
             <Crosshair size={12} weight="bold" />
             {nuclei.length > 0 ? `${nuclei.length}` : t(lang, "auto")}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSaveToWorkspaceSingle();
+            }}
+            title={t(lang, "exportSingleToWorkspace")}
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-emerald-400/15 px-2 text-[10.5px] font-medium text-emerald-300 transition-colors hover:bg-emerald-400/25"
+          >
+            <FolderSimplePlus size={12} weight="bold" />
+            {t(lang, "exportSingleToWorkspace")}
           </button>
           <button
             type="button"
@@ -335,15 +398,19 @@ function StudioImageCard({
           </div>
         ) : (
           <div
-            className="relative inline-flex max-h-full max-w-full items-center justify-center"
+            className="relative flex items-center justify-center"
             style={{
               aspectRatio:
                 viewMode === "cropped" ? `${Math.max(1, crop.w)} / ${Math.max(1, crop.h)}` : `${imgW} / ${imgH}`,
+              width: isLandscape ? "100%" : "auto",
+              height: isLandscape ? "auto" : "100%",
+              maxWidth: "100%",
+              maxHeight: "100%",
             }}
           >
             <canvas
               ref={canvasRef}
-              className="block max-h-full max-w-full rounded-sm object-contain shadow-lg"
+              className="block h-full w-full rounded-sm shadow-lg"
             />
             {viewMode === "box" && (
               <CropOverlay
@@ -364,15 +431,15 @@ function StudioImageCard({
         )}
       </div>
 
-      {/* Card Footer: Crop & Scale Readout + Nucleus Switcher Pills */}
+      {/* Card Footer: Dimensions & Scale Readout + Nucleus Switcher Pills */}
       <div className="flex flex-wrap items-center justify-between gap-1.5 border-t border-white/8 bg-black/40 px-3 py-2 font-mono text-[10px] text-white/70">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-sky-300">
-            {crop.w}×{crop.h}px
+            {effectiveW}×{effectiveH}px
           </span>
           {umPerPx > 0 && (
             <span className="text-white/50">
-              ({formatUm(crop.w * umPerPx)}×{formatUm(crop.h * umPerPx)})
+              ({formatUm(effectiveW * umPerPx)}×{formatUm(effectiveH * umPerPx)})
             </span>
           )}
           {newScaleUm > 0 && (
@@ -409,10 +476,248 @@ function StudioImageCard({
   );
 }
 
+/**
+ * Interactive Workspace-style ZoomStage inspector inside Studio.
+ * Supports smooth mouse-wheel zoom, drag pan, Fit / 1:1, Composite vs Split view,
+ * Scale Bar toggle, CropOverlay toggle, and individual channel visibility toggles.
+ */
+function StudioStageInspector({
+  file,
+  packed,
+  adjustments,
+  crop,
+  aspectRatio,
+  viewMode,
+  scaleBar,
+  composite,
+  nucleiResult,
+  activeNucleusId,
+  fileIndex,
+  totalFiles,
+  onToggleComposite,
+  onToggleScaleBar,
+  onSetViewMode,
+  onToggleChannel,
+  onCropChange,
+  onSelectNucleus,
+  onPrevFile,
+  onNextFile,
+  onBackToGrid,
+}: {
+  file: FileSummary;
+  packed: PackedPlane | undefined;
+  adjustments: ChannelAdjustment[];
+  crop: CropBox;
+  aspectRatio: number | null;
+  viewMode: "preview" | "box" | "cropped";
+  scaleBar: boolean;
+  composite: boolean;
+  nucleiResult: NucleusResult | undefined;
+  activeNucleusId: number | null;
+  fileIndex: number;
+  totalFiles: number;
+  onToggleComposite: (next: boolean) => void;
+  onToggleScaleBar: () => void;
+  onSetViewMode: (next: "preview" | "box" | "cropped") => void;
+  onToggleChannel: (chIdx: number) => void;
+  onCropChange: (next: CropBox) => void;
+  onSelectNucleus: (nuc: NucleusRoi) => void;
+  onPrevFile: () => void;
+  onNextFile: () => void;
+  onBackToGrid: () => void;
+}) {
+  const lang = useApp((s) => s.lang);
+  const stageCanvasRef = useRef<HTMLCanvasElement>(null);
+  const { width: imgW, height: imgH } = resolveImgDimensions(file, packed);
+  const umPerPx = Number(file.voxel_um?.[0] || 0);
+
+  const { layers, visible } = useMemo(
+    () => buildPreviewLayersForFile(file, packed, adjustments),
+    [adjustments, file, packed],
+  );
+
+  useLayoutEffect(() => {
+    const canvas = stageCanvasRef.current;
+    if (!canvas || !packed || !layers.length) return;
+    const dims = { width: imgW, height: imgH };
+    if (viewMode === "cropped") {
+      drawCroppedPreview(canvas, dims, layers, crop, {
+        scaleBar,
+        visible,
+        umPerPixel: umPerPx,
+      });
+    } else {
+      drawPreview(canvas, dims, layers, {
+        composite: viewMode === "box" ? true : composite,
+        scaleBar: viewMode === "box" ? false : scaleBar,
+        visible,
+        umPerPixel: umPerPx,
+      });
+    }
+  }, [composite, crop, imgH, imgW, layers, packed, scaleBar, umPerPx, viewMode, visible]);
+
+  return (
+    <div className="flex h-full min-h-[460px] flex-1 flex-col">
+      <ZoomStage
+        src={null}
+        alt={file.name}
+        mediaReady={Boolean(packed && layers.length)}
+        mediaLoading={!packed}
+        toolbarExtra={
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onBackToGrid}
+              className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-sky-400/20 px-2.5 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-400/30"
+            >
+              <SquaresFour size={13} weight="duotone" />
+              {t(lang, "gridMultiView")}
+            </button>
+            {totalFiles > 1 && (
+              <div className="inline-flex items-center gap-1 rounded-lg bg-white/8 px-1.5 py-0.5 font-mono text-[11px] text-white/80">
+                <button
+                  type="button"
+                  onClick={onPrevFile}
+                  className="rounded p-1 hover:bg-white/15 hover:text-white"
+                  title={t(lang, "prevFile")}
+                >
+                  <ArrowLeft size={12} />
+                </button>
+                <span>
+                  {fileIndex + 1}/{totalFiles}
+                </span>
+                <button
+                  type="button"
+                  onClick={onNextFile}
+                  className="rounded p-1 hover:bg-white/15 hover:text-white"
+                  title={t(lang, "nextFile")}
+                >
+                  <ArrowRight size={12} />
+                </button>
+              </div>
+            )}
+            <span className="truncate font-mono text-[11px] text-white/80">{file.name}</span>
+          </div>
+        }
+        media={
+          <canvas
+            ref={stageCanvasRef}
+            role="img"
+            aria-label={file.name}
+            className="block max-h-none max-w-none"
+          />
+        }
+        mediaOverlay={
+          viewMode === "box" && packed && imgW > 0 && imgH > 0 ? (
+            <CropOverlay
+              imageWidth={imgW}
+              imageHeight={imgH}
+              umPerPixel={umPerPx}
+              crop={crop}
+              aspectRatio={aspectRatio}
+              scaleBar={scaleBar}
+              nuclei={nucleiResult?.nuclei}
+              activeNucleusId={activeNucleusId}
+              onSelectNucleus={onSelectNucleus}
+              onChange={onCropChange}
+            />
+          ) : null
+        }
+      >
+        <Glass tone="dark" shape="chip" className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1 overflow-visible p-1">
+          <button
+            type="button"
+            onClick={() => {
+              onToggleComposite(true);
+            }}
+            aria-pressed={composite && viewMode !== "cropped"}
+            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+              composite && viewMode !== "cropped"
+                ? "bg-white text-slate-950 shadow-sm"
+                : "text-white/70 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            {t(lang, "overlay")}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onSetViewMode("preview");
+              onToggleComposite(false);
+            }}
+            aria-pressed={!composite && viewMode === "preview"}
+            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+              !composite && viewMode === "preview"
+                ? "bg-white text-slate-950 shadow-sm"
+                : "text-white/70 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            {t(lang, "split")}
+          </button>
+          <button
+            type="button"
+            onClick={onToggleScaleBar}
+            aria-pressed={scaleBar}
+            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+              scaleBar ? "bg-white text-slate-950 shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            {t(lang, "scaleBar")}
+          </button>
+          <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden />
+          <button
+            type="button"
+            onClick={() => onSetViewMode(viewMode === "box" ? "preview" : "box")}
+            aria-pressed={viewMode === "box"}
+            className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+              viewMode === "box"
+                ? "bg-sky-400 text-slate-950 shadow-sm"
+                : "text-sky-300 hover:bg-sky-400/15 hover:text-sky-200"
+            }`}
+          >
+            <Crop size={13} weight="bold" />
+            {t(lang, "viewBoxEdit")}
+          </button>
+          <button
+            type="button"
+            onClick={() => onSetViewMode(viewMode === "cropped" ? "preview" : "cropped")}
+            aria-pressed={viewMode === "cropped"}
+            className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+              viewMode === "cropped"
+                ? "bg-emerald-400 text-slate-950 shadow-sm"
+                : "text-emerald-300 hover:bg-emerald-400/15 hover:text-emerald-200"
+            }`}
+          >
+            <Eye size={13} weight="bold" />
+            {t(lang, "viewCroppedResult")}
+          </button>
+        </Glass>
+
+        {file.channels.length > 0 && (
+          <Glass tone="dark" shape="chip" className="absolute bottom-3 left-3 z-20 max-w-[min(100%-1.5rem,36rem)] overflow-visible p-1">
+            <ChannelToggles
+              channels={adjustments.map((a, idx) => ({
+                ...file.channels[idx],
+                name: a.name,
+                color: a.color,
+              }))}
+              visible={visible}
+              onToggle={onToggleChannel}
+            />
+          </Glass>
+        )}
+      </ZoomStage>
+    </div>
+  );
+}
+
 export function Studio() {
   const lang = useApp((s) => s.lang);
   const files = useApp((s) => s.files);
+  const folders = useApp((s) => s.folders);
   const refreshFiles = useApp((s) => s.refreshFiles);
+  const selectInWorkspace = useApp((s) => s.select);
+  const revealInWorkspace = useApp((s) => s.reveal);
   const { projectId } = useParams<{ projectId?: string }>();
   const nav = useNavigate();
 
@@ -421,6 +726,7 @@ export function Studio() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [lastExportedWorkspaceFile, setLastExportedWorkspaceFile] = useState<FileSummary | null>(null);
 
   // Dialogs
   const [newProjectModal, setNewProjectModal] = useState(false);
@@ -430,12 +736,21 @@ export function Studio() {
   const [pickerChecked, setPickerChecked] = useState<Record<string, boolean>>({});
   const [exportTargetFiles, setExportTargetFiles] = useState<FileSummary[] | null>(null);
 
+  // Export to Workspace Modal State
+  const [workspaceExportModalOpen, setWorkspaceExportModalOpen] = useState(false);
+  const [workspaceExportScope, setWorkspaceExportScope] = useState<"all" | "selected">("all");
+  const [workspaceExportFolder, setWorkspaceExportFolder] = useState<string>("__keep__");
+  const [workspaceExportSubfolder, setWorkspaceExportSubfolder] = useState<string>("");
+  const [workspaceExportAddToProject, setWorkspaceExportAddToProject] = useState<boolean>(false);
+
   // Loaded PackedPlanes per fileId
   const [planesByFile, setPlanesByFile] = useState<Record<string, PackedPlane>>({});
 
-  // Studio Editing State
+  // Studio Editing & Preview State
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"box" | "cropped">("box");
+  const [viewMode, setViewMode] = useState<"preview" | "box" | "cropped">("preview");
+  const [layoutMode, setLayoutMode] = useState<"grid" | "stage">("grid");
+  const [stageComposite, setStageComposite] = useState(true);
   const [gridCols, setGridCols] = useState<1 | 2 | 3 | 4>(2);
   const [scaleBar, setScaleBar] = useState(true);
 
@@ -464,11 +779,14 @@ export function Studio() {
   // Apply / Save state
   const [applyBusy, setApplyBusy] = useState(false);
 
-  const showToast = useCallback((msg: string) => {
+  const showToast = useCallback((msg: string, exportedFile?: FileSummary | null) => {
     setToast(msg);
+    if (exportedFile !== undefined) {
+      setLastExportedWorkspaceFile(exportedFile);
+    }
     window.setTimeout(() => {
       setToast((curr) => (curr === msg ? null : curr));
-    }, 4500);
+    }, 6000);
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -588,36 +906,37 @@ export function Studio() {
     [],
   );
 
-  // Initialize default crop boxes for project files
+  // Initialize default crop boxes only for files that do not have an entry yet
   useEffect(() => {
     if (!projectFiles.length) return;
     setCropsByFile((prev) => {
       let changed = false;
       const next = { ...prev };
       for (const file of projectFiles) {
-        const packed = planesByFile[file.id];
-        const imgW = Math.max(file.width ?? 0, packed?.width ?? 0);
-        const imgH = Math.max(file.height ?? 0, packed?.height ?? 0);
-        if (imgW <= 0 || imgH <= 0) continue;
+        const { width: imgW, height: imgH } = resolveImgDimensions(file, planesByFile[file.id]);
+        if (imgW <= 2 || imgH <= 2) continue;
         if (!next[file.id]) {
-          next[file.id] = computeScaledBox(imgW, imgH, imgW / 2, imgH / 2, cropScalePct, activeAspectRatio);
+          // If the file was already cropped previously and we are in normal preview mode, keep full dimensions
+          if (file.cropped && viewMode === "preview") {
+            next[file.id] = { x: 0, y: 0, w: imgW, h: imgH };
+          } else {
+            next[file.id] = computeScaledBox(imgW, imgH, imgW / 2, imgH / 2, cropScalePct, activeAspectRatio);
+          }
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, [activeAspectRatio, computeScaledBox, cropScalePct, planesByFile, projectFiles]);
+  }, [activeAspectRatio, computeScaledBox, cropScalePct, planesByFile, projectFiles, viewMode]);
 
-  // Re-fit all crop boxes when aspect ratio or unified cropScalePct changes
+  // Re-fit all crop boxes when aspect ratio or unified cropScalePct is explicitly changed by the user
   const updateAllCropSizes = useCallback(
     (nextScalePct: number, nextRatio: number | null) => {
       setCropsByFile((prev) => {
         const next: Record<string, CropBox> = { ...prev };
         for (const file of projectFiles) {
-          const packed = planesByFile[file.id];
-          const imgW = Math.max(file.width ?? 0, packed?.width ?? 0);
-          const imgH = Math.max(file.height ?? 0, packed?.height ?? 0);
-          if (imgW <= 0 || imgH <= 0) continue;
+          const { width: imgW, height: imgH } = resolveImgDimensions(file, planesByFile[file.id]);
+          if (imgW <= 2 || imgH <= 2) continue;
           const existing = prev[file.id] ?? defaultCropBox(imgW, imgH, nextRatio);
           const cx = existing.x + existing.w / 2;
           const cy = existing.y + existing.h / 2;
@@ -629,34 +948,35 @@ export function Studio() {
     [computeScaledBox, planesByFile, projectFiles],
   );
 
-  // Keep aspect ratio consistent when preset changes
-  useEffect(() => {
-    if (!projectFiles.length) return;
-    if (consistentCrop) {
-      updateAllCropSizes(cropScalePct, activeAspectRatio);
-    } else {
+  // Activate crop mode ("box") and ensure every file has an active crop box
+  const activateCropViewMode = useCallback(
+    (targetMode: "box" | "cropped" = "box", customRatio?: number | null) => {
+      const ratioToUse = customRatio !== undefined ? customRatio : activeAspectRatio;
+      setViewMode(targetMode);
       setCropsByFile((prev) => {
         const next: Record<string, CropBox> = { ...prev };
         for (const file of projectFiles) {
-          const packed = planesByFile[file.id];
-          const imgW = Math.max(file.width ?? 0, packed?.width ?? 0);
-          const imgH = Math.max(file.height ?? 0, packed?.height ?? 0);
-          if (imgW > 0 && imgH > 0 && next[file.id]) {
-            next[file.id] = fitCropToAspect(next[file.id], imgW, imgH, activeAspectRatio);
+          const { width: imgW, height: imgH } = resolveImgDimensions(file, planesByFile[file.id]);
+          if (imgW <= 2 || imgH <= 2) continue;
+          const cur = next[file.id];
+          if (!cur || !isSubCropBox(cur, imgW, imgH)) {
+            next[file.id] = computeScaledBox(imgW, imgH, imgW / 2, imgH / 2, cropScalePct, ratioToUse);
+          } else if (ratioToUse && ratioToUse > 0) {
+            next[file.id] = fitCropToAspect(cur, imgW, imgH, ratioToUse);
           }
         }
         return next;
       });
-    }
-  }, [activeAspectRatio, consistentCrop, cropScalePct, planesByFile, projectFiles, updateAllCropSizes]);
+    },
+    [activeAspectRatio, computeScaledBox, cropScalePct, planesByFile, projectFiles],
+  );
 
   // Run Foci_Counter.groovy nucleus segmentation on a single file
   const runNucleusDetectForFile = useCallback(
     (file: FileSummary, customParams?: NucleusParams) => {
       const packed = planesByFile[file.id];
       if (!packed) return null;
-      const imgW = Math.max(file.width ?? 0, packed.width);
-      const imgH = Math.max(file.height ?? 0, packed.height);
+      const { width: imgW, height: imgH } = resolveImgDimensions(file, packed);
       const umPerPx = Number(file.voxel_um?.[0] || 0);
       const res = segmentNucleiFromPacked(packed, file.channels, umPerPx, customParams ?? nucleusParams, {
         width: imgW,
@@ -667,8 +987,13 @@ export function Studio() {
       setActiveNucleusByFile((prev) => ({ ...prev, [file.id]: firstNuc?.id ?? null }));
       const cx = firstNuc ? firstNuc.cx : imgW / 2;
       const cy = firstNuc ? firstNuc.cy : imgH / 2;
+      setViewMode((curr) => (curr === "preview" ? "box" : curr));
       setCropsByFile((prev) => {
-        const current = prev[file.id] ?? computeScaledBox(imgW, imgH, cx, cy, cropScalePct, activeAspectRatio);
+        const existing = prev[file.id];
+        const current =
+          existing && isSubCropBox(existing, imgW, imgH)
+            ? existing
+            : computeScaledBox(imgW, imgH, cx, cy, cropScalePct, activeAspectRatio);
         return {
           ...prev,
           [file.id]: centerCropBoxAt(cx, cy, current.w, current.h, imgW, imgH, activeAspectRatio),
@@ -682,6 +1007,7 @@ export function Studio() {
   // Run nucleus detection across all files in the project
   const runNucleusDetectAll = useCallback(
     (customParams?: NucleusParams) => {
+      setViewMode((curr) => (curr === "preview" ? "box" : curr));
       let totalFound = 0;
       for (const file of projectFiles) {
         const res = runNucleusDetectForFile(file, customParams);
@@ -699,9 +1025,7 @@ export function Studio() {
   // Handle crop box drag/resize on one card; if consistentCrop is enabled and size changed, sync size to all cards
   const handleCardCropChange = useCallback(
     (file: FileSummary, nextBox: CropBox) => {
-      const packed = planesByFile[file.id];
-      const imgW = Math.max(file.width ?? 0, packed?.width ?? 0);
-      const imgH = Math.max(file.height ?? 0, packed?.height ?? 0);
+      const { width: imgW, height: imgH } = resolveImgDimensions(file, planesByFile[file.id]);
       setCropsByFile((prev) => {
         const oldBox = prev[file.id];
         const sizeChanged = oldBox && (Math.abs(oldBox.w - nextBox.w) > 1 || Math.abs(oldBox.h - nextBox.h) > 1);
@@ -714,9 +1038,7 @@ export function Studio() {
         const updated: Record<string, CropBox> = { ...prev, [file.id]: nextBox };
         for (const other of projectFiles) {
           if (other.id === file.id) continue;
-          const oPacked = planesByFile[other.id];
-          const ow = Math.max(other.width ?? 0, oPacked?.width ?? 0);
-          const oh = Math.max(other.height ?? 0, oPacked?.height ?? 0);
+          const { width: ow, height: oh } = resolveImgDimensions(other, planesByFile[other.id]);
           if (ow <= 0 || oh <= 0) continue;
           const cur = prev[other.id] ?? defaultCropBox(ow, oh, activeAspectRatio);
           const cx = cur.x + cur.w / 2;
@@ -740,19 +1062,22 @@ export function Studio() {
   // Select a specific nucleus on a card to center its crop box
   const handleSelectNucleus = useCallback(
     (file: FileSummary, nuc: NucleusRoi) => {
-      const packed = planesByFile[file.id];
-      const imgW = Math.max(file.width ?? 0, packed?.width ?? 0);
-      const imgH = Math.max(file.height ?? 0, packed?.height ?? 0);
+      const { width: imgW, height: imgH } = resolveImgDimensions(file, planesByFile[file.id]);
       setActiveNucleusByFile((prev) => ({ ...prev, [file.id]: nuc.id }));
+      setViewMode((curr) => (curr === "preview" ? "box" : curr));
       setCropsByFile((prev) => {
-        const cur = prev[file.id] ?? defaultCropBox(imgW, imgH, activeAspectRatio);
+        const existing = prev[file.id];
+        const cur =
+          existing && isSubCropBox(existing, imgW, imgH)
+            ? existing
+            : computeScaledBox(imgW, imgH, nuc.cx, nuc.cy, cropScalePct, activeAspectRatio);
         return {
           ...prev,
           [file.id]: centerCropBoxAt(nuc.cx, nuc.cy, cur.w, cur.h, imgW, imgH, activeAspectRatio),
         };
       });
     },
-    [activeAspectRatio, planesByFile],
+    [activeAspectRatio, computeScaledBox, cropScalePct, planesByFile],
   );
 
   const selectedFile = useMemo(
@@ -888,27 +1213,36 @@ export function Studio() {
     setEditScope("unified");
   }, [getAdjustmentsForFile, selectedFile]);
 
-  // Apply changes to backend (either mode="inplace" or mode="new")
-  const handleBatchApply = async (mode: "inplace" | "new") => {
-    if (!projectFiles.length || applyBusy) return;
+  // Apply changes to backend (either mode="inplace" or mode="new" / Export to Workspace)
+  const executeStudioApply = async (opts: {
+    mode: "inplace" | "new";
+    targetFiles: FileSummary[];
+    folder?: string;
+    addToProject?: boolean;
+  }) => {
+    const { mode, targetFiles, folder, addToProject = false } = opts;
+    if (!targetFiles.length || applyBusy) return;
     setApplyBusy(true);
     setError(null);
     try {
-      const items = projectFiles.map((file) => {
-        const packed = planesByFile[file.id];
-        const imgW = Math.max(file.width ?? 0, packed?.width ?? 0);
-        const imgH = Math.max(file.height ?? 0, packed?.height ?? 0);
-        const box = cropsByFile[file.id] ?? defaultCropBox(imgW, imgH, activeAspectRatio);
+      const shouldCrop = viewMode !== "preview";
+      const items = targetFiles.map((file) => {
+        const { width: imgW, height: imgH } = resolveImgDimensions(file, planesByFile[file.id]);
+        const box = cropsByFile[file.id];
+        const hasActiveCrop = shouldCrop && isSubCropBox(box, imgW, imgH);
         const adjs = getAdjustmentsForFile(file);
         return {
           file_id: file.id,
-          crop: {
-            x: Math.round(box.x),
-            y: Math.round(box.y),
-            w: Math.round(box.w),
-            h: Math.round(box.h),
-            ratio_label: activeRatioLabel || undefined,
-          },
+          crop:
+            hasActiveCrop && box
+              ? {
+                  x: Math.round(box.x),
+                  y: Math.round(box.y),
+                  w: Math.round(box.w),
+                  h: Math.round(box.h),
+                  ratio_label: activeRatioLabel || undefined,
+                }
+              : undefined,
           channel_edits: adjustmentsToChannelEdits(adjs),
         };
       });
@@ -916,11 +1250,12 @@ export function Studio() {
       const res = await batchApply({
         items,
         mode,
+        folder,
         ratio_label: activeRatioLabel || undefined,
       });
 
       const affectedIds = [
-        ...projectFiles.map((f) => f.id),
+        ...targetFiles.map((f) => f.id),
         ...res.files.map((f) => f.id),
       ];
       forgetPreviews(affectedIds);
@@ -933,8 +1268,12 @@ export function Studio() {
         return next;
       });
 
-      // Reset crop boxes to full dimensions of the newly cropped images
+      // Reset crop boxes to full dimensions of the updated/created images so they are never double-cropped
       const resetBoxes: Record<string, CropBox> = {};
+      for (const origFile of targetFiles) {
+        const { width: ow, height: oh } = resolveImgDimensions(origFile, planesByFile[origFile.id]);
+        resetBoxes[origFile.id] = { x: 0, y: 0, w: ow, h: oh };
+      }
       for (const updatedFile of res.files) {
         const w = updatedFile.width ?? 100;
         const h = updatedFile.height ?? 100;
@@ -942,9 +1281,10 @@ export function Studio() {
       }
       setCropsByFile((prev) => ({ ...prev, ...resetBoxes }));
       setNucleiByFile({});
+      // Switch to clean normal preview mode so the user immediately sees the cropped/edited result without a crop box on top
+      setViewMode("preview");
 
-      // If mode === "new" and we have an active project, also add the new files to the project
-      if (mode === "new" && activeProject) {
+      if (mode === "new" && addToProject && activeProject) {
         const newIds = res.files.map((f) => f.id);
         const updatedProj = await updateProject(activeProject.id, {
           file_ids: [...activeProject.file_ids, ...newIds],
@@ -952,12 +1292,71 @@ export function Studio() {
         setProjects((prev) => prev.map((p) => (p.id === updatedProj.id ? updatedProj : p)));
       }
 
-      showToast(t(lang, mode === "inplace" ? "applySuccessInplace" : "applySuccessNew"));
+      if (mode === "new") {
+        const firstCreated = res.files[0] ?? null;
+        showToast(
+          `${t(lang, "exportedToWorkspaceToast")} (${res.files.length})`,
+          firstCreated,
+        );
+      } else {
+        showToast(t(lang, "applySuccessInplace"), null);
+      }
     } catch (err) {
       setError(detailMessage(err, lang));
     } finally {
       setApplyBusy(false);
     }
+  };
+
+  const handleBatchApply = async (mode: "inplace" | "new") => {
+    await executeStudioApply({
+      mode,
+      targetFiles: projectFiles,
+      addToProject: false,
+    });
+  };
+
+  const openExportToWorkspaceModal = (scope: "all" | "selected", targetFile?: FileSummary) => {
+    if (targetFile) {
+      setSelectedFileId(targetFile.id);
+    }
+    setWorkspaceExportScope(scope);
+    setWorkspaceExportModalOpen(true);
+  };
+
+  const handleConfirmExportToWorkspace = async () => {
+    const targetFiles =
+      workspaceExportScope === "selected" && selectedFile ? [selectedFile] : projectFiles;
+    if (!targetFiles.length) return;
+    let folderParam: string | undefined;
+    const sub = workspaceExportSubfolder.trim().replace(/^\/+|\/+$/g, "");
+    if (workspaceExportFolder === "__keep__") {
+      if (sub) {
+        const baseFolder = targetFiles[0]?.folder || "";
+        folderParam = baseFolder ? `${baseFolder}/${sub}` : sub;
+      } else {
+        folderParam = undefined;
+      }
+    } else {
+      folderParam = sub
+        ? workspaceExportFolder
+          ? `${workspaceExportFolder}/${sub}`
+          : sub
+        : workspaceExportFolder;
+    }
+    setWorkspaceExportModalOpen(false);
+    await executeStudioApply({
+      mode: "new",
+      targetFiles,
+      folder: folderParam,
+      addToProject: workspaceExportAddToProject,
+    });
+  };
+
+  const handleOpenExportedInWorkspace = (file: FileSummary) => {
+    selectInWorkspace(file.id);
+    revealInWorkspace(file.folder || "");
+    nav("/");
   };
 
   const handleRestoreOriginal = async (file: FileSummary) => {
@@ -975,9 +1374,12 @@ export function Studio() {
       const h = restored.height ?? 100;
       setCropsByFile((prev) => ({
         ...prev,
-        [file.id]: computeScaledBox(w, h, w / 2, h / 2, cropScalePct, activeAspectRatio),
+        [file.id]:
+          viewMode === "preview"
+            ? { x: 0, y: 0, w, h }
+            : computeScaledBox(w, h, w / 2, h / 2, cropScalePct, activeAspectRatio),
       }));
-      showToast(t(lang, "restoreSuccess"));
+      showToast(t(lang, "restoreSuccess"), null);
     } catch (err) {
       setError(detailMessage(err, lang));
     }
@@ -1145,6 +1547,8 @@ export function Studio() {
                   projectFiles.map((file) => {
                     const isSel = file.id === selectedFile?.id;
                     const box = cropsByFile[file.id];
+                    const { width: fw, height: fh } = resolveImgDimensions(file, planesByFile[file.id]);
+                    const showPendingCrop = viewMode !== "preview" && box && isSubCropBox(box, fw, fh);
                     return (
                       <div
                         key={file.id}
@@ -1166,10 +1570,21 @@ export function Studio() {
                           </div>
                           <div className="mt-0.5 font-mono text-[10px] text-[var(--text-dim)]">
                             {file.width ?? "–"}×{file.height ?? "–"}px
-                            {box ? ` → ${box.w}×${box.h}px` : ""}
+                            {showPendingCrop ? ` → ${box.w}×${box.h}px` : ""}
                           </div>
                         </div>
                         <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openExportToWorkspaceModal("selected", file);
+                            }}
+                            title={t(lang, "exportSingleToWorkspace")}
+                            className="rounded p-1 text-[var(--text-dim)] hover:text-emerald-400"
+                          >
+                            <FolderSimplePlus size={13} />
+                          </button>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1214,7 +1629,7 @@ export function Studio() {
                   {t(lang, "cropRatio")}:
                 </span>
                 {ASPECT_PRESETS.map((preset) => {
-                  const active = aspectPreset === preset.key;
+                  const active = viewMode !== "preview" && aspectPreset === preset.key;
                   const label =
                     preset.key === "free"
                       ? t(lang, "cropFree")
@@ -1225,7 +1640,25 @@ export function Studio() {
                     <button
                       key={preset.key}
                       type="button"
-                      onClick={() => setAspectPreset(preset.key)}
+                      onClick={() => {
+                        setAspectPreset(preset.key);
+                        const nextRatio =
+                          preset.key === "free"
+                            ? null
+                            : preset.key === "custom"
+                              ? customRatioW > 0 && customRatioH > 0
+                                ? customRatioW / customRatioH
+                                : null
+                              : (preset.ratio ?? null);
+                        if (viewMode === "preview") {
+                          setViewMode("box");
+                        }
+                        if (consistentCrop) {
+                          updateAllCropSizes(cropScalePct, nextRatio);
+                        } else {
+                          activateCropViewMode(viewMode === "cropped" ? "cropped" : "box", nextRatio);
+                        }
+                      }}
                       className={`cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors ${
                         active
                           ? "bg-sky-400 font-semibold text-slate-950 shadow-xs"
@@ -1243,7 +1676,12 @@ export function Studio() {
                       min={0.1}
                       step="any"
                       value={customRatioW}
-                      onChange={(e) => setCustomRatioW(Math.max(0.1, Number(e.target.value) || 1))}
+                      onChange={(e) => {
+                        const nw = Math.max(0.1, Number(e.target.value) || 1);
+                        setCustomRatioW(nw);
+                        if (viewMode === "preview") setViewMode("box");
+                        updateAllCropSizes(cropScalePct, nw / Math.max(0.1, customRatioH));
+                      }}
                       className="w-10 bg-transparent text-center text-white focus:outline-none"
                     />
                     <span className="text-white/40">:</span>
@@ -1252,51 +1690,91 @@ export function Studio() {
                       min={0.1}
                       step="any"
                       value={customRatioH}
-                      onChange={(e) => setCustomRatioH(Math.max(0.1, Number(e.target.value) || 1))}
+                      onChange={(e) => {
+                        const nh = Math.max(0.1, Number(e.target.value) || 1);
+                        setCustomRatioH(nh);
+                        if (viewMode === "preview") setViewMode("box");
+                        updateAllCropSizes(cropScalePct, Math.max(0.1, customRatioW) / nh);
+                      }}
                       className="w-10 bg-transparent text-center text-white focus:outline-none"
                     />
                   </div>
                 )}
               </div>
 
-              {/* View Mode Switcher & Grid Columns */}
+              {/* View Mode Switcher & Layout / Grid Controls */}
               <div className="flex flex-wrap items-center gap-1.5">
                 <div className="inline-flex rounded-lg border border-white/12 bg-black/40 p-0.5 text-[11px]">
                   <button
                     type="button"
-                    onClick={() => setViewMode("box")}
+                    onClick={() => setViewMode("preview")}
                     className={`cursor-pointer rounded-md px-2.5 py-1 font-medium transition-colors ${
-                      viewMode === "box" ? "bg-sky-400 text-slate-950" : "text-white/70 hover:text-white"
+                      viewMode === "preview" ? "bg-white text-slate-950 shadow-xs" : "text-white/70 hover:text-white"
+                    }`}
+                  >
+                    {t(lang, "viewNormalPreview")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => activateCropViewMode("box")}
+                    className={`cursor-pointer rounded-md px-2.5 py-1 font-medium transition-colors ${
+                      viewMode === "box" ? "bg-sky-400 text-slate-950 shadow-xs" : "text-white/70 hover:text-white"
                     }`}
                   >
                     {t(lang, "viewBoxEdit")}
                   </button>
                   <button
                     type="button"
-                    onClick={() => setViewMode("cropped")}
+                    onClick={() => activateCropViewMode("cropped")}
                     className={`cursor-pointer rounded-md px-2.5 py-1 font-medium transition-colors ${
-                      viewMode === "cropped" ? "bg-emerald-400 text-slate-950" : "text-white/70 hover:text-white"
+                      viewMode === "cropped" ? "bg-emerald-400 text-slate-950 shadow-xs" : "text-white/70 hover:text-white"
                     }`}
                   >
                     {t(lang, "viewCroppedResult")}
                   </button>
                 </div>
 
-                <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/40 p-0.5 font-mono text-[10.5px]">
-                  {([1, 2, 3, 4] as const).map((cols) => (
-                    <button
-                      key={cols}
-                      type="button"
-                      onClick={() => setGridCols(cols)}
-                      title={`${t(lang, "gridCols")}: ${cols}`}
-                      className={`cursor-pointer rounded px-1.5 py-0.5 ${
-                        gridCols === cols ? "bg-white text-slate-950 font-semibold" : "text-white/65 hover:text-white"
-                      }`}
-                    >
-                      {cols}×
-                    </button>
-                  ))}
+                {/* Grid vs Workspace-Style Stage View Switcher */}
+                <div className="inline-flex rounded-lg border border-white/12 bg-black/40 p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setLayoutMode("grid")}
+                    className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+                      layoutMode === "grid" ? "bg-white/20 text-white" : "text-white/65 hover:text-white"
+                    }`}
+                  >
+                    <SquaresFour size={13} />
+                    {t(lang, "gridMultiView")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLayoutMode("stage")}
+                    className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+                      layoutMode === "stage" ? "bg-sky-400/25 text-sky-300" : "text-white/65 hover:text-white"
+                    }`}
+                  >
+                    <CornersOut size={13} />
+                    {t(lang, "stageInspectView")}
+                  </button>
                 </div>
+
+                {layoutMode === "grid" && (
+                  <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/40 p-0.5 font-mono text-[10.5px]">
+                    {([1, 2, 3, 4] as const).map((cols) => (
+                      <button
+                        key={cols}
+                        type="button"
+                        onClick={() => setGridCols(cols)}
+                        title={`${t(lang, "gridCols")}: ${cols}`}
+                        className={`cursor-pointer rounded px-1.5 py-0.5 ${
+                          gridCols === cols ? "bg-white text-slate-950 font-semibold" : "text-white/65 hover:text-white"
+                        }`}
+                      >
+                        {cols}×
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <button
                   type="button"
@@ -1337,6 +1815,9 @@ export function Studio() {
                     onChange={(e) => {
                       const val = Number(e.target.value);
                       setCropScalePct(val);
+                      if (viewMode === "preview") {
+                        setViewMode("box");
+                      }
                       updateAllCropSizes(val, activeAspectRatio);
                     }}
                     className="h-1.5 w-28 accent-sky-400"
@@ -1516,9 +1997,18 @@ export function Studio() {
 
           {/* Toast & Error Alerts */}
           {toast && (
-            <div className="fade-in absolute right-4 top-16 z-40 flex items-center gap-2 rounded-xl border border-emerald-400/35 bg-slate-950/95 px-3.5 py-2 text-[12px] text-emerald-200 shadow-2xl">
+            <div className="fade-in absolute right-4 top-16 z-40 flex items-center gap-2.5 rounded-xl border border-emerald-400/35 bg-slate-950/95 px-3.5 py-2 text-[12px] text-emerald-200 shadow-2xl">
               <CheckCircle size={16} weight="fill" className="text-emerald-400" />
               <span>{toast}</span>
+              {lastExportedWorkspaceFile && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenExportedInWorkspace(lastExportedWorkspaceFile)}
+                  className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-lg bg-emerald-400 px-2.5 py-1 text-[11px] font-semibold text-slate-950 transition-colors hover:bg-emerald-300"
+                >
+                  {t(lang, "openInWorkspace")} →
+                </button>
+              )}
             </div>
           )}
           {error && (
@@ -1527,8 +2017,8 @@ export function Studio() {
             </div>
           )}
 
-          {/* Multi-Image Interactive Grid */}
-          <div className="min-h-0 flex-1 overflow-auto p-4">
+          {/* Multi-Image Interactive Grid OR Workspace-Style Stage View */}
+          <div className={`min-h-0 flex-1 ${layoutMode === "stage" ? "flex flex-col overflow-hidden" : "overflow-auto p-4"}`}>
             {!activeProject ? (
               <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center text-white/60">
                 <CirclesFour size={38} weight="duotone" className="mb-3 text-sky-400" />
@@ -1556,6 +2046,57 @@ export function Studio() {
                   {t(lang, "addImagesToProject")}
                 </button>
               </div>
+            ) : layoutMode === "stage" && selectedFile ? (
+              (() => {
+                const packed = planesByFile[selectedFile.id];
+                const { width: imgW, height: imgH } = resolveImgDimensions(selectedFile, packed);
+                const box = cropsByFile[selectedFile.id] ?? defaultCropBox(imgW, imgH, activeAspectRatio);
+                const currentIdx = Math.max(
+                  0,
+                  projectFiles.findIndex((f) => f.id === selectedFile.id),
+                );
+                const adjs = getAdjustmentsForFile(selectedFile);
+                return (
+                  <StudioStageInspector
+                    file={selectedFile}
+                    packed={packed}
+                    adjustments={adjs}
+                    crop={box}
+                    aspectRatio={activeAspectRatio}
+                    viewMode={viewMode}
+                    scaleBar={scaleBar}
+                    composite={stageComposite}
+                    nucleiResult={nucleiByFile[selectedFile.id]}
+                    activeNucleusId={activeNucleusByFile[selectedFile.id] ?? null}
+                    fileIndex={currentIdx}
+                    totalFiles={projectFiles.length}
+                    onToggleComposite={setStageComposite}
+                    onToggleScaleBar={() => setScaleBar((s) => !s)}
+                    onSetViewMode={(nextMode) => {
+                      if (nextMode === "preview") {
+                        setViewMode("preview");
+                      } else {
+                        activateCropViewMode(nextMode);
+                      }
+                    }}
+                    onToggleChannel={(chIdx) => {
+                      const currVis = adjs[chIdx]?.visible ?? true;
+                      updateChannelAdjustment(chIdx, { visible: !currVis });
+                    }}
+                    onCropChange={(next) => handleCardCropChange(selectedFile, next)}
+                    onSelectNucleus={(nuc) => handleSelectNucleus(selectedFile, nuc)}
+                    onPrevFile={() => {
+                      const prevIdx = (currentIdx - 1 + projectFiles.length) % projectFiles.length;
+                      setSelectedFileId(projectFiles[prevIdx].id);
+                    }}
+                    onNextFile={() => {
+                      const nextIdx = (currentIdx + 1) % projectFiles.length;
+                      setSelectedFileId(projectFiles[nextIdx].id);
+                    }}
+                    onBackToGrid={() => setLayoutMode("grid")}
+                  />
+                );
+              })()
             ) : (
               <div
                 className="grid gap-4"
@@ -1565,8 +2106,7 @@ export function Studio() {
               >
                 {projectFiles.map((file) => {
                   const packed = planesByFile[file.id];
-                  const imgW = Math.max(file.width ?? 0, packed?.width ?? 0, 100);
-                  const imgH = Math.max(file.height ?? 0, packed?.height ?? 0, 100);
+                  const { width: imgW, height: imgH } = resolveImgDimensions(file, packed);
                   const box = cropsByFile[file.id] ?? defaultCropBox(imgW, imgH, activeAspectRatio);
                   return (
                     <StudioImageCard
@@ -1583,6 +2123,10 @@ export function Studio() {
                       selected={selectedFile?.id === file.id}
                       hasOverride={hasFileOverride(file.id)}
                       onSelect={() => setSelectedFileId(file.id)}
+                      onInspectStage={() => {
+                        setSelectedFileId(file.id);
+                        setLayoutMode("stage");
+                      }}
                       onCropChange={(next) => handleCardCropChange(file, next)}
                       onSelectNucleus={(nuc) => handleSelectNucleus(file, nuc)}
                       onAutoNucleusSingle={() => {
@@ -1594,6 +2138,7 @@ export function Studio() {
                         }
                       }}
                       onExportSingle={() => setExportTargetFiles([file])}
+                      onSaveToWorkspaceSingle={() => openExportToWorkspaceModal("selected", file)}
                       onClearOverride={() =>
                         setIndividualOverrides((prev) => {
                           const next = { ...prev };
@@ -1610,7 +2155,7 @@ export function Studio() {
           </div>
         </main>
 
-        {/* Right Pane: Unified / Individual Channel Controls + Apply In-Place / New + Export */}
+        {/* Right Pane: Unified / Individual Channel Controls + Apply In-Place / Export to Workspace + Export */}
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-t lg:border-l lg:border-t-0">
           {/* Scope Selector: Unified vs Individual */}
           <div className="border-b border-[var(--line)] p-3">
@@ -1847,7 +2392,7 @@ export function Studio() {
             )}
           </div>
 
-          {/* Bottom Action Area: Apply In-Place vs Save as New Files + Export */}
+          {/* Bottom Action Area: Apply In-Place vs Export to Workspace + File Export */}
           <div className="border-t border-[var(--line)] bg-[var(--bg)]/60 p-3.5">
             <div className="flex flex-col gap-2">
               <div className="grid grid-cols-2 gap-2">
@@ -1864,11 +2409,11 @@ export function Studio() {
                 <button
                   type="button"
                   disabled={projectFiles.length === 0 || applyBusy}
-                  onClick={() => void handleBatchApply("new")}
+                  onClick={() => openExportToWorkspaceModal("all")}
                   className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-[12px] font-semibold text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
                 >
-                  <Sparkle size={14} weight="fill" className="text-[var(--accent)]" />
-                  {applyBusy ? t(lang, "applyingChanges") : t(lang, "applyNewFiles")}
+                  <FolderSimplePlus size={14} weight="bold" className="text-[var(--accent)]" />
+                  {applyBusy ? t(lang, "applyingChanges") : t(lang, "exportToWorkspace")}
                 </button>
               </div>
 
@@ -1935,6 +2480,106 @@ export function Studio() {
         onConfirm={handleDeleteProject}
         onClose={() => setDeleteProjectTarget(null)}
       />
+
+      {/* Export to Workspace Modal */}
+      <Modal
+        open={workspaceExportModalOpen}
+        title={t(lang, "exportToWorkspaceTitle")}
+        subtitle={activeProject?.name}
+        onClose={() => setWorkspaceExportModalOpen(false)}
+        width={460}
+      >
+        <div className="flex flex-col gap-3.5 text-[12px]">
+          <div className="flex flex-col gap-1.5">
+            <span className="font-medium text-[var(--text-dim)]">{t(lang, "exportToWorkspaceScope")}</span>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setWorkspaceExportScope("all")}
+                className={`cursor-pointer rounded-xl border px-3 py-2 text-left font-medium transition-colors ${
+                  workspaceExportScope === "all"
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "border-[var(--line)] bg-[var(--bg)]/50 text-[var(--text)]"
+                }`}
+              >
+                {t(lang, "exportToWorkspaceAll")} ({projectFiles.length})
+              </button>
+              <button
+                type="button"
+                disabled={!selectedFile}
+                onClick={() => setWorkspaceExportScope("selected")}
+                className={`cursor-pointer rounded-xl border px-3 py-2 text-left font-medium transition-colors disabled:opacity-40 ${
+                  workspaceExportScope === "selected"
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "border-[var(--line)] bg-[var(--bg)]/50 text-[var(--text)]"
+                }`}
+              >
+                <div className="truncate">{t(lang, "exportToWorkspaceSelected")}</div>
+                {selectedFile && (
+                  <div className="truncate font-mono text-[10px] opacity-80">{selectedFile.name}</div>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="font-medium text-[var(--text-dim)]">{t(lang, "exportToWorkspaceFolder")}</span>
+            <select
+              value={workspaceExportFolder}
+              onChange={(e) => setWorkspaceExportFolder(e.target.value)}
+              className="rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[12px] text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+            >
+              <option value="__keep__">{t(lang, "keepOriginalFolder")}</option>
+              <option value="">{t(lang, "workspaceRoot")} (/)</option>
+              {folders.map((f) => (
+                <option key={f} value={f}>
+                  /{f}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="font-medium text-[var(--text-dim)]">{t(lang, "newFolderOptional")}</span>
+            <input
+              type="text"
+              value={workspaceExportSubfolder}
+              onChange={(e) => setWorkspaceExportSubfolder(e.target.value)}
+              placeholder={t(lang, "newFolderPlaceholder")}
+              className="rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[12px] text-[var(--text)] placeholder:text-[var(--text-dim)]/50 focus:border-[var(--accent)] focus:outline-none"
+            />
+          </label>
+
+          <label className="inline-flex cursor-pointer items-center gap-2 pt-0.5 text-[12px] text-[var(--text)]">
+            <input
+              type="checkbox"
+              checked={workspaceExportAddToProject}
+              onChange={(e) => setWorkspaceExportAddToProject(e.target.checked)}
+              className="accent-[var(--accent)]"
+            />
+            <span>{t(lang, "alsoAddToCurrentProject")}</span>
+          </label>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setWorkspaceExportModalOpen(false)}
+              className="rounded-xl px-3.5 py-1.5 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]"
+            >
+              {t(lang, "cancel")}
+            </button>
+            <button
+              type="button"
+              disabled={applyBusy}
+              onClick={() => void handleConfirmExportToWorkspace()}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-1.5 text-[12px] font-semibold text-[var(--accent-ink)] shadow-xs transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              <FolderSimplePlus size={14} weight="bold" />
+              {applyBusy ? t(lang, "applyingChanges") : t(lang, "exportToWorkspace")}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Add Images from Workspace Modal */}
       <Modal
@@ -2044,24 +2689,29 @@ export function Studio() {
           <ExportPanel
             fileIds={exportTargetFiles.map((f) => f.id)}
             visible={getAdjustmentsForFile(exportTargetFiles[0]).map((c) => c.visible)}
-            cropsByFile={Object.fromEntries(
-              exportTargetFiles.map((f) => {
-                const packed = planesByFile[f.id];
-                const imgW = Math.max(f.width ?? 0, packed?.width ?? 0, 100);
-                const imgH = Math.max(f.height ?? 0, packed?.height ?? 0, 100);
-                const box = cropsByFile[f.id] ?? defaultCropBox(imgW, imgH, activeAspectRatio);
-                return [
-                  f.id,
-                  {
-                    x: Math.round(box.x),
-                    y: Math.round(box.y),
-                    w: Math.round(box.w),
-                    h: Math.round(box.h),
-                    ratio_label: activeRatioLabel || undefined,
-                  },
-                ];
-              }),
-            )}
+            cropsByFile={
+              viewMode === "preview"
+                ? undefined
+                : Object.fromEntries(
+                    exportTargetFiles.flatMap((f) => {
+                      const { width: imgW, height: imgH } = resolveImgDimensions(f, planesByFile[f.id]);
+                      const box = cropsByFile[f.id];
+                      if (!box || !isSubCropBox(box, imgW, imgH)) return [];
+                      return [
+                        [
+                          f.id,
+                          {
+                            x: Math.round(box.x),
+                            y: Math.round(box.y),
+                            w: Math.round(box.w),
+                            h: Math.round(box.h),
+                            ratio_label: activeRatioLabel || undefined,
+                          },
+                        ],
+                      ];
+                    }),
+                  )
+            }
             channelEditsByFile={Object.fromEntries(
               exportTargetFiles.map((f) => [f.id, adjustmentsToChannelEdits(getAdjustmentsForFile(f))]),
             )}

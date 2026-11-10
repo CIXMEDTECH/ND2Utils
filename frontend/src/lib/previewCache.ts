@@ -202,22 +202,27 @@ function gunzip(gz: ArrayBuffer): Promise<ArrayBuffer> {
   return new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 
-async function download(id: string, compressed: boolean): Promise<ArrayBuffer> {
-  const res = await fetch(`/api/files/${id}/display${compressed ? "?wire=gzip" : ""}`);
+async function download(id: string, compressed: boolean, version = 0): Promise<ArrayBuffer> {
+  const qs = new URLSearchParams();
+  if (compressed) qs.set("wire", "gzip");
+  if (version) qs.set("v", String(version));
+  const query = qs.toString();
+  const res = await fetch(`/api/files/${id}/display${query ? `?${query}` : ""}`);
   if (!res.ok) throw await parseError(res);
   return res.arrayBuffer();
 }
 
 async function load(file: CachedFile): Promise<ArrayBuffer> {
   await configured;
+  const ver = versionOf(file);
   if (storable(file) && canGunzip) {
     const stored = await readStored(file);
     if (stored) return gunzip(stored);
-    const gz = await download(file.id, true);
+    const gz = await download(file.id, true, ver);
     void store(file, gz, true);
     return gunzip(gz);
   }
-  return download(file.id, false);
+  return download(file.id, false, ver);
 }
 
 /**
@@ -267,7 +272,7 @@ async function warmNext(): Promise<void> {
     if (map.get(file.id)?.version === versionOf(file) || memory.get(file.id)?.version === versionOf(file)) continue;
     warmInflight += 1;
     try {
-      const gz = await download(file.id, true);
+      const gz = await download(file.id, true, versionOf(file));
       // Full: stop instead of replacing previews the user actually looked at.
       if (!(await store(file, gz, false))) warmQueue = [];
     } catch {

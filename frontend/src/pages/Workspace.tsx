@@ -309,7 +309,13 @@ export function Workspace() {
     try {
       let res: NucleusResult;
       if (localPreview && localPreview.fileId === selected.id && localPreview.packed) {
-        res = segmentNucleiFromPacked(localPreview.packed, selected.channels, Number(selected.voxel_um?.[0] || 0));
+        res = segmentNucleiFromPacked(
+          localPreview.packed,
+          selected.channels,
+          Number(selected.voxel_um?.[0] || 0),
+          undefined,
+          imageDimensions,
+        );
       } else {
         res = await detectNuclei(selected.id);
       }
@@ -460,19 +466,28 @@ export function Workspace() {
       .then((buffer) => {
         if (cancelled) return;
         const packed = unpackPlane(buffer);
-        const luts: LutSetting[] = packed.channels.map((channel, index) => ({
-          min: 0,
-          max: 255,
-          gamma: 1,
-          visible: true,
-          color: file.channels[index]?.color ?? channel.color,
-        }));
+        const luts: LutSetting[] = packed.channels.map((channel, index) => {
+          const chMeta = file.channels[index];
+          const minPct = typeof chMeta?.min_pct === "number" ? chMeta.min_pct : 0;
+          const maxPct = typeof chMeta?.max_pct === "number" ? chMeta.max_pct : 100;
+          const span = Math.max(1, (channel.suggestedMax || 255) - (channel.suggestedMin || 0));
+          const minVal = (channel.suggestedMin || 0) + (minPct / 100) * span;
+          const maxVal = Math.max(minVal + 1, (channel.suggestedMin || 0) + (maxPct / 100) * span);
+          return {
+            min: minVal,
+            max: maxVal,
+            gamma: typeof chMeta?.lut_gamma === "number" && chMeta.lut_gamma > 0 ? chMeta.lut_gamma : 1,
+            brightness: typeof chMeta?.brightness === "number" ? chMeta.brightness : 1,
+            visible: chMeta?.visible ?? true,
+            color: chMeta?.color ?? channel.color,
+          };
+        });
         const layers = createPreviewLayers(packed, luts);
         setLocalPreview({
           fileId: file.id,
           dimensions: {
-            width: Math.max(file.width ?? 0, packed.width),
-            height: Math.max(file.height ?? 0, packed.height),
+            width: file.width && file.width > 0 ? file.width : packed.width,
+            height: file.height && file.height > 0 ? file.height : packed.height,
           },
           layers,
           packed,
@@ -489,7 +504,7 @@ export function Workspace() {
     return () => {
       cancelled = true;
     };
-  }, [lang, selected?.id, selected?.prepared_at]);
+  }, [lang, selected?.channels, selected?.height, selected?.id, selected?.prepared_at, selected?.width]);
 
   // Ordered files for keyboard navigation and neighbour prefetching
   const allOrdered = useMemo(() => orderedFiles(folders, files), [folders, files]);
