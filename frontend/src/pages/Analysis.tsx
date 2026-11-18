@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowClockwise,
   ArrowDown,
@@ -10,7 +10,9 @@ import {
   Export as ExportIcon,
   Folder,
   Plus,
+  ShootingStar,
   SpinnerGap,
+  SunDim,
   Trash,
   WarningCircle,
 } from "@phosphor-icons/react";
@@ -92,7 +94,7 @@ function NewAnalysisDialog({ open, onClose }: { open: boolean; onClose: () => vo
     setError(null);
     try {
       const rec = await createAnalysis({ name: name || [...picked].map((p) => p.split("/").pop()).join(" · "), folders: [...picked] });
-      nav(`/analysis/${rec.id}`);
+      nav(analysisPath(rec));
     } catch (err) {
       setError(detailMessage(err, lang));
     } finally {
@@ -143,26 +145,125 @@ function NewAnalysisDialog({ open, onClose }: { open: boolean; onClose: () => vo
   );
 }
 
-export function AnalysisList() {
+/** Analysis tools. Each tool owns its pages under /analysis/<type>; more will follow. */
+const TOOLS: { type: AnalysisInfo["type"]; title: MsgKey; body: MsgKey; Icon: typeof ChartBar }[] = [
+  { type: "comet", title: "cometAssay", body: "cometToolBody", Icon: ShootingStar },
+];
+
+export const analysisPath = (a: Pick<AnalysisInfo, "id" | "type">) => `/analysis/${a.type}/${a.id}`;
+
+function AnalysisCards({ items, onChanged }: { items: AnalysisInfo[]; onChanged: () => void }) {
+  const lang = useApp((s) => s.lang);
+  return (
+    <ul className="grid gap-3 sm:grid-cols-2">
+      {items.map((a) => {
+        const tool = TOOLS.find((tl) => tl.type === a.type) ?? TOOLS[0];
+        return (
+          <li key={a.id}>
+            <Glass shape="card" className="flex items-start gap-3 p-4">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                <tool.Icon size={20} weight="duotone" />
+              </span>
+              <Link to={analysisPath(a)} className="min-w-0 flex-1">
+                <p className="truncate font-semibold">{a.name}</p>
+                <p className="mt-1 text-sm text-[var(--text-dim)]">
+                  {t(lang, tool.title)} · {a.file_count} {t(lang, "nFiles")} · {formatDateTime(a.updated_at, lang)}
+                </p>
+                {(a.status === "running" || a.status === "queued") && (
+                  <p className="mt-1 inline-flex items-center gap-1 text-xs text-[var(--accent)]">
+                    <SpinnerGap size={12} className="animate-spin" /> {Math.round(a.progress * 100)}%
+                  </p>
+                )}
+              </Link>
+              <button
+                type="button"
+                onClick={() => void deleteAnalysis(a.id).then(onChanged)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-dim)] hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-[var(--danger)]"
+                title={t(lang, "delete")}
+                aria-label={t(lang, "delete")}
+              >
+                <Trash size={16} />
+              </button>
+            </Glass>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function useAnalyses(type?: AnalysisInfo["type"]) {
   const lang = useApp((s) => s.lang);
   const [items, setItems] = useState<AnalysisInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-
   const load = useCallback(() => {
     void listAnalyses()
-      .then(setItems)
+      .then((all) => setItems(type ? all.filter((a) => a.type === type) : all))
       .catch((err) => setError(detailMessage(err, lang)));
-  }, [lang]);
+  }, [lang, type]);
   useEffect(load, [load]);
+  return { items, error, load };
+}
 
+/** /analysis: the analysis tools, and every analysis made with them. */
+export function AnalysisHub() {
+  const lang = useApp((s) => s.lang);
+  const { items, error, load } = useAnalyses();
+  return (
+    <Shell dense>
+      <main className="mx-auto max-w-5xl px-5 py-10 sm:py-14">
+        <div className="border-b border-[var(--line)] pb-6">
+          <p className="font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "analysisEyebrow")}</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{t(lang, "analysisTitle")}</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-dim)]">{t(lang, "analysisHubIntro")}</p>
+        </div>
+        <h2 className="mt-8 text-sm font-semibold text-[var(--text-dim)]">{t(lang, "analysisTools")}</h2>
+        <ul className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {TOOLS.map(({ type, title, body, Icon }) => (
+            <li key={type}>
+              <Link to={`/analysis/${type}`} className="group block h-full">
+                <Glass shape="card" className="flex h-full flex-col p-5 transition-transform group-hover:-translate-y-0.5">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                    <Icon size={22} weight="duotone" />
+                  </span>
+                  <h3 className="mt-4 text-lg font-semibold">{t(lang, title)}</h3>
+                  <p className="mt-1.5 flex-1 text-sm leading-6 text-[var(--text-dim)]">{t(lang, body)}</p>
+                  <span className="mt-3 text-xs text-[var(--text-dim)]">
+                    {items ? items.filter((a) => a.type === type).length : "…"} {t(lang, "analysesCount")}
+                  </span>
+                </Glass>
+              </Link>
+            </li>
+          ))}
+          <li>
+            <div className="flex h-full min-h-40 flex-col justify-center rounded-2xl border border-dashed border-[var(--line-strong)] p-5 text-sm leading-6 text-[var(--text-dim)]">
+              {t(lang, "moreAnalysesSoon")}
+            </div>
+          </li>
+        </ul>
+        <h2 className="mt-10 text-sm font-semibold text-[var(--text-dim)]">{t(lang, "allAnalyses")}</h2>
+        {error && <p className="mt-3 text-sm text-[var(--danger)]">{error}</p>}
+        {items && items.length === 0 && <p className="mt-3 text-sm text-[var(--text-dim)]">{t(lang, "noAnalyses")}</p>}
+        <div className="mt-3">{items && <AnalysisCards items={items} onChanged={load} />}</div>
+      </main>
+    </Shell>
+  );
+}
+
+/** /analysis/comet: comet assay analyses and "new". */
+export function CometTool() {
+  const lang = useApp((s) => s.lang);
+  const { items, error, load } = useAnalyses("comet");
+  const [creating, setCreating] = useState(false);
   return (
     <Shell dense>
       <main className="mx-auto max-w-5xl px-5 py-10 sm:py-14">
         <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[var(--line)] pb-6">
           <div>
-            <p className="font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "analysisEyebrow")}</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{t(lang, "analysisTitle")}</h1>
+            <Link to="/analysis" className="inline-flex items-center gap-1 font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)] hover:underline">
+              <ArrowLeft size={11} /> {t(lang, "analysisTitle")}
+            </Link>
+            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{t(lang, "cometAssay")}</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-dim)]">{t(lang, "analysisIntro")}</p>
           </div>
           <button type="button" onClick={() => setCreating(true)} className="primary-action">
@@ -173,45 +274,21 @@ export function AnalysisList() {
         {error && <p className="mt-4 text-sm text-[var(--danger)]">{error}</p>}
         {items && items.length === 0 && (
           <div className="flex min-h-64 flex-col items-center justify-center text-center">
-            <ChartBar size={34} weight="duotone" className="mb-4 text-[var(--accent)]" />
+            <ShootingStar size={34} weight="duotone" className="mb-4 text-[var(--accent)]" />
             <p className="max-w-md text-md leading-6 text-[var(--text-dim)]">{t(lang, "noAnalyses")}</p>
           </div>
         )}
-        <ul className="mt-6 grid gap-3 sm:grid-cols-2">
-          {items?.map((a) => (
-            <li key={a.id}>
-              <Glass shape="card" className="flex items-start gap-3 p-4">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                  <ChartBar size={20} weight="duotone" />
-                </span>
-                <Link to={`/analysis/${a.id}`} className="min-w-0 flex-1">
-                  <p className="truncate font-semibold">{a.name}</p>
-                  <p className="mt-1 text-sm text-[var(--text-dim)]">
-                    {t(lang, "cometAssay")} · {a.file_count} {t(lang, "nFiles")} · {formatDateTime(a.updated_at, lang)}
-                  </p>
-                  {(a.status === "running" || a.status === "queued") && (
-                    <p className="mt-1 inline-flex items-center gap-1 text-xs text-[var(--accent)]">
-                      <SpinnerGap size={12} className="animate-spin" /> {Math.round(a.progress * 100)}%
-                    </p>
-                  )}
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => void deleteAnalysis(a.id).then(load)}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-dim)] hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-[var(--danger)]"
-                  title={t(lang, "delete")}
-                  aria-label={t(lang, "delete")}
-                >
-                  <Trash size={16} />
-                </button>
-              </Glass>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-6">{items && <AnalysisCards items={items} onChanged={load} />}</div>
       </main>
       <NewAnalysisDialog open={creating} onClose={() => setCreating(false)} />
     </Shell>
   );
+}
+
+/** Links from 1.1 beta1 (/analysis/<id>) → /analysis/comet/<id>. */
+export function AnalysisRedirect() {
+  const { analysisId = "" } = useParams();
+  return <Navigate to={`/analysis/comet/${analysisId}`} replace />;
 }
 
 // --- charts ----------------------------------------------------------------------------------
@@ -298,6 +375,41 @@ function StatCell({ stat }: { stat: Stat | undefined }) {
   );
 }
 
+interface DisplaySettings {
+  mode: "auto" | "manual";
+  black: number;
+  white: number;
+  gamma: number;
+  pseudo: boolean;
+}
+
+const DEFAULT_DISPLAY: DisplaySettings = { mode: "auto", black: 0, white: 255, gamma: 1, pseudo: false };
+
+/** Black/white points from the histogram (0.1 % / 99.9 %), like an auto-contrast. */
+function autoRange(hist: Uint32Array, total: number): [number, number] {
+  let acc = 0;
+  let lo = 0;
+  let hi = 255;
+  for (let v = 0; v < 256; v++) {
+    acc += hist[v];
+    if (acc > total * 0.001) {
+      lo = v;
+      break;
+    }
+  }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) {
+    acc += hist[v];
+    if (acc > total * 0.001) {
+      hi = v;
+      break;
+    }
+  }
+  return hi > lo ? [lo, hi] : [lo, Math.min(255, lo + 1)];
+}
+
+const isReddish = (c: number[] | undefined) => Boolean(c && c[0] > 160 && c[1] < 120 && c[2] < 120);
+
 export function AnalysisDetail() {
   const { analysisId = "" } = useParams();
   const lang = useApp((s) => s.lang);
@@ -313,6 +425,10 @@ export function AnalysisDetail() {
   const [plotMetric, setPlotMetric] = useState<MetricKey>("TailDNAPercent");
   const [draft, setDraft] = useState<CometParams | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [display, setDisplay] = useState<DisplaySettings>(DEFAULT_DISPLAY);
+  const gray = useRef<{ data: Uint8Array; w: number; h: number; auto: [number, number] } | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [imageVersion, setImageVersion] = useState(0);
 
   const busy = info?.status === "running" || info?.status === "queued";
   const files = useMemo(() => info?.files ?? [], [info]);
@@ -363,6 +479,84 @@ export function AnalysisDetail() {
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisId, includeOutliers, statsVersion]);
+
+  // The analysed (8-bit) channel, drawn through black/white/gamma so dim images can be seen.
+  const imageUrl = selected ? analysisImageUrl(analysisId, selected.file_id, selected.analyzed_at) : null;
+  useEffect(() => {
+    gray.current = null;
+    setImageVersion((v) => v + 1);
+    if (!imageUrl) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      const scratch = document.createElement("canvas");
+      scratch.width = w;
+      scratch.height = h;
+      const ctx = scratch.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0);
+      const rgba = ctx.getImageData(0, 0, w, h).data;
+      const data = new Uint8Array(w * h);
+      const hist = new Uint32Array(256);
+      for (let i = 0, j = 0; i < data.length; i++, j += 4) {
+        data[i] = rgba[j];
+        hist[rgba[j]] += 1;
+      }
+      gray.current = { data, w, h, auto: autoRange(hist, data.length) };
+      setImageVersion((v) => v + 1);
+    };
+    img.src = imageUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [imageUrl]);
+
+  const channelColor = selected?.channels?.[result?.channel ?? 0]?.color ?? [255, 255, 255];
+  const imageReady = Boolean(gray.current);
+  useLayoutEffect(() => {
+    const g = gray.current;
+    const canvas = canvasRef.current;
+    if (!g || !canvas) return;
+    const [lo, hi] = display.mode === "auto" ? g.auto : [display.black, Math.max(display.white, display.black + 1)];
+    const color = display.pseudo ? channelColor : [255, 255, 255];
+    const inv = 1 / (display.gamma || 1);
+    const r = new Uint8ClampedArray(256);
+    const gg = new Uint8ClampedArray(256);
+    const b = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) {
+      let level = (v - lo) / (hi - lo);
+      level = level <= 0 ? 0 : level >= 1 ? 1 : Math.pow(level, inv);
+      r[v] = level * color[0];
+      gg[v] = level * color[1];
+      b[v] = level * color[2];
+    }
+    if (canvas.width !== g.w) canvas.width = g.w;
+    if (canvas.height !== g.h) canvas.height = g.h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const out = ctx.createImageData(g.w, g.h);
+    const px = out.data;
+    for (let i = 0, j = 0; i < g.data.length; i++, j += 4) {
+      const v = g.data[i];
+      px[j] = r[v];
+      px[j + 1] = gg[v];
+      px[j + 2] = b[v];
+      px[j + 3] = 255;
+    }
+    ctx.putImageData(out, 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [display, imageVersion, imageReady, channelColor.join(",")]);
+
+  const autoLevels = gray.current?.auto ?? [0, 255];
+  const shownBlack = display.mode === "auto" ? autoLevels[0] : display.black;
+  const shownWhite = display.mode === "auto" ? autoLevels[1] : display.white;
+  const setLevel = (patch: Partial<DisplaySettings>) =>
+    setDisplay((d) => ({ ...d, black: shownBlack, white: shownWhite, ...patch, mode: "manual" }));
+  // Red outlines vanish on a red image: valid comets turn cyan while the pseudo-colour is red.
+  const statusColor = (s: string) => (s === "valid" && display.pseudo && isReddish(channelColor) ? "#22d3ee" : STATUS_COLOR[s]);
 
   const deleted = useMemo(() => new Set(result?.deleted ?? []), [result]);
   const activeComet = result?.comets.find((c) => c.key === activeKey) ?? null;
@@ -430,9 +624,15 @@ export function AnalysisDetail() {
         {/* images */}
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-b lg:border-b-0 lg:border-r">
           <div className="border-b border-[var(--line)] px-3 py-3">
-            <Link to="/analysis" className="inline-flex items-center gap-1 text-xs text-[var(--text-dim)] hover:text-[var(--text)]">
-              <ArrowLeft size={12} /> {t(lang, "analysisTitle")}
-            </Link>
+            <nav className="flex items-center gap-1 text-xs text-[var(--text-dim)]">
+              <Link to="/analysis" className="hover:text-[var(--text)]">
+                {t(lang, "analysisTitle")}
+              </Link>
+              <span>/</span>
+              <Link to="/analysis/comet" className="hover:text-[var(--text)]">
+                {t(lang, "cometAssay")}
+              </Link>
+            </nav>
             <input
               key={info?.name}
               defaultValue={info?.name ?? ""}
@@ -502,14 +702,17 @@ export function AnalysisDetail() {
             </p>
           ) : (
             <ZoomStage
-              src={selected ? analysisImageUrl(analysisId, selected.file_id, selected.analyzed_at) : null}
+              src={null}
               alt={selected?.name ?? ""}
+              mediaReady={imageReady}
+              mediaLoading={Boolean(selected) && !imageReady}
+              media={<canvas ref={canvasRef} role="img" aria-label={selected?.name ?? ""} className="block max-h-none max-w-none" />}
               mediaOverlay={
                 result && !result.error ? (
                   <svg viewBox={`0 0 ${result.width} ${result.height}`} className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
                     {result.comets.map((c) => {
                       const status = deleted.has(c.key) ? "deleted" : c.status;
-                      const color = STATUS_COLOR[status];
+                      const color = statusColor(status);
                       const pts = (c.hull ?? c.outline).map((p) => p.join(",")).join(" ");
                       const active = c.key === activeKey;
                       return (
@@ -557,10 +760,54 @@ export function AnalysisDetail() {
               <div className="absolute left-3 top-3 z-20 flex flex-wrap gap-1.5 rounded-xl bg-black/60 px-2.5 py-1.5 text-xs text-white/80 backdrop-blur">
                 {(["valid", "outlier", "invalid", "deleted"] as const).map((s) => (
                   <span key={s} className="inline-flex items-center gap-1">
-                    <span className="h-2.5 w-2.5 rounded-sm border" style={{ borderColor: STATUS_COLOR[s], borderStyle: s === "deleted" ? "dashed" : "solid" }} />
+                    <span className="h-2.5 w-2.5 rounded-sm border" style={{ borderColor: statusColor(s), borderStyle: s === "deleted" ? "dashed" : "solid" }} />
                     {t(lang, `status_${s}` as MsgKey)}
                     {selected?.counts ? ` ${selected.counts[s]}` : ""}
                   </span>
+                ))}
+              </div>
+              <div
+                className="absolute right-3 top-3 z-20 grid w-56 gap-1.5 rounded-xl bg-black/70 px-3 py-2.5 text-xs text-white/85 backdrop-blur"
+                title={t(lang, "displayHint")}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1 font-medium">
+                    <SunDim size={14} /> {t(lang, "displayAdjust")}
+                  </span>
+                  <span className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setDisplay((d) => ({ ...d, mode: "auto" }))}
+                      aria-pressed={display.mode === "auto"}
+                      className={`rounded-md px-1.5 py-0.5 ${display.mode === "auto" ? "bg-sky-400 text-slate-950" : "hover:bg-white/10"}`}
+                    >
+                      {t(lang, "autoContrast")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDisplay((d) => ({ ...d, pseudo: !d.pseudo }))}
+                      aria-pressed={display.pseudo}
+                      className={`rounded-md px-1.5 py-0.5 ${display.pseudo ? "bg-white text-slate-950" : "hover:bg-white/10"}`}
+                    >
+                      {t(lang, "pseudoColor")}
+                    </button>
+                    <button type="button" onClick={() => setDisplay(DEFAULT_DISPLAY)} className="rounded-md px-1.5 py-0.5 hover:bg-white/10">
+                      {t(lang, "resetDisplay")}
+                    </button>
+                  </span>
+                </div>
+                {(
+                  [
+                    ["blackPoint", shownBlack, 0, 254, 1, (v: number) => setLevel({ black: Math.min(v, shownWhite - 1) })],
+                    ["whitePoint", shownWhite, 1, 255, 1, (v: number) => setLevel({ white: Math.max(v, shownBlack + 1) })],
+                    ["gammaLabel", display.gamma, 0.3, 3, 0.05, (v: number) => setDisplay((d) => ({ ...d, gamma: v }))],
+                  ] as const
+                ).map(([label, value, min, max, step, onChange]) => (
+                  <label key={label} className="grid grid-cols-[3rem_minmax(0,1fr)_2.2rem] items-center gap-2">
+                    <span className="text-white/60">{t(lang, label)}</span>
+                    <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} className="stage-zoom-slider" />
+                    <span className="text-right font-mono tabular-nums">{label === "gammaLabel" ? value.toFixed(2) : value}</span>
+                  </label>
                 ))}
               </div>
             </ZoomStage>

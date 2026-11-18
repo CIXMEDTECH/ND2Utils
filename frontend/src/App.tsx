@@ -10,8 +10,10 @@ const Studio = lazyPage(() => import("./pages/Studio").then((module) => module.S
 const Advanced = lazyPage(() => import("./pages/Advanced").then((module) => module.Advanced));
 const Slide = lazyPage(() => import("./pages/Slide").then((module) => module.Slide));
 const Jobs = lazyPage(() => import("./pages/Jobs").then((module) => module.Jobs));
-const AnalysisList = lazyPage(() => import("./pages/Analysis").then((module) => module.AnalysisList));
+const AnalysisHub = lazyPage(() => import("./pages/Analysis").then((module) => module.AnalysisHub));
+const CometTool = lazyPage(() => import("./pages/Analysis").then((module) => module.CometTool));
 const AnalysisDetail = lazyPage(() => import("./pages/Analysis").then((module) => module.AnalysisDetail));
+const AnalysisRedirect = lazyPage(() => import("./pages/Analysis").then((module) => module.AnalysisRedirect));
 const Settings = lazyPage(() => import("./pages/Settings").then((module) => module.Settings));
 const Login = lazyPage(() => import("./pages/Login").then((module) => module.Login));
 
@@ -54,8 +56,10 @@ export function App() {
         <Route path="/advanced" element={<Advanced />} />
         <Route path="/advanced/:fileId" element={<Advanced />} />
         <Route path="/slide/:fileId" element={<Slide />} />
-        <Route path="/analysis" element={<AnalysisList />} />
-        <Route path="/analysis/:analysisId" element={<AnalysisDetail />} />
+        <Route path="/analysis" element={<AnalysisHub />} />
+        <Route path="/analysis/comet" element={<CometTool />} />
+        <Route path="/analysis/comet/:analysisId" element={<AnalysisDetail />} />
+        <Route path="/analysis/:analysisId" element={<AnalysisRedirect />} />
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/settings/:section" element={<Settings />} />

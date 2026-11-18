@@ -114,7 +114,7 @@ export function Home() {
           {recent(
             "recentAnalyses",
             analyses &&
-              analyses.map((a) => ({ id: a.id, name: a.name, to: `/analysis/${a.id}`, when: a.updated_at, meta: `${a.file_count} ${t(lang, "nFiles")}` })),
+              analyses.map((a) => ({ id: a.id, name: a.name, to: `/analysis/${a.type}/${a.id}`, when: a.updated_at, meta: `${a.file_count} ${t(lang, "nFiles")}` })),
             ChartBar,
           )}
         </div>

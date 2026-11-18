@@ -468,7 +468,7 @@ export function Workspace() {
     try {
       setError(null);
       const rec = await createAnalysis({ name: label, file_ids: items.file_ids, folders: items.folders });
-      nav(`/analysis/${rec.id}`);
+      nav(`/analysis/comet/${rec.id}`);
     } catch (err) {
       setError(detailMessage(err, lang));
     }
@@ -1653,7 +1653,7 @@ export function Workspace() {
                           title={t(lang, "cometAnalyze")}
                         >
                           <ChartBar size={16} weight="duotone" className="shrink-0" />
-                          <span className="truncate">{t(lang, "cometAnalyze")}</span>
+                          <span className="truncate">{t(lang, "cometShort")}</span>
                         </button>
                         {(selected.cropped || selected.edited) && (
                           <button
