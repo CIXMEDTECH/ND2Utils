@@ -349,7 +349,7 @@ export function CropOverlay({
               }}
               style={{ left: `${cxPct}%`, top: `${cyPct}%` }}
               title={`#${nuc.id} (${nuc.area_um2} µm², circ ${nuc.circularity})`}
-              className={`pointer-events-auto absolute z-30 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-bold leading-none shadow-md transition-transform hover:scale-110 ${
+              className={`pointer-events-auto absolute z-30 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full px-1.5 py-0.5 font-mono text-2xs font-bold leading-none shadow-md transition-transform hover:scale-110 ${
                 isActive
                   ? "bg-amber-400 text-slate-950 ring-2 ring-white"
                   : "bg-slate-950/85 text-sky-300 ring-1 ring-sky-400/60 hover:bg-sky-400 hover:text-slate-950"
@@ -393,7 +393,7 @@ export function CropOverlay({
         {/* Live Dimensions Readout Pill */}
         <div
           className={`pointer-events-none absolute left-1.5 top-1.5 flex flex-wrap items-center gap-1 rounded-md bg-black/80 px-1.5 py-0.5 font-mono text-white shadow-md ring-1 ring-white/15 backdrop-blur-xs ${
-            compact ? "text-[9px]" : "text-[10px]"
+            compact ? "text-2xs" : "text-2xs"
           }`}
         >
           <span className="font-semibold text-sky-300">
@@ -409,7 +409,7 @@ export function CropOverlay({
         {/* Live Adaptive Scale Bar inside the cropped region */}
         {scaleBar && umPerPixel > 0 && scaleUm > 0 && (
           <div className="pointer-events-none absolute bottom-2 right-2 flex flex-col items-end rounded-md bg-black/85 px-2 py-1 shadow-md ring-1 ring-white/15">
-            <span className="font-mono text-[10px] font-medium leading-none text-white">
+            <span className="font-mono text-2xs font-medium leading-none text-white">
               {Number(scaleUm.toPrecision(6))} µm
             </span>
             <div

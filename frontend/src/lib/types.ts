@@ -1,5 +1,6 @@
 export type Lang = "zh" | "en";
 export type Theme = "light" | "dark" | "system";
+export type TextSize = "normal" | "large" | "xlarge";
 
 export interface ChannelInfo {
   index: number;

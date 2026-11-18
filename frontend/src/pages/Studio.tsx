@@ -290,7 +290,7 @@ function StudioImageCard({
       }`}
     >
       {/* Card Header */}
-      <div className="flex items-center justify-between gap-2 border-b border-white/8 bg-black/35 px-3 py-2 text-[11.5px]">
+      <div className="flex items-center justify-between gap-2 border-b border-white/8 bg-black/35 px-3 py-2 text-xs">
         <div className="flex min-w-0 items-center gap-1.5">
           <span
             className={`h-2 w-2 shrink-0 rounded-full ${
@@ -301,12 +301,12 @@ function StudioImageCard({
             {file.name}
           </span>
           {file.cropped && (
-            <span className="shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
+            <span className="shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 text-2xs font-semibold text-sky-300">
               {t(lang, "croppedBadge")}
             </span>
           )}
           {file.edited && !file.cropped && (
-            <span className="shrink-0 rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
+            <span className="shrink-0 rounded bg-emerald-500/20 px-1.5 py-0.5 text-2xs font-semibold text-emerald-300">
               {t(lang, "editedBadge")}
             </span>
           )}
@@ -318,7 +318,7 @@ function StudioImageCard({
                 onClearOverride?.();
               }}
               title={t(lang, "clearIndividualOverride")}
-              className="shrink-0 cursor-pointer rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 transition-colors hover:bg-amber-500/35"
+              className="shrink-0 cursor-pointer rounded bg-amber-500/20 px-1.5 py-0.5 text-2xs font-semibold text-amber-300 transition-colors hover:bg-amber-500/35"
             >
               {t(lang, "individualOverride")} ×
             </button>
@@ -333,7 +333,7 @@ function StudioImageCard({
               onInspectStage();
             }}
             title={t(lang, "inspectInStage")}
-            className="inline-flex h-6 items-center gap-1 rounded-md bg-white/10 px-1.5 text-[10.5px] font-medium text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-white/10 px-1.5 text-2xs font-medium text-white/80 transition-colors hover:bg-white/20 hover:text-white"
           >
             <CornersOut size={12} weight="bold" />
           </button>
@@ -344,7 +344,7 @@ function StudioImageCard({
               onAutoNucleusSingle();
             }}
             title={t(lang, "autoNucleusCenter")}
-            className="inline-flex h-6 items-center gap-1 rounded-md bg-amber-400/15 px-2 text-[10.5px] font-medium text-amber-300 transition-colors hover:bg-amber-400/25"
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-amber-400/15 px-2 text-2xs font-medium text-amber-300 transition-colors hover:bg-amber-400/25"
           >
             <Crosshair size={12} weight="bold" />
             {nuclei.length > 0 ? `${nuclei.length}` : t(lang, "auto")}
@@ -356,7 +356,7 @@ function StudioImageCard({
               onSaveToWorkspaceSingle();
             }}
             title={t(lang, "exportSingleToWorkspace")}
-            className="inline-flex h-6 items-center gap-1 rounded-md bg-emerald-400/15 px-2 text-[10.5px] font-medium text-emerald-300 transition-colors hover:bg-emerald-400/25"
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-emerald-400/15 px-2 text-2xs font-medium text-emerald-300 transition-colors hover:bg-emerald-400/25"
           >
             <FolderSimplePlus size={12} weight="bold" />
             {t(lang, "exportSingleToWorkspace")}
@@ -368,7 +368,7 @@ function StudioImageCard({
               onExportSingle();
             }}
             title={t(lang, "exportThisImage")}
-            className="inline-flex h-6 items-center gap-1 rounded-md bg-sky-400/15 px-2 text-[10.5px] font-medium text-sky-300 transition-colors hover:bg-sky-400/25"
+            className="inline-flex h-6 items-center gap-1 rounded-md bg-sky-400/15 px-2 text-2xs font-medium text-sky-300 transition-colors hover:bg-sky-400/25"
           >
             <ExportIcon size={12} />
             {t(lang, "export")}
@@ -381,7 +381,7 @@ function StudioImageCard({
                 onResetOriginal();
               }}
               title={t(lang, "restoreOriginal")}
-              className="inline-flex h-6 items-center gap-1 rounded-md bg-white/8 px-1.5 text-[10px] text-white/70 transition-colors hover:bg-white/15 hover:text-white"
+              className="inline-flex h-6 items-center gap-1 rounded-md bg-white/8 px-1.5 text-2xs text-white/70 transition-colors hover:bg-white/15 hover:text-white"
             >
               <ArrowCounterClockwise size={11} />
             </button>
@@ -392,7 +392,7 @@ function StudioImageCard({
       {/* Viewport */}
       <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden bg-[#05070b] p-2">
         {!packed ? (
-          <div className="flex items-center gap-2 font-mono text-[11px] text-white/50">
+          <div className="flex items-center gap-2 font-mono text-xs text-white/50">
             <span className="spinner h-3.5 w-3.5 border-white/25 border-t-sky-400" />
             {t(lang, "previewLoading")}
           </div>
@@ -432,7 +432,7 @@ function StudioImageCard({
       </div>
 
       {/* Card Footer: Dimensions & Scale Readout + Nucleus Switcher Pills */}
-      <div className="flex flex-wrap items-center justify-between gap-1.5 border-t border-white/8 bg-black/40 px-3 py-2 font-mono text-[10px] text-white/70">
+      <div className="flex flex-wrap items-center justify-between gap-1.5 border-t border-white/8 bg-black/40 px-3 py-2 font-mono text-2xs text-white/70">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-sky-300">
             {effectiveW}×{effectiveH}px
@@ -443,7 +443,7 @@ function StudioImageCard({
             </span>
           )}
           {newScaleUm > 0 && (
-            <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9.5px] text-emerald-300">
+            <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-2xs text-emerald-300">
               {t(lang, "scaleBar")}: {formatUm(newScaleUm)}
             </span>
           )}
@@ -459,7 +459,7 @@ function StudioImageCard({
                   type="button"
                   onClick={() => onSelectNucleus(nuc)}
                   title={`${nuc.area_um2} µm² · circ ${nuc.circularity}`}
-                  className={`cursor-pointer rounded px-1.5 py-0.5 text-[9.5px] font-semibold transition-colors ${
+                  className={`cursor-pointer rounded px-1.5 py-0.5 text-2xs font-semibold transition-colors ${
                     active
                       ? "bg-amber-400 text-slate-950"
                       : "bg-white/8 text-white/70 hover:bg-white/15 hover:text-white"
@@ -568,13 +568,13 @@ function StudioStageInspector({
             <button
               type="button"
               onClick={onBackToGrid}
-              className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-sky-400/20 px-2.5 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-400/30"
+              className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-sky-400/20 px-2.5 text-xs font-semibold text-sky-300 transition-colors hover:bg-sky-400/30"
             >
               <SquaresFour size={13} weight="duotone" />
               {t(lang, "gridMultiView")}
             </button>
             {totalFiles > 1 && (
-              <div className="inline-flex items-center gap-1 rounded-lg bg-white/8 px-1.5 py-0.5 font-mono text-[11px] text-white/80">
+              <div className="inline-flex items-center gap-1 rounded-lg bg-white/8 px-1.5 py-0.5 font-mono text-xs text-white/80">
                 <button
                   type="button"
                   onClick={onPrevFile}
@@ -596,7 +596,7 @@ function StudioStageInspector({
                 </button>
               </div>
             )}
-            <span className="truncate font-mono text-[11px] text-white/80">{file.name}</span>
+            <span className="truncate font-mono text-xs text-white/80">{file.name}</span>
           </div>
         }
         media={
@@ -631,7 +631,7 @@ function StudioStageInspector({
               onToggleComposite(true);
             }}
             aria-pressed={composite && viewMode !== "cropped"}
-            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
               composite && viewMode !== "cropped"
                 ? "bg-white text-slate-950 shadow-sm"
                 : "text-white/70 hover:bg-white/10 hover:text-white"
@@ -646,7 +646,7 @@ function StudioStageInspector({
               onToggleComposite(false);
             }}
             aria-pressed={!composite && viewMode === "preview"}
-            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
               !composite && viewMode === "preview"
                 ? "bg-white text-slate-950 shadow-sm"
                 : "text-white/70 hover:bg-white/10 hover:text-white"
@@ -658,7 +658,7 @@ function StudioStageInspector({
             type="button"
             onClick={onToggleScaleBar}
             aria-pressed={scaleBar}
-            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
               scaleBar ? "bg-white text-slate-950 shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"
             }`}
           >
@@ -669,7 +669,7 @@ function StudioStageInspector({
             type="button"
             onClick={() => onSetViewMode(viewMode === "box" ? "preview" : "box")}
             aria-pressed={viewMode === "box"}
-            className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+            className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
               viewMode === "box"
                 ? "bg-sky-400 text-slate-950 shadow-sm"
                 : "text-sky-300 hover:bg-sky-400/15 hover:text-sky-200"
@@ -682,7 +682,7 @@ function StudioStageInspector({
             type="button"
             onClick={() => onSetViewMode(viewMode === "cropped" ? "preview" : "cropped")}
             aria-pressed={viewMode === "cropped"}
-            className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+            className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
               viewMode === "cropped"
                 ? "bg-emerald-400 text-slate-950 shadow-sm"
                 : "text-emerald-300 hover:bg-emerald-400/15 hover:text-emerald-200"
@@ -1460,17 +1460,17 @@ export function Studio() {
         {/* Left Sidebar: Projects & Project Image List */}
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-b lg:border-b-0 lg:border-r">
           <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3.5 py-2.5">
-            <span className="inline-flex items-center gap-2 text-[12.5px] font-semibold text-[var(--text)]">
+            <span className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
               <SquaresFour size={16} weight="duotone" className="text-[var(--accent)]" />
               {t(lang, "projects")}
-              <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--accent)]">
+              <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-2xs font-semibold text-[var(--accent)]">
                 {projects.length}
               </span>
             </span>
             <button
               type="button"
               onClick={() => setNewProjectModal(true)}
-              className="inline-flex h-7 items-center gap-1 rounded-lg bg-[var(--accent)] px-2.5 text-[11px] font-semibold text-[var(--accent-ink)] shadow-xs transition-opacity hover:opacity-90"
+              className="inline-flex h-7 items-center gap-1 rounded-lg bg-[var(--accent)] px-2.5 text-xs font-semibold text-[var(--accent-ink)] shadow-xs transition-opacity hover:opacity-90"
             >
               <Plus size={13} weight="bold" />
               {t(lang, "newProject")}
@@ -1480,10 +1480,10 @@ export function Studio() {
           {/* Project Selector List */}
           <div className="max-h-44 overflow-auto border-b border-[var(--line)] p-2">
             {loadingProjects && (
-              <p className="px-2 py-3 text-[11.5px] text-[var(--text-dim)]">{t(lang, "loadingPage")}</p>
+              <p className="px-2 py-3 text-xs text-[var(--text-dim)]">{t(lang, "loadingPage")}</p>
             )}
             {!loadingProjects && projects.length === 0 && (
-              <p className="rounded-xl border border-dashed border-[var(--line)] p-3 text-center text-[11.5px] leading-5 text-[var(--text-dim)]">
+              <p className="rounded-xl border border-dashed border-[var(--line)] p-3 text-center text-xs leading-5 text-[var(--text-dim)]">
                 {t(lang, "emptyProjects")}
               </p>
             )}
@@ -1496,7 +1496,7 @@ export function Studio() {
                     setActiveProjectId(proj.id);
                     nav(`/studio/${proj.id}`);
                   }}
-                  className={`group mb-1 flex cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-[12px] transition-colors ${
+                  className={`group mb-1 flex cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-sm transition-colors ${
                     active
                       ? "bg-[var(--accent-soft)] font-semibold text-[var(--accent)]"
                       : "text-[var(--text)] hover:bg-[var(--bg)]"
@@ -1504,7 +1504,7 @@ export function Studio() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="truncate">{proj.name}</div>
-                    <div className="font-mono text-[10px] text-[var(--text-dim)]">
+                    <div className="font-mono text-2xs text-[var(--text-dim)]">
                       {proj.file_ids.length} {t(lang, "nFiles")}
                     </div>
                   </div>
@@ -1526,12 +1526,12 @@ export function Studio() {
           {/* Active Project Images */}
           {activeProject && (
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex items-center justify-between gap-2 px-3.5 py-2 text-[11.5px] font-medium text-[var(--text-dim)]">
+              <div className="flex items-center justify-between gap-2 px-3.5 py-2 text-xs font-medium text-[var(--text-dim)]">
                 <span className="truncate">{activeProject.name}</span>
                 <button
                   type="button"
                   onClick={openAddImagesModal}
-                  className="inline-flex items-center gap-1 rounded-md bg-[var(--bg)] px-2 py-1 text-[11px] font-medium text-[var(--accent)] ring-1 ring-[var(--line)] hover:ring-[var(--accent)]"
+                  className="inline-flex items-center gap-1 rounded-md bg-[var(--bg)] px-2 py-1 text-xs font-medium text-[var(--accent)] ring-1 ring-[var(--line)] hover:ring-[var(--accent)]"
                 >
                   <Plus size={12} weight="bold" />
                   {t(lang, "addImagesToProject")}
@@ -1540,12 +1540,12 @@ export function Studio() {
 
               <div className="min-h-0 flex-1 overflow-auto px-2 pb-3">
                 {projectFiles.length === 0 ? (
-                  <div className="mx-1.5 my-3 rounded-xl border border-dashed border-[var(--line)] p-4 text-center text-[11.5px] leading-5 text-[var(--text-dim)]">
+                  <div className="mx-1.5 my-3 rounded-xl border border-dashed border-[var(--line)] p-4 text-center text-xs leading-5 text-[var(--text-dim)]">
                     <p>{t(lang, "emptyProjectFiles")}</p>
                     <button
                       type="button"
                       onClick={openAddImagesModal}
-                      className="mt-2.5 inline-flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[11px] font-semibold text-[var(--accent-ink)]"
+                      className="mt-2.5 inline-flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-ink)]"
                     >
                       <Plus size={12} weight="bold" />
                       {t(lang, "addImagesToProject")}
@@ -1561,7 +1561,7 @@ export function Studio() {
                       <div
                         key={file.id}
                         onClick={() => setSelectedFileId(file.id)}
-                        className={`group mb-1 flex cursor-pointer items-center justify-between gap-2 rounded-xl border px-2.5 py-2 text-[11.5px] transition-colors ${
+                        className={`group mb-1 flex cursor-pointer items-center justify-between gap-2 rounded-xl border px-2.5 py-2 text-xs transition-colors ${
                           isSel
                             ? "border-[var(--accent)]/50 bg-[var(--accent-soft)]/50 text-[var(--text)]"
                             : "border-transparent text-[var(--text)] hover:bg-[var(--bg)]"
@@ -1571,12 +1571,12 @@ export function Studio() {
                           <div className="flex items-center gap-1.5">
                             <span className="truncate font-medium">{file.name}</span>
                             {file.cropped && (
-                              <span className="rounded bg-[var(--accent-soft)] px-1 py-0.2 font-mono text-[9px] text-[var(--accent)]">
+                              <span className="rounded bg-[var(--accent-soft)] px-1 py-0.2 font-mono text-2xs text-[var(--accent)]">
                                 {t(lang, "croppedBadge")}
                               </span>
                             )}
                           </div>
-                          <div className="mt-0.5 font-mono text-[10px] text-[var(--text-dim)]">
+                          <div className="mt-0.5 font-mono text-2xs text-[var(--text-dim)]">
                             {file.width ?? "–"}×{file.height ?? "–"}px
                             {showPendingCrop ? ` → ${box.w}×${box.h}px` : ""}
                           </div>
@@ -1632,7 +1632,7 @@ export function Studio() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               {/* Aspect Ratio Presets */}
               <div className="flex flex-wrap items-center gap-1">
-                <span className="mr-1 inline-flex items-center gap-1 text-[11px] font-medium text-white/65">
+                <span className="mr-1 inline-flex items-center gap-1 text-xs font-medium text-white/65">
                   <Crop size={13} className="text-sky-400" />
                   {t(lang, "cropRatio")}:
                 </span>
@@ -1667,7 +1667,7 @@ export function Studio() {
                           activateCropViewMode(viewMode === "cropped" ? "cropped" : "box", nextRatio);
                         }
                       }}
-                      className={`cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors ${
+                      className={`cursor-pointer rounded-md px-2 py-1 font-mono text-xs transition-colors ${
                         active
                           ? "bg-sky-400 font-semibold text-slate-950 shadow-xs"
                           : "bg-white/8 text-white/75 hover:bg-white/15 hover:text-white"
@@ -1678,7 +1678,7 @@ export function Studio() {
                   );
                 })}
                 {aspectPreset === "custom" && (
-                  <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-white/15 bg-black/50 px-1.5 py-0.5 font-mono text-[11px]">
+                  <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-white/15 bg-black/50 px-1.5 py-0.5 font-mono text-xs">
                     <input
                       type="number"
                       min={0.1}
@@ -1712,7 +1712,7 @@ export function Studio() {
 
               {/* View Mode Switcher & Layout / Grid Controls */}
               <div className="flex flex-wrap items-center gap-1.5">
-                <div className="inline-flex rounded-lg border border-white/12 bg-black/40 p-0.5 text-[11px]">
+                <div className="inline-flex rounded-lg border border-white/12 bg-black/40 p-0.5 text-xs">
                   <button
                     type="button"
                     onClick={() => setViewMode("preview")}
@@ -1743,7 +1743,7 @@ export function Studio() {
                 </div>
 
                 {/* Grid vs Workspace-Style Stage View Switcher */}
-                <div className="inline-flex rounded-lg border border-white/12 bg-black/40 p-0.5 text-[11px]">
+                <div className="inline-flex rounded-lg border border-white/12 bg-black/40 p-0.5 text-xs">
                   <button
                     type="button"
                     onClick={() => setLayoutMode("grid")}
@@ -1767,7 +1767,7 @@ export function Studio() {
                 </div>
 
                 {layoutMode === "grid" && (
-                  <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/40 p-0.5 font-mono text-[10.5px]">
+                  <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/40 p-0.5 font-mono text-2xs">
                     {([1, 2, 3, 4] as const).map((cols) => (
                       <button
                         key={cols}
@@ -1787,7 +1787,7 @@ export function Studio() {
                 <button
                   type="button"
                   onClick={() => setScaleBar((s) => !s)}
-                  className={`cursor-pointer rounded-lg px-2 py-1 text-[11px] font-medium transition-colors ${
+                  className={`cursor-pointer rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
                     scaleBar ? "bg-white/18 text-white" : "bg-white/6 text-white/50 hover:text-white"
                   }`}
                 >
@@ -1797,7 +1797,7 @@ export function Studio() {
             </div>
 
             {/* Second Row: Unified Size Slider + Consistent Lock + Auto-Find Nucleus Center */}
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-2 text-[11px]">
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-2 text-xs">
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
@@ -1840,7 +1840,7 @@ export function Studio() {
                   type="button"
                   disabled={projectFiles.length === 0}
                   onClick={() => runNucleusDetectAll()}
-                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-amber-400 px-3 py-1.5 text-[11.5px] font-semibold text-slate-950 shadow-sm transition-all hover:bg-amber-300 disabled:opacity-40"
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow-sm transition-all hover:bg-amber-300 disabled:opacity-40"
                 >
                   <Crosshair size={14} weight="bold" />
                   {t(lang, "autoNucleusAll")}
@@ -1849,7 +1849,7 @@ export function Studio() {
                   type="button"
                   onClick={() => setShowNucleusSettings((v) => !v)}
                   aria-expanded={showNucleusSettings}
-                  className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                  className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     showNucleusSettings
                       ? "bg-white text-slate-950"
                       : "bg-white/10 text-white/80 hover:bg-white/18 hover:text-white"
@@ -1863,7 +1863,7 @@ export function Studio() {
 
             {/* Collapsible ImageJ Foci_Counter.groovy Nucleus Segmentation Parameters */}
             {showNucleusSettings && (
-              <div className="mt-2.5 grid grid-cols-2 gap-2.5 rounded-xl border border-amber-400/25 bg-black/55 p-3 text-[11px] sm:grid-cols-4">
+              <div className="mt-2.5 grid grid-cols-2 gap-2.5 rounded-xl border border-amber-400/25 bg-black/55 p-3 text-xs sm:grid-cols-4">
                 <label className="flex flex-col gap-1">
                   <span className="text-white/60">{t(lang, "nucleusChannel")}</span>
                   <select
@@ -2005,14 +2005,14 @@ export function Studio() {
 
           {/* Toast & Error Alerts */}
           {toast && (
-            <div className="fade-in absolute right-4 top-16 z-40 flex items-center gap-2.5 rounded-xl border border-emerald-400/35 bg-slate-950/95 px-3.5 py-2 text-[12px] text-emerald-200 shadow-2xl">
+            <div className="fade-in absolute right-4 top-16 z-40 flex items-center gap-2.5 rounded-xl border border-emerald-400/35 bg-slate-950/95 px-3.5 py-2 text-sm text-emerald-200 shadow-2xl">
               <CheckCircle size={16} weight="fill" className="text-emerald-400" />
               <span>{toast}</span>
               {lastExportedWorkspaceFile && (
                 <button
                   type="button"
                   onClick={() => handleOpenExportedInWorkspace(lastExportedWorkspaceFile)}
-                  className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-lg bg-emerald-400 px-2.5 py-1 text-[11px] font-semibold text-slate-950 transition-colors hover:bg-emerald-300"
+                  className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-lg bg-emerald-400 px-2.5 py-1 text-xs font-semibold text-slate-950 transition-colors hover:bg-emerald-300"
                 >
                   {t(lang, "openInWorkspace")} →
                 </button>
@@ -2020,7 +2020,7 @@ export function Studio() {
             </div>
           )}
           {error && (
-            <div className="mx-4 mt-3 rounded-xl border border-rose-500/35 bg-rose-950/80 px-3.5 py-2 text-[12px] text-rose-200">
+            <div className="mx-4 mt-3 rounded-xl border border-rose-500/35 bg-rose-950/80 px-3.5 py-2 text-sm text-rose-200">
               {error}
             </div>
           )}
@@ -2030,12 +2030,12 @@ export function Studio() {
             {!activeProject ? (
               <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center text-white/60">
                 <CirclesFour size={38} weight="duotone" className="mb-3 text-sky-400" />
-                <h2 className="text-[15px] font-semibold text-white">{t(lang, "studioTitle")}</h2>
-                <p className="mt-1 max-w-md text-[12.5px] leading-5">{t(lang, "studioSub")}</p>
+                <h2 className="text-md font-semibold text-white">{t(lang, "studioTitle")}</h2>
+                <p className="mt-1 max-w-md text-sm leading-5">{t(lang, "studioSub")}</p>
                 <button
                   type="button"
                   onClick={() => setNewProjectModal(true)}
-                  className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-sky-400 px-4 py-2 text-[12.5px] font-semibold text-slate-950 shadow-md hover:bg-sky-300"
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-md hover:bg-sky-300"
                 >
                   <Plus size={15} weight="bold" />
                   {t(lang, "newProject")}
@@ -2044,11 +2044,11 @@ export function Studio() {
             ) : projectFiles.length === 0 ? (
               <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center text-white/60">
                 <FolderOpen size={36} weight="duotone" className="mb-3 text-sky-400" />
-                <p className="max-w-sm text-[13px] leading-5">{t(lang, "emptyProjectFiles")}</p>
+                <p className="max-w-sm text-base leading-5">{t(lang, "emptyProjectFiles")}</p>
                 <button
                   type="button"
                   onClick={openAddImagesModal}
-                  className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-sky-400 px-4 py-2 text-[12.5px] font-semibold text-slate-950 shadow-md hover:bg-sky-300"
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-md hover:bg-sky-300"
                 >
                   <Plus size={15} weight="bold" />
                   {t(lang, "addImagesToProject")}
@@ -2167,7 +2167,7 @@ export function Studio() {
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-t lg:border-l lg:border-t-0">
           {/* Scope Selector: Unified vs Individual */}
           <div className="border-b border-[var(--line)] p-3">
-            <div className="grid grid-cols-2 gap-1 rounded-xl bg-[var(--bg)] p-1 text-[11.5px]">
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-[var(--bg)] p-1 text-xs">
               <button
                 type="button"
                 onClick={() => setEditScope("unified")}
@@ -2193,7 +2193,7 @@ export function Studio() {
             </div>
 
             {editScope === "individual" && selectedFile && (
-              <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-[var(--bg)]/60 px-2.5 py-1.5 text-[11px]">
+              <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-[var(--bg)]/60 px-2.5 py-1.5 text-xs">
                 <span className="truncate font-mono text-[var(--text)]" title={selectedFile.name}>
                   {selectedFile.name}
                 </span>
@@ -2208,7 +2208,7 @@ export function Studio() {
                           return next;
                         })
                       }
-                      className="rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] text-[var(--accent)]"
+                      className="rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-2xs text-[var(--accent)]"
                     >
                       {t(lang, "clearIndividualOverride")}
                     </button>
@@ -2216,7 +2216,7 @@ export function Studio() {
                   <button
                     type="button"
                     onClick={syncCurrentToAll}
-                    className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] text-[var(--text-dim)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
+                    className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-2xs text-[var(--text-dim)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
                   >
                     {t(lang, "syncToAllImages")}
                   </button>
@@ -2228,14 +2228,14 @@ export function Studio() {
           {/* Per-Channel Intensity & LUT Controls */}
           <div className="min-h-0 flex-1 overflow-auto p-3.5">
             <div className="mb-2.5 flex items-center justify-between">
-              <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--text)]">
+              <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-[var(--text)]">
                 <SlidersHorizontal size={14} className="text-[var(--accent)]" />
                 {t(lang, "channels")} · {t(lang, "lutTitle")}
               </span>
               <button
                 type="button"
                 onClick={resetChannelAdjustments}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
               >
                 <ArrowCounterClockwise size={12} />
                 {t(lang, "reset")}
@@ -2243,7 +2243,7 @@ export function Studio() {
             </div>
 
             {activeAdjustments.length === 0 ? (
-              <p className="py-8 text-center text-[12px] text-[var(--text-dim)]">{t(lang, "noneSelected")}</p>
+              <p className="py-8 text-center text-sm text-[var(--text-dim)]">{t(lang, "noneSelected")}</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {activeAdjustments.map((ch, idx) => {
@@ -2264,7 +2264,7 @@ export function Studio() {
                         <button
                           type="button"
                           onClick={() => updateChannelAdjustment(idx, { visible: !ch.visible })}
-                          className="inline-flex items-center gap-2 text-[12px] font-semibold text-[var(--text)]"
+                          className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--text)]"
                         >
                           <span
                             className="h-3 w-3 rounded-full ring-1 ring-black/30"
@@ -2302,20 +2302,20 @@ export function Studio() {
 
                       {/* Brightness / Intensity Gain Slider (0% - 200%) */}
                       <div className="mt-2.5">
-                        <div className="flex items-center justify-between text-[11px]">
+                        <div className="flex items-center justify-between text-xs">
                           <span className="text-[var(--text-dim)]">{t(lang, "channelBrightness")}</span>
-                          <div className="flex items-center gap-1 font-mono text-[10.5px]">
+                          <div className="flex items-center gap-1 font-mono text-2xs">
                             <button
                               type="button"
                               onClick={() => updateChannelAdjustment(idx, { brightness: 0.5 })}
-                              className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-[9.5px] text-[var(--text-dim)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
+                              className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-2xs text-[var(--text-dim)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
                             >
                               {t(lang, "dimChannelPreset")}
                             </button>
                             <button
                               type="button"
                               onClick={() => updateChannelAdjustment(idx, { brightness: 1.0 })}
-                              className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-[9.5px] text-[var(--text-dim)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
+                              className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-2xs text-[var(--text-dim)] ring-1 ring-[var(--line)] hover:text-[var(--text)]"
                             >
                               {t(lang, "normalChannelPreset")}
                             </button>
@@ -2338,7 +2338,7 @@ export function Studio() {
                       </div>
 
                       {/* Black Point (Min) & White Point (Max) & Gamma */}
-                      <div className="mt-2 grid grid-cols-3 gap-2 text-[10.5px]">
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-2xs">
                         <label className="flex flex-col gap-0.5">
                           <span className="flex justify-between text-[var(--text-dim)]">
                             <span>{t(lang, "min")}</span>
@@ -2408,7 +2408,7 @@ export function Studio() {
                   type="button"
                   disabled={projectFiles.length === 0 || applyBusy}
                   onClick={() => void handleBatchApply("inplace")}
-                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 text-[12px] font-semibold text-[var(--accent-ink)] shadow-sm transition-opacity hover:opacity-90 disabled:opacity-40"
+                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 text-sm font-semibold text-[var(--accent-ink)] shadow-sm transition-opacity hover:opacity-90 disabled:opacity-40"
                 >
                   <Check size={14} weight="bold" />
                   {applyBusy ? t(lang, "applyingChanges") : t(lang, "applyInplace")}
@@ -2418,7 +2418,7 @@ export function Studio() {
                   type="button"
                   disabled={projectFiles.length === 0 || applyBusy}
                   onClick={() => openExportToWorkspaceModal("all")}
-                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-[12px] font-semibold text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-sm font-semibold text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
                 >
                   <FolderSimplePlus size={14} weight="bold" className="text-[var(--accent)]" />
                   {applyBusy ? t(lang, "applyingChanges") : t(lang, "exportToWorkspace")}
@@ -2430,7 +2430,7 @@ export function Studio() {
                   type="button"
                   disabled={!selectedFile}
                   onClick={() => selectedFile && setExportTargetFiles([selectedFile])}
-                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/80 px-2.5 text-[11.5px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/80 px-2.5 text-xs font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
                 >
                   <ExportIcon size={14} />
                   {t(lang, "exportSingleFile")}
@@ -2439,7 +2439,7 @@ export function Studio() {
                   type="button"
                   disabled={projectFiles.length === 0}
                   onClick={() => setExportTargetFiles(projectFiles)}
-                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/80 px-2.5 text-[11.5px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+                  className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/80 px-2.5 text-xs font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
                 >
                   <ExportIcon size={14} />
                   {t(lang, "exportProjectFiles")} ({projectFiles.length})
@@ -2477,7 +2477,7 @@ export function Studio() {
         body={
           deleteProjectTarget && (
             <>
-              <span className="mb-1 block font-mono text-[11.5px] font-semibold text-[var(--text)]">
+              <span className="mb-1 block font-mono text-xs font-semibold text-[var(--text)]">
                 {deleteProjectTarget.name}
               </span>
               {t(lang, "deleteProjectHint")}
@@ -2497,7 +2497,7 @@ export function Studio() {
         onClose={() => setWorkspaceExportModalOpen(false)}
         width={460}
       >
-        <div className="flex flex-col gap-3.5 text-[12px]">
+        <div className="flex flex-col gap-3.5 text-sm">
           <div className="flex flex-col gap-1.5">
             <span className="font-medium text-[var(--text-dim)]">{t(lang, "exportToWorkspaceScope")}</span>
             <div className="grid grid-cols-2 gap-2">
@@ -2524,7 +2524,7 @@ export function Studio() {
               >
                 <div className="truncate">{t(lang, "exportToWorkspaceSelected")}</div>
                 {selectedFile && (
-                  <div className="truncate font-mono text-[10px] opacity-80">{selectedFile.name}</div>
+                  <div className="truncate font-mono text-2xs opacity-80">{selectedFile.name}</div>
                 )}
               </button>
             </div>
@@ -2535,7 +2535,7 @@ export function Studio() {
             <select
               value={workspaceExportFolder}
               onChange={(e) => setWorkspaceExportFolder(e.target.value)}
-              className="rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[12px] text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+              className="rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-sm text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
             >
               <option value="__keep__">{t(lang, "keepOriginalFolder")}</option>
               <option value="">{t(lang, "workspaceRoot")} (/)</option>
@@ -2554,11 +2554,11 @@ export function Studio() {
               value={workspaceExportSubfolder}
               onChange={(e) => setWorkspaceExportSubfolder(e.target.value)}
               placeholder={t(lang, "newFolderPlaceholder")}
-              className="rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[12px] text-[var(--text)] placeholder:text-[var(--text-dim)]/50 focus:border-[var(--accent)] focus:outline-none"
+              className="rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-sm text-[var(--text)] placeholder:text-[var(--text-dim)]/50 focus:border-[var(--accent)] focus:outline-none"
             />
           </label>
 
-          <label className="inline-flex cursor-pointer items-center gap-2 pt-0.5 text-[12px] text-[var(--text)]">
+          <label className="inline-flex cursor-pointer items-center gap-2 pt-0.5 text-sm text-[var(--text)]">
             <input
               type="checkbox"
               checked={workspaceExportAddToProject}
@@ -2572,7 +2572,7 @@ export function Studio() {
             <button
               type="button"
               onClick={() => setWorkspaceExportModalOpen(false)}
-              className="rounded-xl px-3.5 py-1.5 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]"
+              className="rounded-xl px-3.5 py-1.5 text-sm text-[var(--text-dim)] hover:bg-[var(--bg)]"
             >
               {t(lang, "cancel")}
             </button>
@@ -2580,7 +2580,7 @@ export function Studio() {
               type="button"
               disabled={applyBusy}
               onClick={() => void handleConfirmExportToWorkspace()}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-1.5 text-[12px] font-semibold text-[var(--accent-ink)] shadow-xs transition-opacity hover:opacity-90 disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-1.5 text-sm font-semibold text-[var(--accent-ink)] shadow-xs transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               <FolderSimplePlus size={14} weight="bold" />
               {applyBusy ? t(lang, "applyingChanges") : t(lang, "exportToWorkspace")}
@@ -2598,7 +2598,7 @@ export function Studio() {
         width={520}
       >
         <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between text-[11.5px] text-[var(--text-dim)]">
+          <div className="flex items-center justify-between text-xs text-[var(--text-dim)]">
             <span>
               {t(lang, "selected")}:{" "}
               <strong className="font-mono text-[var(--text)]">
@@ -2635,7 +2635,7 @@ export function Studio() {
                 return (
                   <label
                     key={file.id}
-                    className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-[12px] hover:bg-[var(--bg)]"
+                    className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-sm hover:bg-[var(--bg)]"
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       <input
@@ -2650,7 +2650,7 @@ export function Studio() {
                         {joinPath(file.folder, file.name)}
                       </span>
                     </div>
-                    <span className="shrink-0 font-mono text-[10.5px] text-[var(--text-dim)]">
+                    <span className="shrink-0 font-mono text-2xs text-[var(--text-dim)]">
                       {file.width ?? "–"}×{file.height ?? "–"}
                     </span>
                   </label>
@@ -2662,14 +2662,14 @@ export function Studio() {
             <button
               type="button"
               onClick={() => setAddImagesModal(false)}
-              className="rounded-xl px-3.5 py-1.5 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]"
+              className="rounded-xl px-3.5 py-1.5 text-sm text-[var(--text-dim)] hover:bg-[var(--bg)]"
             >
               {t(lang, "cancel")}
             </button>
             <button
               type="button"
               onClick={() => void handleSaveProjectImages()}
-              className="rounded-xl bg-[var(--accent)] px-4 py-1.5 text-[12px] font-semibold text-[var(--accent-ink)]"
+              className="rounded-xl bg-[var(--accent)] px-4 py-1.5 text-sm font-semibold text-[var(--accent-ink)]"
             >
               {t(lang, "save")}
             </button>

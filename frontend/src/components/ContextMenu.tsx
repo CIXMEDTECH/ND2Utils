@@ -77,11 +77,11 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState | null; onClose
       role="menu"
       aria-label={menu.title}
       style={{ left: pos?.left ?? menu.x, top: pos?.top ?? menu.y, visibility: pos ? "visible" : "hidden" }}
-      className="liquid-glass liquid-glass--chip fixed z-[60] min-w-[200px] max-w-[280px] origin-top-left bg-[var(--bg-elev)] p-1 text-[12.5px] shadow-[var(--shadow)]"
+      className="liquid-glass liquid-glass--chip fixed z-[60] min-w-[200px] max-w-[280px] origin-top-left bg-[var(--bg-elev)] p-1 text-sm shadow-[var(--shadow)]"
       onContextMenu={(event) => event.preventDefault()}
     >
       {menu.title && (
-        <p className="truncate px-2.5 pb-1.5 pt-1 font-mono text-[10px] text-[var(--text-dim)]" title={menu.title}>
+        <p className="truncate px-2.5 pb-1.5 pt-1 font-mono text-2xs text-[var(--text-dim)]" title={menu.title}>
           {menu.title}
         </p>
       )}

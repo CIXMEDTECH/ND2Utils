@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/noto-sans-sc";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(

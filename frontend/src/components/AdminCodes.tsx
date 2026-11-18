@@ -40,7 +40,7 @@ const STATUS_KEY: Record<CodeStatus, MsgKey> = {
 };
 
 const fieldClass =
-  "h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 text-[12.5px] text-[var(--text)] focus:border-[var(--accent)] focus:outline-none";
+  "h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 text-sm text-[var(--text)] focus:border-[var(--accent)] focus:outline-none";
 
 function toLocalInput(seconds: number): string {
   const d = new Date(seconds * 1000);
@@ -100,7 +100,7 @@ function KindToggle({ value, onChange }: { value: CodeKind; onChange: (kind: Cod
           type="button"
           aria-pressed={value === kind}
           onClick={() => onChange(kind)}
-          className={`h-7 rounded-md text-[11.5px] transition-colors ${value === kind ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
+          className={`h-7 rounded-md text-xs transition-colors ${value === kind ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
         >
           {t(lang, kind === "permanent" ? "kindPermanent" : "kindTemporary")}
         </button>
@@ -134,7 +134,7 @@ function StatusBadge({ status }: { status: CodeStatus }) {
     status === "active"
       ? "bg-[color-mix(in_srgb,var(--ok)_14%,transparent)] text-[var(--ok)]"
       : "bg-[color-mix(in_srgb,var(--danger)_12%,transparent)] text-[var(--danger)]";
-  return <span className={`rounded-full px-2 py-0.5 text-[10.5px] font-medium ${tone}`}>{t(lang, STATUS_KEY[status])}</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${tone}`}>{t(lang, STATUS_KEY[status])}</span>;
 }
 
 function CodeRow({
@@ -177,17 +177,17 @@ function CodeRow({
   return (
     <li className="border-t border-[var(--line)] py-3.5 first:border-t-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="min-w-0 truncate text-[13px] font-semibold">{code.label || "—"}</span>
+        <span className="min-w-0 truncate text-base font-semibold">{code.label || "—"}</span>
         <StatusBadge status={code.status} />
-        <span className="rounded-full bg-[var(--bg)] px-2 py-0.5 text-[10.5px] text-[var(--text-dim)]">
+        <span className="rounded-full bg-[var(--bg)] px-2 py-0.5 text-2xs text-[var(--text-dim)]">
           {t(lang, code.kind === "permanent" ? "kindPermanent" : "kindTemporary")}
         </span>
       </div>
       <div className="mt-1.5 flex items-center gap-1">
-        <code className="select-all font-mono text-[13px] tracking-[0.08em] text-[var(--text)]">{code.code}</code>
+        <code className="select-all font-mono text-base tracking-[0.08em] text-[var(--text)]">{code.code}</code>
         <CopyButton text={code.code} label={t(lang, "copyCode")} />
       </div>
-      <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[11px] text-[var(--text-dim)]">
+      <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs text-[var(--text-dim)]">
         <dt>{t(lang, "expiresAt")}</dt>
         <dd className="font-mono tabular-nums text-[var(--text)]">
           {code.expires_at ? formatDateTime(code.expires_at, lang) : t(lang, "expiresNever")}
@@ -217,7 +217,7 @@ function CodeRow({
             type="button"
             onClick={action.onClick}
             aria-expanded={action.key === "edit" ? editing : undefined}
-            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] text-[var(--text-dim)] transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
+            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-[var(--text-dim)] transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
           >
             {action.icon}
             {action.label}
@@ -226,7 +226,7 @@ function CodeRow({
         <button
           type="button"
           onClick={() => setConfirm("delete")}
-          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_9%,transparent)]"
+          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_9%,transparent)]"
         >
           <Trash size={13} />
           {t(lang, "deleteCode")}
@@ -244,23 +244,23 @@ function CodeRow({
           }}
         >
           <div className="mt-2 grid gap-2.5 rounded-xl bg-[var(--bg)]/60 p-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-[11px] text-[var(--text-dim)] sm:col-span-2">
+            <label className="grid gap-1 text-xs text-[var(--text-dim)] sm:col-span-2">
               {t(lang, "codeLabel")}
               <input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={80} className={fieldClass} />
             </label>
-            <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
+            <div className="grid gap-1 text-xs text-[var(--text-dim)]">
               {t(lang, "codeKind")}
               <KindToggle value={kind} onChange={setKind} />
             </div>
-            <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
+            <div className="grid gap-1 text-xs text-[var(--text-dim)]">
               {t(lang, "codeExpiry")}
               <ExpiryField value={expiry} onChange={setExpiry} />
             </div>
             <div className="flex justify-end gap-2 sm:col-span-2">
-              <button type="button" onClick={() => setEditing(false)} className="h-8 rounded-lg px-3 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+              <button type="button" onClick={() => setEditing(false)} className="h-8 rounded-lg px-3 text-sm text-[var(--text-dim)] hover:bg-[var(--bg)]">
                 {t(lang, "cancel")}
               </button>
-              <button type="submit" className="h-8 rounded-lg bg-[var(--accent)] px-4 text-[12px] font-semibold text-white">
+              <button type="submit" className="h-8 rounded-lg bg-[var(--accent)] px-4 text-sm font-semibold text-white">
                 {t(lang, "save")}
               </button>
             </div>
@@ -269,7 +269,7 @@ function CodeRow({
       )}
 
       {error && (
-        <p role="alert" className="mt-2 text-[12px] text-[var(--danger)]">
+        <p role="alert" className="mt-2 text-sm text-[var(--danger)]">
           {error}
         </p>
       )}
@@ -279,7 +279,7 @@ function CodeRow({
         title={t(lang, confirm === "delete" ? "deleteCode" : "regenerate")}
         body={
           <>
-            <span className="mb-1 block font-mono text-[11px] text-[var(--text)]">
+            <span className="mb-1 block font-mono text-xs text-[var(--text)]">
               {code.label ? `${code.label} · ` : ""}
               {code.code}
             </span>
@@ -344,13 +344,13 @@ export function AdminCodes() {
           <Key size={18} weight="duotone" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "adminEyebrow")}</p>
-          <h2 className="mt-1 text-[14px] font-semibold">{t(lang, "adminTitle")}</h2>
-          <p className="mt-2 text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "adminIntro")}</p>
+          <p className="font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "adminEyebrow")}</p>
+          <h2 className="mt-1 text-md font-semibold">{t(lang, "adminTitle")}</h2>
+          <p className="mt-2 text-sm leading-5 text-[var(--text-dim)]">{t(lang, "adminIntro")}</p>
           <button
             type="button"
             onClick={() => setTransferSeed({ fileIds: [], folders: [] })}
-            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-3 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-3 text-sm font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
           >
             <ArrowsLeftRight size={14} />
             {t(lang, "transferFiles")}
@@ -358,20 +358,20 @@ export function AdminCodes() {
 
           {admin && (
             <div className="mt-4 rounded-xl bg-[var(--bg)]/60 p-3">
-              <p className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-dim)]">
                 <ShieldCheck size={14} weight="fill" className="text-[var(--accent)]" />
                 {t(lang, "adminSelf")}
               </p>
               <div className="mt-1 flex items-center gap-1">
-                <code className="select-all font-mono text-[13px] tracking-[0.08em]">{admin.code}</code>
+                <code className="select-all font-mono text-base tracking-[0.08em]">{admin.code}</code>
                 <CopyButton text={admin.code} label={t(lang, "copyCode")} />
               </div>
             </div>
           )}
 
           <form onSubmit={(event) => void create(event)} className="mt-5 grid gap-2.5 sm:grid-cols-2">
-            <p className="text-[12.5px] font-semibold sm:col-span-2">{t(lang, "newCode")}</p>
-            <label className="grid gap-1 text-[11px] text-[var(--text-dim)] sm:col-span-2">
+            <p className="text-sm font-semibold sm:col-span-2">{t(lang, "newCode")}</p>
+            <label className="grid gap-1 text-xs text-[var(--text-dim)] sm:col-span-2">
               {t(lang, "codeLabel")}
               <input
                 value={label}
@@ -381,18 +381,18 @@ export function AdminCodes() {
                 className={fieldClass}
               />
             </label>
-            <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
+            <div className="grid gap-1 text-xs text-[var(--text-dim)]">
               {t(lang, "codeKind")}
               <KindToggle value={kind} onChange={setKind} />
             </div>
-            <div className="grid gap-1 text-[11px] text-[var(--text-dim)]">
+            <div className="grid gap-1 text-xs text-[var(--text-dim)]">
               {t(lang, "codeExpiry")}
               <ExpiryField value={expiry} onChange={setExpiry} />
             </div>
             <button
               type="submit"
               disabled={busy}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 text-[12.5px] font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40 sm:col-span-2 sm:justify-self-start"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40 sm:col-span-2 sm:justify-self-start"
             >
               <Plus size={14} weight="bold" />
               {t(lang, "createCode")}
@@ -401,16 +401,16 @@ export function AdminCodes() {
 
           {created && (
             <div className="mt-3 rounded-xl border border-[color-mix(in_srgb,var(--ok)_35%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_8%,transparent)] p-3">
-              <p className="text-[12px] text-[var(--text-dim)]">{t(lang, "codeCreated")}</p>
+              <p className="text-sm text-[var(--text-dim)]">{t(lang, "codeCreated")}</p>
               <div className="mt-1 flex items-center gap-1">
-                <code className="select-all font-mono text-[15px] font-semibold tracking-[0.1em]">{created.code}</code>
+                <code className="select-all font-mono text-md font-semibold tracking-[0.1em]">{created.code}</code>
                 <CopyButton text={created.code} label={t(lang, "copyCode")} />
               </div>
             </div>
           )}
 
           {error && (
-            <p role="alert" className="mt-3 text-[12px] text-[var(--danger)]">
+            <p role="alert" className="mt-3 text-sm text-[var(--danger)]">
               {error}
             </p>
           )}
@@ -422,7 +422,7 @@ export function AdminCodes() {
                 <span className="h-16 animate-pulse rounded-xl bg-[var(--bg)]/50" />
               </div>
             ) : users.length === 0 ? (
-              <p className="rounded-xl border border-dashed border-[var(--line)] py-6 text-center text-[12px] text-[var(--text-dim)]">{t(lang, "noCodes")}</p>
+              <p className="rounded-xl border border-dashed border-[var(--line)] py-6 text-center text-sm text-[var(--text-dim)]">{t(lang, "noCodes")}</p>
             ) : (
               <ul>
                 {users.map((code) => (

@@ -43,7 +43,7 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
         aria-label={t(lang, "switchLanguage")}
       >
         <Translate size={16} />
-        <span className="text-[12px]">{t(lang, "lang")}</span>
+        <span className="text-sm">{t(lang, "lang")}</span>
       </button>
 
       <div className="relative z-[1] w-full max-w-[420px]">
@@ -52,12 +52,12 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
             <Mark />
             <span className="font-semibold tracking-[-0.025em] text-[var(--text)]">{t(lang, "app")}</span>
           </div>
-          <p className="mt-9 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "loginEyebrow")}</p>
+          <p className="mt-9 font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "loginEyebrow")}</p>
           <h1 className="mt-2 text-[1.75rem] font-semibold leading-tight tracking-[-0.04em]">{t(lang, "loginTitle")}</h1>
-          <p className="mt-3 text-[13px] leading-6 text-[var(--text-dim)]">{t(lang, "loginIntro")}</p>
+          <p className="mt-3 text-base leading-6 text-[var(--text-dim)]">{t(lang, "loginIntro")}</p>
 
           <form onSubmit={(event) => void submit(event)} className="mt-7 grid gap-3">
-            <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+            <label className="grid gap-1.5 text-xs font-medium text-[var(--text-dim)]">
               {t(lang, "accessCode")}
               <span className="relative">
                 <Key size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
@@ -70,13 +70,13 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
                   spellCheck={false}
                   placeholder="XXXX-XXXX-XXXX-XXXX"
                   aria-invalid={Boolean(error)}
-                  className="h-12 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-10 pr-3 font-mono text-[15px] uppercase tracking-[0.12em] text-[var(--text)] transition-colors placeholder:tracking-[0.12em] placeholder:text-[var(--text-dim)]/50 focus:border-[var(--accent)] focus:outline-none"
+                  className="h-12 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-10 pr-3 font-mono text-md uppercase tracking-[0.12em] text-[var(--text)] transition-colors placeholder:tracking-[0.12em] placeholder:text-[var(--text-dim)]/50 focus:border-[var(--accent)] focus:outline-none"
                 />
               </span>
             </label>
 
             {error && (
-              <p role="alert" className="flex items-start gap-1.5 overflow-hidden text-[12px] leading-5 text-[var(--danger)]">
+              <p role="alert" className="flex items-start gap-1.5 overflow-hidden text-sm leading-5 text-[var(--danger)]">
                 <WarningCircle size={15} className="mt-0.5 shrink-0" />
                 {error}
               </p>
@@ -88,9 +88,9 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
             </button>
           </form>
 
-          <p className="mt-6 text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "loginHint")}</p>
+          <p className="mt-6 text-sm leading-5 text-[var(--text-dim)]">{t(lang, "loginHint")}</p>
         </Glass>
-        <p className="mx-auto mt-6 max-w-sm text-center text-[11px] leading-5 text-[var(--text-dim)]">{t(lang, "legal")}</p>
+        <p className="mx-auto mt-6 max-w-sm text-center text-xs leading-5 text-[var(--text-dim)]">{t(lang, "legal")}</p>
       </div>
     </div>
   );

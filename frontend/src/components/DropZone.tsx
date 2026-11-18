@@ -89,7 +89,7 @@ export function DropZone({ inputId = "nd2-upload" }: { inputId?: string }) {
         <p className="text-xl font-semibold tracking-[-0.02em]">
           {over ? t(lang, "dropActive") : t(lang, "drop")}
         </p>
-        <p className="mt-2 max-w-[38ch] text-[13px] leading-5 text-white/58">
+        <p className="mt-2 max-w-[38ch] text-base leading-5 text-white/58">
           {t(lang, "dropHint")}
         </p>
         <button
@@ -100,7 +100,7 @@ export function DropZone({ inputId = "nd2-upload" }: { inputId?: string }) {
             event.stopPropagation();
             document.getElementById(folderInputId(inputId))?.click();
           }}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium text-[var(--accent)] transition-colors hover:bg-white/10"
+          className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-[var(--accent)] transition-colors hover:bg-white/10"
         >
           <FolderSimplePlus size={15} weight="duotone" />
           {t(lang, "chooseFolder")}
@@ -108,7 +108,7 @@ export function DropZone({ inputId = "nd2-upload" }: { inputId?: string }) {
 
         {progress && (
           <div className="mt-5 w-full max-w-xs" role="status">
-            <p className="font-mono text-[11px] text-[var(--accent)]">{progress.label}</p>
+            <p className="font-mono text-xs text-[var(--accent)]">{progress.label}</p>
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
               <div
                 className={`h-full rounded-full bg-[var(--accent)] transition-[width] duration-200 ${progress.ratio == null ? "progress-indeterminate" : ""}`}
@@ -118,7 +118,7 @@ export function DropZone({ inputId = "nd2-upload" }: { inputId?: string }) {
           </div>
         )}
         {!progress && error && (
-          <p role="alert" className="mt-4 inline-flex items-start gap-1.5 text-left text-[12px] leading-5 text-[var(--danger)]">
+          <p role="alert" className="mt-4 inline-flex items-start gap-1.5 text-left text-sm leading-5 text-[var(--danger)]">
             <WarningCircle size={15} className="mt-0.5 shrink-0" />
             {error}
           </p>

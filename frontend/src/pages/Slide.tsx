@@ -137,13 +137,13 @@ export function Slide() {
   if (file && !isSlide(file)) {
     return (
       <Shell dense>
-        <div className="p-10 text-[13px] text-[var(--text-dim)]">{t(lang, "slideNotSlide")}</div>
+        <div className="p-10 text-base text-[var(--text-dim)]">{t(lang, "slideNotSlide")}</div>
       </Shell>
     );
   }
 
   const toolButton = (active: boolean) =>
-    `flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-200 ${active ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`;
+    `flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-all duration-200 ${active ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"}`;
   const iconButton =
     "flex h-7 w-7 items-center justify-center rounded-lg text-white/65 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-35";
 
@@ -162,12 +162,12 @@ export function Slide() {
             >
               <ArrowLeft size={15} />
             </button>
-            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium" title={file?.name}>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium" title={file?.name}>
               {file?.name ?? t(lang, "slideViewer")}
             </span>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-3 max-lg:max-h-[50dvh]">
-            <p className="mb-1 text-[12px] font-medium">{t(lang, "channels")}</p>
+            <p className="mb-1 text-sm font-medium">{t(lang, "channels")}</p>
             {info && display.length === info.channels.length && (
               <SlideChannels
                 info={info}
@@ -182,7 +182,7 @@ export function Slide() {
               />
             )}
             {info && (info.sizes.T > 1 || info.sizes.Z > 1) && (
-              <div className="mt-4 grid gap-2 rounded-xl bg-[var(--bg)] p-3 text-[11.5px]">
+              <div className="mt-4 grid gap-2 rounded-xl bg-[var(--bg)] p-3 text-xs">
                 <span className="font-medium">{t(lang, "plane")}</span>
                 {(["T", "Z"] as const).map((axis) =>
                   info.sizes[axis] > 1 ? (
@@ -235,7 +235,7 @@ export function Slide() {
                 <span className="mx-1 h-4 w-px shrink-0 bg-white/10" aria-hidden />
                 <SlideZoomControls viewer={viewer} view={view} />
                 {mag !== null && (
-                  <span className="ml-1 rounded-md bg-white/8 px-2 py-1 font-mono text-[10.5px] tabular-nums text-white/70" title={t(lang, "equivalentMag")}>
+                  <span className="ml-1 rounded-md bg-white/8 px-2 py-1 font-mono text-2xs tabular-nums text-white/70" title={t(lang, "equivalentMag")}>
                     ≈ {mag >= 10 ? mag.toFixed(0) : mag.toFixed(1)}×
                   </span>
                 )}
@@ -254,7 +254,7 @@ export function Slide() {
 
               {selection && (
                 <Glass tone="dark" shape="chip" className="absolute left-3 top-14 z-20 flex max-w-[calc(100%-14rem)] flex-wrap items-center gap-1 p-1">
-                  <span className="px-2 font-mono text-[10.5px] tabular-nums text-white/70">
+                  <span className="px-2 font-mono text-2xs tabular-nums text-white/70">
                     {Math.round(selection.w)} × {Math.round(selection.h)} px
                     {info.um_per_px ? ` · ${formatUm(selection.w * info.um_per_px)} × ${formatUm(selection.h * info.um_per_px)}` : ""}
                   </span>
@@ -273,7 +273,7 @@ export function Slide() {
             </SlideStage>
           ) : error ? (
             <div className="flex flex-1 items-center justify-center bg-[#050607] px-8">
-              <p role="alert" className="max-w-[48ch] text-center text-[12.5px] leading-6 text-red-200">
+              <p role="alert" className="max-w-[48ch] text-center text-sm leading-6 text-red-200">
                 {error}
               </p>
             </div>
@@ -281,7 +281,7 @@ export function Slide() {
             <SlideLoading />
           )}
 
-          <div className="flex min-h-9 flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/[0.06] bg-black/30 px-3 py-1.5 font-mono text-[10.5px] tabular-nums text-white/55">
+          <div className="flex min-h-9 flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/[0.06] bg-black/30 px-3 py-1.5 font-mono text-2xs tabular-nums text-white/55">
             {cursor && info ? (
               <>
                 <span>
@@ -313,7 +313,7 @@ export function Slide() {
 
         {/* Info / export */}
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-t lg:border-l lg:border-t-0">
-          <div className="flex gap-1 border-b border-[var(--line)] p-2 text-[12px]" role="tablist">
+          <div className="flex gap-1 border-b border-[var(--line)] p-2 text-sm" role="tablist">
             {(["info", "export"] as const).map((key) => (
               <button
                 key={key}
@@ -343,7 +343,7 @@ function SlideInfoList({ info, view }: { info: SlideInfo; view: ViewState | null
   const lang = useApp((s) => s.lang);
   const file = useApp((s) => s.files.find((f) => f.id === info.id) ?? null);
   return (
-    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 text-[12.5px]">
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 text-sm">
       <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
       <dd className="font-mono">{file?.format === "tiff" ? "TIFF" : "OME-TIFF"}</dd>
       <dt className="text-[var(--text-dim)]">{t(lang, "dimensions")}</dt>
@@ -355,7 +355,7 @@ function SlideInfoList({ info, view }: { info: SlideInfo; view: ViewState | null
           <dt className="text-[var(--text-dim)]">{t(lang, "pixelSize")}</dt>
           <dd className="font-mono tabular-nums">
             {formatUm(info.um_per_px)}/px
-            <span className="block text-[11px] text-[var(--text-dim)]">
+            <span className="block text-xs text-[var(--text-dim)]">
               {formatUm(info.width * info.um_per_px)} × {formatUm(info.height * info.um_per_px)}
             </span>
           </dd>
@@ -389,7 +389,7 @@ function SlideInfoList({ info, view }: { info: SlideInfo; view: ViewState | null
       )}
       <dt className="text-[var(--text-dim)]">{t(lang, "pyramidLevels")}</dt>
       <dd>
-        <ol className="grid gap-0.5 font-mono text-[11px] tabular-nums">
+        <ol className="grid gap-0.5 font-mono text-xs tabular-nums">
           {info.levels.map((lv, i) => (
             <li key={i} className={view?.level === i ? "text-[var(--accent)]" : ""}>
               L{i} · {lv.width}×{lv.height}
@@ -465,7 +465,7 @@ function SnapshotPopover({
       onPointerDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
     >
-      <Glass shape="island" className="p-4 text-[12px]">
+      <Glass shape="island" className="p-4 text-sm">
         <div className="mb-1 flex items-center justify-between">
           <span className="font-medium">{t(lang, "screenshot")}</span>
           <button type="button" onClick={onClose} className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-dim)] hover:bg-[var(--bg)]" aria-label={t(lang, "close")}>
@@ -474,7 +474,7 @@ function SnapshotPopover({
         </div>
         <p className="mb-3 leading-5 text-[var(--text-dim)]">{t(lang, "screenshotHint")}</p>
         <div className="mb-3 grid gap-1.5">
-          <span className="text-[11px] font-medium text-[var(--text-dim)]">{t(lang, "screenshotScale")}</span>
+          <span className="text-xs font-medium text-[var(--text-dim)]">{t(lang, "screenshotScale")}</span>
           <div className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--bg)] p-1">
             {[1, 2, 4].map((value) => (
               <button
@@ -482,7 +482,7 @@ function SnapshotPopover({
                 type="button"
                 onClick={() => setK(value)}
                 aria-pressed={k === value}
-                className={`rounded-lg py-1.5 font-mono text-[11px] transition-colors ${k === value ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
+                className={`rounded-lg py-1.5 font-mono text-xs transition-colors ${k === value ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
               >
                 {value}×
               </button>
@@ -502,7 +502,7 @@ function SnapshotPopover({
             type="button"
             disabled={busy}
             onClick={() => void save()}
-            className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 text-[12px] font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
+            className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
           >
             {busy ? t(lang, "rendering") : t(lang, "savePng")}
           </button>
@@ -511,13 +511,13 @@ function SnapshotPopover({
               type="button"
               disabled={busy}
               onClick={() => void copy()}
-              className="inline-flex h-9 items-center rounded-xl px-3 text-[12px] text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)] disabled:opacity-50"
+              className="inline-flex h-9 items-center rounded-xl px-3 text-sm text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)] disabled:opacity-50"
             >
               {t(lang, "copyImage")}
             </button>
           )}
         </div>
-        {note && <p className="mt-2 text-[11.5px] leading-5 text-[var(--text-dim)]" aria-live="polite">{note}</p>}
+        {note && <p className="mt-2 text-xs leading-5 text-[var(--text-dim)]" aria-live="polite">{note}</p>}
       </Glass>
     </div>
   );

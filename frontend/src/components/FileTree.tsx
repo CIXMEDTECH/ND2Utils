@@ -169,8 +169,8 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
                 )}
               </>
             )}
-            <span className={`truncate text-[12.5px] ${isRoot ? "font-semibold" : "font-medium"}`}>{label}</span>
-            <span className="ml-auto shrink-0 pl-2 font-mono text-[10px] text-[var(--text-dim)]">{node.total}</span>
+            <span className={`truncate text-sm ${isRoot ? "font-semibold" : "font-medium"}`}>{label}</span>
+            <span className="ml-auto shrink-0 pl-2 font-mono text-2xs text-[var(--text-dim)]">{node.total}</span>
           </button>
           {moreButton(target, label)}
         </div>
@@ -179,7 +179,7 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
             {node.folders.map((child) => renderFolder(child, depth + 1))}
             {node.files.map((file) => renderFile(file, depth + 1))}
             {!isRoot && node.total === 0 && (
-              <li className="flex h-7 items-center text-[11px] italic text-[var(--text-dim)]" style={{ paddingLeft: 6 + (depth + 1) * INDENT + 22 }}>
+              <li className="flex h-7 items-center text-xs italic text-[var(--text-dim)]" style={{ paddingLeft: 6 + (depth + 1) * INDENT + 22 }}>
                 {t(lang, "emptyFolder")}
               </li>
             )}
@@ -220,10 +220,10 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
           >
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1.5">
-                <span className="truncate text-[12.5px] tracking-[-0.01em]">{file.name}</span>
+                <span className="truncate text-sm tracking-[-0.01em]">{file.name}</span>
                 {file.cropped && (
                   <span
-                    className="inline-flex shrink-0 items-center gap-0.5 rounded bg-[var(--accent-soft)] px-1 py-0.5 font-mono text-[9px] font-medium text-[var(--accent)]"
+                    className="inline-flex shrink-0 items-center gap-0.5 rounded bg-[var(--accent-soft)] px-1 py-0.5 font-mono text-2xs font-medium text-[var(--accent)]"
                     title={`${t(lang, "croppedBadge")}${file.crop ? ` · ${file.crop.w}×${file.crop.h}` : ""}`}
                   >
                     <Crop size={10} weight="bold" />
@@ -231,7 +231,7 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
                   </span>
                 )}
               </span>
-              {showPath && <span className="block truncate font-mono text-[10px] text-[var(--text-dim)]">/{file.folder}</span>}
+              {showPath && <span className="block truncate font-mono text-2xs text-[var(--text-dim)]">/{file.folder}</span>}
             </span>
             {file.prepare === "pending" && (
               <SpinnerGap size={12} className="shrink-0 animate-spin text-[var(--text-dim)]" aria-label={t(lang, "preparing")} />
@@ -249,7 +249,7 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
                 />
               ))}
             </span>
-            <span className="hidden w-12 shrink-0 text-right font-mono text-[9.5px] text-[var(--text-dim)] @[260px]:block">
+            <span className="hidden w-12 shrink-0 text-right font-mono text-2xs text-[var(--text-dim)] @[260px]:block">
               {formatBytes(file.size_bytes, lang)}
             </span>
           </button>
@@ -278,7 +278,7 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
             onKeyDown={(event) => event.key === "Escape" && setQuery("")}
             placeholder={t(lang, "searchFiles")}
             aria-label={t(lang, "searchFiles")}
-            className="h-7 w-full rounded-md border border-[var(--line)] bg-[var(--bg)] pl-7 pr-6 text-[12px] focus:border-[var(--accent)] focus:outline-none"
+            className="h-7 w-full rounded-md border border-[var(--line)] bg-[var(--bg)] pl-7 pr-6 text-sm focus:border-[var(--accent)] focus:outline-none"
           />
           {query && (
             <button
@@ -301,7 +301,7 @@ export function FileTree({ onMenu }: { onMenu: (target: TreeTarget, x: number, y
 
       {needle ? (
         <ul role="tree" aria-label={t(lang, "files")} className="pb-3">
-          <li className="px-3 py-1.5 font-mono text-[10px] text-[var(--text-dim)]">
+          <li className="px-3 py-1.5 font-mono text-2xs text-[var(--text-dim)]">
             {matches.length ? `${matches.length} ${t(lang, "nFiles")}` : t(lang, "noMatches")}
           </li>
           {matches.slice(0, 500).map((file) => renderFile(file, 0, true))}

@@ -506,6 +506,10 @@ const dict = {
     separateScaleBar: "单独输出比例尺图片（每一种比例尺类型一张）",
     flatStructure: "不按原文件结构目录（平铺到压缩包根目录）",
     gridCols: "网格列数",
+    settingsTextSize: "字号",
+    textSizeNormal: "标准",
+    textSizeLarge: "大",
+    textSizeXLarge: "特大",
   },
   en: {
     app: "Lucida",
@@ -1012,6 +1016,10 @@ const dict = {
     separateScaleBar: "Export standalone scale bar images (one per scale bar type)",
     flatStructure: "Do not preserve original folder structure (flatten to root)",
     gridCols: "Grid columns",
+    settingsTextSize: "Text size",
+    textSizeNormal: "Standard",
+    textSizeLarge: "Large",
+    textSizeXLarge: "Extra large",
   },
 } as const;
 

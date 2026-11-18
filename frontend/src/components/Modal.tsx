@@ -64,8 +64,8 @@ export function Modal({
       >
         <div className="flex items-start justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold tracking-[-0.02em]">{title}</h2>
-            {subtitle && <div className="mt-1 text-[12px] leading-5 text-[var(--text-dim)]">{subtitle}</div>}
+            <h2 className="text-md font-semibold tracking-[-0.02em]">{title}</h2>
+            {subtitle && <div className="mt-1 text-sm leading-5 text-[var(--text-dim)]">{subtitle}</div>}
           </div>
           <button type="button" onClick={onClose} className="icon-action -mr-1.5 -mt-1 shrink-0" aria-label={t(lang, "close")}>
             <X size={16} />
@@ -125,7 +125,7 @@ export function NameDialog({
   return (
     <Modal open={open} title={title} onClose={onClose} width={400}>
       <form onSubmit={(event) => void submit(event)} className="grid gap-3">
-        <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+        <label className="grid gap-1.5 text-xs font-medium text-[var(--text-dim)]">
           {label}
           <input
             value={value}
@@ -135,19 +135,19 @@ export function NameDialog({
               const dot = ext ? event.target.value.length - ext.length : event.target.value.length;
               event.target.setSelectionRange(0, dot);
             }}
-            className="h-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+            className="h-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
           />
         </label>
         {error && (
-          <p role="alert" className="text-[12px] leading-5 text-[var(--danger)]">
+          <p role="alert" className="text-sm leading-5 text-[var(--danger)]">
             {error}
           </p>
         )}
         <div className="mt-1 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="h-9 rounded-lg px-3 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+          <button type="button" onClick={onClose} className="h-9 rounded-lg px-3 text-sm text-[var(--text-dim)] hover:bg-[var(--bg)]">
             {t(lang, "cancel")}
           </button>
-          <button type="submit" disabled={busy || !value.trim()} className="h-9 rounded-lg bg-[var(--accent)] px-4 text-[12px] font-semibold text-white disabled:opacity-40">
+          <button type="submit" disabled={busy || !value.trim()} className="h-9 rounded-lg bg-[var(--accent)] px-4 text-sm font-semibold text-white disabled:opacity-40">
             {t(lang, "save")}
           </button>
         </div>
@@ -195,17 +195,17 @@ export function ConfirmDialog({
 
   return (
     <Modal open={open} title={title} onClose={onClose} width={400}>
-      <div className="text-[13px] leading-6 text-[var(--text-dim)]">{body}</div>
+      <div className="text-base leading-6 text-[var(--text-dim)]">{body}</div>
       {error && (
-        <p role="alert" className="mt-3 text-[12px] leading-5 text-[var(--danger)]">
+        <p role="alert" className="mt-3 text-sm leading-5 text-[var(--danger)]">
           {error}
         </p>
       )}
       <div className="mt-5 flex justify-end gap-2">
-        <button type="button" data-autofocus onClick={onClose} className="h-9 rounded-lg px-3 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+        <button type="button" data-autofocus onClick={onClose} className="h-9 rounded-lg px-3 text-sm text-[var(--text-dim)] hover:bg-[var(--bg)]">
           {t(lang, "cancel")}
         </button>
-        <button type="button" disabled={busy} onClick={() => void confirm()} className="h-9 rounded-lg bg-[var(--danger)] px-4 text-[12px] font-semibold text-white disabled:opacity-40">
+        <button type="button" disabled={busy} onClick={() => void confirm()} className="h-9 rounded-lg bg-[var(--danger)] px-4 text-sm font-semibold text-white disabled:opacity-40">
           {confirmLabel}
         </button>
       </div>

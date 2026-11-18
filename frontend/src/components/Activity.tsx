@@ -111,7 +111,7 @@ export function ActivityIndicator() {
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={`${t(lang, "actTitle")}: ${title(lead, lang)} ${status}`}
-        className={`mr-1 inline-flex h-8 max-w-[15rem] items-center gap-1.5 rounded-full border px-2.5 text-[11px] transition-colors ${
+        className={`mr-1 inline-flex h-8 max-w-[15rem] items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors ${
           failed
             ? "border-[color-mix(in_srgb,var(--danger)_35%,var(--line))] text-[var(--danger)]"
             : "border-[var(--line)] text-[var(--text-dim)] hover:border-[var(--accent)] hover:text-[var(--text)]"
@@ -126,7 +126,7 @@ export function ActivityIndicator() {
         )}
         <span className="hidden truncate sm:inline">{title(lead, lang)}</span>
         {status && <span className="shrink-0 font-mono tabular-nums text-[var(--text)]">{status}</span>}
-        {tasks.length > 1 && <span className="shrink-0 font-mono text-[10px] text-[var(--text-dim)]">+{tasks.length - 1}</span>}
+        {tasks.length > 1 && <span className="shrink-0 font-mono text-2xs text-[var(--text-dim)]">+{tasks.length - 1}</span>}
       </button>
 
       {open &&
@@ -138,11 +138,11 @@ export function ActivityIndicator() {
             style={{ top: pos?.top ?? 0, right: pos?.right ?? 8, visibility: pos ? "visible" : "hidden" }}
             className="liquid-glass liquid-glass--chip fade-in fixed z-[60] w-[min(22rem,calc(100vw-1rem))] bg-[var(--bg-elev)] p-1.5 shadow-[var(--shadow)]"
           >
-            <p className="px-2 pb-1 pt-1 text-[11px] font-medium text-[var(--text-dim)]">{t(lang, "actTitle")}</p>
+            <p className="px-2 pb-1 pt-1 text-xs font-medium text-[var(--text-dim)]">{t(lang, "actTitle")}</p>
             <ul className="grid gap-0.5">
               {tasks.map((task) => (
                 <li key={task.key} className="rounded-lg px-2 py-2 hover:bg-[var(--bg)]/60">
-                  <div className="flex items-center gap-2 text-[12px]">
+                  <div className="flex items-center gap-2 text-sm">
                     {isRunning(task) ? (
                       <span className="spinner h-3 w-3 border-[var(--line-strong)] border-t-[var(--accent)]" />
                     ) : task.state === "error" ? (
@@ -154,15 +154,15 @@ export function ActivityIndicator() {
                     {task.state === "done" && task.jobId ? (
                       <a
                         href={jobDownloadUrl(task.jobId)}
-                        className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                        className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]"
                       >
                         <DownloadSimple size={13} /> {t(lang, "download")}
                       </a>
                     ) : isRunning(task) && task.ratio != null && !task.total ? (
-                      <span className="ml-auto font-mono text-[11px] tabular-nums text-[var(--text-dim)]">{percent(task.ratio)}</span>
+                      <span className="ml-auto font-mono text-xs tabular-nums text-[var(--text-dim)]">{percent(task.ratio)}</span>
                     ) : null}
                   </div>
-                  <p className="mt-0.5 truncate pl-5 font-mono text-[10.5px] text-[var(--text-dim)]" title={detail(task, lang)}>
+                  <p className="mt-0.5 truncate pl-5 font-mono text-2xs text-[var(--text-dim)]" title={detail(task, lang)}>
                     {detail(task, lang)}
                   </p>
                   {isRunning(task) && (
@@ -180,7 +180,7 @@ export function ActivityIndicator() {
               <Link
                 to="/jobs"
                 onClick={() => setOpen(false)}
-                className="mt-1 block rounded-lg px-2 py-1.5 text-[11.5px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                className="mt-1 block rounded-lg px-2 py-1.5 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]"
               >
                 {t(lang, "actAllJobs")}
               </Link>

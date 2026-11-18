@@ -79,11 +79,11 @@ export function ExportPanel({
     }
   }
 
-  const selectClass = "h-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-[13px] text-[var(--text)] transition-colors hover:border-[var(--line-strong)] focus:border-[var(--accent)]";
+  const selectClass = "h-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base text-[var(--text)] transition-colors hover:border-[var(--line-strong)] focus:border-[var(--accent)]";
 
   return (
     <div className="flex flex-col gap-4">
-      <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+      <label className="grid gap-1.5 text-xs font-medium text-[var(--text-dim)]">
         {t(lang, "format")}
         <select value={format} onChange={(event) => setFormat(event.target.value as typeof format)} className={selectClass}>
           <option value="ome-tiff">OME-TIFF</option>
@@ -96,14 +96,14 @@ export function ExportPanel({
       <Guide title="export" body={format === "ome-tiff" ? "omeHint" : format === "tiff" ? "tiffHint" : "displayWarn"} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1">
-        <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+        <label className="grid gap-1.5 text-xs font-medium text-[var(--text-dim)]">
           {t(lang, "scope")}
           <select value={scope} onChange={(event) => setScope(event.target.value as typeof scope)} className={selectClass}>
             <option value="current">{t(lang, "currentPlane")}</option>
             <option value="all">{t(lang, "allPlanes")}</option>
           </select>
         </label>
-        <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+        <label className="grid gap-1.5 text-xs font-medium text-[var(--text-dim)]">
           {t(lang, "chMode")}
           <select value={channelsMode} onChange={(event) => setChannelsMode(event.target.value as typeof channelsMode)} className={selectClass}>
             <option value="composite">{t(lang, display ? "composite" : "multiChannelFile")}</option>
@@ -114,26 +114,26 @@ export function ExportPanel({
       </div>
 
       <div className="grid gap-2 rounded-xl bg-[var(--bg)] p-3">
-        <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
+        <label className="flex cursor-pointer items-start gap-2.5 text-sm leading-5">
           <input type="checkbox" checked={includeMetadata} onChange={(event) => setIncludeMetadata(event.target.checked)} className="mt-0.5" />
           {t(lang, "includeMeta")}
         </label>
-        <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
+        <label className="flex cursor-pointer items-start gap-2.5 text-sm leading-5">
           <input type="checkbox" checked={scaleBar} onChange={(event) => setScaleBar(event.target.checked)} className="mt-0.5" />
           {t(lang, "scaleBar")}
         </label>
-        <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
+        <label className="flex cursor-pointer items-start gap-2.5 text-sm leading-5">
           <input type="checkbox" checked={separateScaleBar} onChange={(event) => setSeparateScaleBar(event.target.checked)} className="mt-0.5" />
           {t(lang, "separateScaleBar")}
         </label>
-        <label className="flex cursor-pointer items-start gap-2.5 text-[12px] leading-5">
+        <label className="flex cursor-pointer items-start gap-2.5 text-sm leading-5">
           <input type="checkbox" checked={flatStructure} onChange={(event) => setFlatStructure(event.target.checked)} className="mt-0.5" />
           {t(lang, "flatStructure")}
         </label>
       </div>
 
       {format === "jpeg" && (
-        <label className="grid gap-2 overflow-hidden text-[11px] font-medium text-[var(--text-dim)]">
+        <label className="grid gap-2 overflow-hidden text-xs font-medium text-[var(--text-dim)]">
           <span className="flex items-center justify-between">
             {t(lang, "jpegQ")}
             <span className="font-mono tabular-nums text-[var(--text)]">{jpegQuality}</span>
@@ -143,7 +143,7 @@ export function ExportPanel({
       )}
 
       {error && (
-        <p role="alert" className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]">
+        <p role="alert" className="flex items-start gap-1.5 text-sm leading-5 text-[var(--danger)]">
           <WarningCircle size={15} className="mt-0.5 shrink-0" />
           {error}
         </p>
@@ -153,7 +153,7 @@ export function ExportPanel({
         type="button"
         disabled={busy || !count}
         onClick={() => void run()}
-        className="group inline-flex min-h-11 items-center justify-between rounded-xl bg-[var(--accent)] px-4 text-[13px] font-semibold text-white shadow-[0_10px_24px_var(--accent-glow)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] hover:shadow-[0_14px_30px_var(--accent-glow)] active:scale-[0.98] disabled:translate-y-0 disabled:opacity-40"
+        className="group inline-flex min-h-11 items-center justify-between rounded-xl bg-[var(--accent)] px-4 text-base font-semibold text-white shadow-[0_10px_24px_var(--accent-glow)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] hover:shadow-[0_14px_30px_var(--accent-glow)] active:scale-[0.98] disabled:translate-y-0 disabled:opacity-40"
       >
         <span className="inline-flex items-center gap-2">
           {busy && (
@@ -161,7 +161,7 @@ export function ExportPanel({
           )}
           {busy ? t(lang, "jobRunning") : t(lang, "startExport")}
         </span>
-        <span className="inline-flex items-center gap-2 font-mono text-[10px] font-normal text-white/72">
+        <span className="inline-flex items-center gap-2 font-mono text-2xs font-normal text-white/72">
           {count} {t(lang, "nFiles")}
           <ArrowRight size={13} className="transition-transform duration-300 group-hover:translate-x-0.5" />
         </span>

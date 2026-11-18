@@ -69,7 +69,7 @@ export function SlideChannels({
     applyDisplay(display.map((d, i) => (i === index ? { ...d, ...change } : d)));
   }
 
-  const headerButton = "rounded-lg px-2 py-1 text-[11px] text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]";
+  const headerButton = "rounded-lg px-2 py-1 text-xs text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]";
 
   return (
     <div className="flex flex-col gap-1">
@@ -90,7 +90,7 @@ export function SlideChannels({
           }
           aria-pressed={channelLocked}
           title={t(lang, "lockChannelsHint")}
-          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition-colors ${
+          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
             channelLocked ? "bg-[var(--accent-soft)] text-[var(--accent)]" : "text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
           }`}
         >
@@ -115,7 +115,7 @@ export function SlideChannels({
                 type="button"
                 onClick={() => patch(i, { visible: !d.visible })}
                 aria-pressed={d.visible}
-                className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left font-mono text-[11.5px] transition-opacity hover:bg-[var(--bg)] ${d.visible ? "opacity-100" : "opacity-40"}`}
+                className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left font-mono text-xs transition-opacity hover:bg-[var(--bg)] ${d.visible ? "opacity-100" : "opacity-40"}`}
               >
                 <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: rgbCss(d.color) }} />
                 <span className="min-w-0 flex-1 truncate" title={name}>
@@ -137,7 +137,7 @@ export function SlideChannels({
 
             {expanded && (
               <div className="overflow-hidden">
-                <div className="grid gap-2 px-2 pb-2.5 pt-1 text-[10.5px] text-[var(--text-dim)]">
+                <div className="grid gap-2 px-2 pb-2.5 pt-1 text-2xs text-[var(--text-dim)]">
                   <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t(lang, "channelColor")}>
                     {SWATCHES.map((color) => (
                       <button
@@ -206,7 +206,7 @@ export function SlideChannels({
                   <button
                     type="button"
                     onClick={() => applyDisplay(display.map((x, j) => ({ ...x, visible: j === i })))}
-                    className="justify-self-start rounded-md px-1.5 py-1 text-[11px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                    className="justify-self-start rounded-md px-1.5 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]"
                   >
                     {t(lang, "solo")}
                   </button>
@@ -216,7 +216,7 @@ export function SlideChannels({
           </div>
         );
       })}
-      <p className="pt-1 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, "slideChannelHint")}</p>
+      <p className="pt-1 text-xs leading-4 text-[var(--text-dim)]">{t(lang, "slideChannelHint")}</p>
     </div>
   );
 }

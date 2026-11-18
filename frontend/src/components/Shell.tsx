@@ -72,7 +72,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
           <Link to="/" className="group flex items-center gap-2.5 text-[var(--accent)]" aria-label={t(lang, "app")}>
             <Mark />
             <span className="whitespace-nowrap font-semibold tracking-[-0.025em] text-[var(--text)]">{t(lang, "app")}</span>
-            <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
+            <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-2xs font-medium text-[var(--accent)]">
               v{version}
             </span>
           </Link>
@@ -95,7 +95,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
             {user && (
               <Link
                 to="/settings"
-                className="mr-1 hidden max-w-[11rem] items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)]/60 px-2.5 py-1 text-[11px] text-[var(--text-dim)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text)] sm:inline-flex"
+                className="mr-1 hidden max-w-[11rem] items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)]/60 px-2.5 py-1 text-xs text-[var(--text-dim)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text)] sm:inline-flex"
                 title={t(lang, "accountTitle")}
               >
                 {user.role === "admin" && <ShieldCheck size={14} weight="fill" className="shrink-0 text-[var(--accent)]" />}
@@ -110,7 +110,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
               title={t(lang, "switchLanguage")}
             >
               <Translate size={16} />
-              <span className="text-[12px]">{t(lang, "lang")}</span>
+              <span className="text-sm">{t(lang, "lang")}</span>
             </button>
             <button
               type="button"
@@ -140,7 +140,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
       </div>
 
       {!dense && (
-        <footer className="px-6 py-9 text-center text-[12px] leading-5 text-[var(--text-dim)]">
+        <footer className="px-6 py-9 text-center text-sm leading-5 text-[var(--text-dim)]">
           {t(lang, "legal")}
         </footer>
       )}
@@ -151,7 +151,7 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
             {({ isActive }) => (
               <>
                 <Icon size={18} weight={isActive ? "fill" : "regular"} />
-                <span className="text-[10px]">{t(lang, key)}</span>
+                <span className="text-2xs">{t(lang, key)}</span>
               </>
             )}
           </NavLink>

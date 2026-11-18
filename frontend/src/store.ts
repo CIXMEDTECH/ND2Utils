@@ -1,11 +1,16 @@
 import { create } from "zustand";
-import type { AccessUser, FileDetail, FileSummary, JobInfo, Lang, Theme } from "./lib/types";
+import type { AccessUser, FileDetail, FileSummary, JobInfo, Lang, TextSize, Theme } from "./lib/types";
 import { readPref, writePref } from "./lib/storage";
 import { listJobs, listWorkspace, logout as apiLogout, me, setUnauthorizedHandler } from "./lib/api";
 import { configure as configureCache, signedOut as clearCache } from "./lib/previewCache";
 
 function systemDark(): boolean {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+}
+
+function applyTextSize(size: TextSize) {
+  if (size === "normal") delete document.documentElement.dataset.textSize;
+  else document.documentElement.dataset.textSize = size;
 }
 
 function applyTheme(theme: Theme) {
@@ -21,6 +26,8 @@ export interface LockedChannelsState {
 export interface AppState {
   lang: Lang;
   theme: Theme;
+  /** Interface text size (scales the rem-based type scale). */
+  textSize: TextSize;
   /** false until /api/auth/me has answered. */
   authChecked: boolean;
   user: AccessUser | null;
@@ -44,6 +51,7 @@ export interface AppState {
   lockedChannels: LockedChannelsState;
   setLang: (lang: Lang) => void;
   setTheme: (theme: Theme) => void;
+  setTextSize: (size: TextSize) => void;
   checkAuth: () => Promise<void>;
   setUser: (user: AccessUser | null) => void;
   signOut: () => Promise<void>;
@@ -62,6 +70,10 @@ export interface AppState {
 
 const savedLang = (readPref("nd2utils.lang") as Lang | null) ?? "zh";
 const savedTheme = (readPref("nd2utils.theme") as Theme | null) ?? "system";
+const savedTextSize: TextSize = (() => {
+  const raw = readPref("nd2utils.textSize");
+  return raw === "large" || raw === "xlarge" ? raw : "normal";
+})();
 const savedChannelLocked = readPref("nd2utils.channelLocked") === "1";
 const savedLockedChannels: LockedChannelsState = (() => {
   try {
@@ -77,6 +89,7 @@ const savedLockedChannels: LockedChannelsState = (() => {
   }
 })();
 applyTheme(savedTheme);
+applyTextSize(savedTextSize);
 
 const emptyWorkspace = {
   files: [],
@@ -122,6 +135,7 @@ function shareFiles(prev: FileSummary[], next: FileSummary[]): FileSummary[] {
 export const useApp = create<AppState>((set, get) => ({
   lang: savedLang === "en" ? "en" : "zh",
   theme: savedTheme,
+  textSize: savedTextSize,
   authChecked: false,
   user: null,
   sessionExpired: false,
@@ -137,6 +151,11 @@ export const useApp = create<AppState>((set, get) => ({
     writePref("nd2utils.theme", theme);
     applyTheme(theme);
     set({ theme });
+  },
+  setTextSize: (textSize) => {
+    writePref("nd2utils.textSize", textSize);
+    applyTextSize(textSize);
+    set({ textSize });
   },
   checkAuth: async () => {
     try {

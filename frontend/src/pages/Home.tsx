@@ -21,13 +21,13 @@ export function Home() {
       <section className="home-hero relative overflow-hidden">
         <div className="mx-auto grid min-h-[calc(100dvh-4rem)] max-w-[1280px] grid-cols-1 items-center gap-12 px-5 py-14 lg:grid-cols-[0.88fr_1.12fr] lg:gap-20 lg:py-20">
           <div className="relative z-[1]">
-            <p className="mb-5 font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--accent)]">
+            <p className="mb-5 font-mono text-xs font-medium uppercase tracking-[0.18em] text-[var(--accent)]">
               {t(lang, "homeEyebrow")}
             </p>
             <h1 className="max-w-[12ch] text-[clamp(2.8rem,6vw,5.6rem)] font-semibold leading-[0.98] tracking-[-0.055em] text-balance">
               {t(lang, "tagline")}
             </h1>
-            <p className="mt-7 max-w-[48ch] text-[15px] leading-7 text-[var(--text-dim)] text-pretty md:text-[16px]">
+            <p className="mt-7 max-w-[48ch] text-md leading-7 text-[var(--text-dim)] text-pretty md:text-md">
               {t(lang, "sub")}
             </p>
             <div className="mt-9 flex flex-wrap items-center gap-3">
@@ -59,10 +59,10 @@ export function Home() {
               <Glass shape="card" className="h-full p-6">
                 <div className="flex items-center justify-between">
                   <Icon size={20} weight="duotone" className="text-[var(--accent)]" />
-                  <span className="font-mono text-[11px] text-[var(--text-dim)]">0{i + 1}</span>
+                  <span className="font-mono text-xs text-[var(--text-dim)]">0{i + 1}</span>
                 </div>
                 <h2 className="mt-8 text-lg font-semibold tracking-[-0.02em]">{t(lang, k)}</h2>
-                <p className="mt-3 max-w-[34ch] text-[13px] leading-6 text-[var(--text-dim)] text-pretty">
+                <p className="mt-3 max-w-[34ch] text-base leading-6 text-[var(--text-dim)] text-pretty">
                   {t(lang, b)}
                 </p>
               </Glass>

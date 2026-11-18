@@ -30,7 +30,7 @@ export function UploadBar({ inputId }: { inputId: string }) {
   }
 
   const button =
-    "inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40";
+    "inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-sm font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40";
 
   return (
     <div
@@ -88,12 +88,12 @@ export function UploadBar({ inputId }: { inputId: string }) {
           <FolderSimplePlus size={14} /> {t(lang, "chooseFolder")}
         </button>
       </div>
-      <p className="mt-1.5 truncate px-0.5 text-[10.5px] text-[var(--text-dim)]" title={`/${currentFolder}`}>
+      <p className="mt-1.5 truncate px-0.5 text-2xs text-[var(--text-dim)]" title={`/${currentFolder}`}>
         {over ? t(lang, "dropActive") : `${t(lang, "dropShort")} · ${t(lang, "uploadTarget")} /${currentFolder}`}
       </p>
       {progress && (
         <div className="mt-1.5" role="status">
-          <p className="truncate font-mono text-[10px] text-[var(--accent)]">{progress.label}</p>
+          <p className="truncate font-mono text-2xs text-[var(--accent)]">{progress.label}</p>
           <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--line)]">
             <div
               className={`h-full rounded-full bg-[var(--accent)] transition-[width] duration-200 ${progress.ratio == null ? "progress-indeterminate w-1/3" : ""}`}
@@ -103,7 +103,7 @@ export function UploadBar({ inputId }: { inputId: string }) {
         </div>
       )}
       {!progress && error && (
-        <p role="alert" className="mt-1.5 flex items-start gap-1 text-[11px] leading-4 text-[var(--danger)]">
+        <p role="alert" className="mt-1.5 flex items-start gap-1 text-xs leading-4 text-[var(--danger)]">
           <WarningCircle size={13} className="mt-px shrink-0" />
           <span className="min-w-0 flex-1">{error}</span>
           <button type="button" onClick={clearError} className="shrink-0 rounded p-0.5 hover:bg-[var(--bg)]" aria-label={t(lang, "close")}>

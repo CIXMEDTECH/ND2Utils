@@ -35,13 +35,13 @@ export function ChannelToggles({
     return (
       <div className="space-y-1.5">
         <div className="flex items-center justify-between gap-2 pb-0.5">
-          <span className="text-[11px] text-[var(--text-dim)]">{t(lang, "channelPreview")}</span>
+          <span className="text-xs text-[var(--text-dim)]">{t(lang, "channelPreview")}</span>
           <button
             type="button"
             onClick={() => toggleChannelLock(channels, visible)}
             aria-pressed={channelLocked}
             title={lockHint}
-            className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-all ${
+            className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition-all ${
               channelLocked
                 ? "border-[var(--accent)]/40 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs"
                 : "border-[var(--line)] bg-[var(--bg)]/60 text-[var(--text-dim)] hover:border-[var(--line-strong)] hover:text-[var(--text)]"
@@ -60,7 +60,7 @@ export function ChannelToggles({
                 type="button"
                 onClick={() => onToggle(channel.index)}
                 aria-pressed={on}
-                className={`flex w-full cursor-pointer items-center gap-2.5 rounded-lg border px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-all ${
+                className={`flex w-full cursor-pointer items-center gap-2.5 rounded-lg border px-2.5 py-1.5 text-left font-mono text-xs transition-all ${
                   on
                     ? "border-[var(--line)] bg-[var(--bg)]/70 text-[var(--text)] shadow-2xs hover:border-[var(--line-strong)]"
                     : "border-transparent bg-transparent text-[var(--text-dim)] opacity-50 hover:bg-[var(--bg)]/40 hover:opacity-80"
@@ -76,7 +76,7 @@ export function ChannelToggles({
                 <span className="min-w-0 flex-1 truncate font-medium">
                   {channel.name}
                   {channel.excitation_nm ? (
-                    <span className="ml-1.5 text-[10px] font-normal text-[var(--text-dim)]">
+                    <span className="ml-1.5 text-2xs font-normal text-[var(--text-dim)]">
                       {channel.excitation_nm}/{channel.emission_nm}nm
                     </span>
                   ) : (
@@ -103,7 +103,7 @@ export function ChannelToggles({
             onClick={() => onToggle(channel.index)}
             aria-pressed={on}
             title={t(lang, "channelPreview")}
-            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-[11px] font-medium transition-all duration-150 ${
+            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs font-medium transition-all duration-150 ${
               on
                 ? "bg-white/15 text-white shadow-2xs ring-1 ring-white/15"
                 : "text-white/40 hover:bg-white/8 hover:text-white/75"
@@ -127,7 +127,7 @@ export function ChannelToggles({
         onClick={() => toggleChannelLock(channels, visible)}
         aria-pressed={channelLocked}
         title={lockHint}
-        className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition-all duration-150 ${
+        className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition-all duration-150 ${
           channelLocked
             ? "bg-sky-400/20 text-sky-300 ring-1 ring-sky-400/40"
             : "text-white/55 hover:bg-white/10 hover:text-white"

@@ -250,7 +250,7 @@ export function Advanced() {
   if (!id) {
     return (
       <Shell dense>
-        <div className="p-10 text-[13px] text-[var(--text-dim)]">{t(lang, "emptyFiles")}</div>
+        <div className="p-10 text-base text-[var(--text-dim)]">{t(lang, "emptyFiles")}</div>
       </Shell>
     );
   }
@@ -260,7 +260,7 @@ export function Advanced() {
       <div className="flex min-h-[calc(100dvh-4rem)] flex-col">
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
           <Glass as="aside" shape="panel" className="overflow-auto border-b p-3 lg:border-b-0 lg:border-r" data-tour="lut">
-            <div className="mb-2 flex items-center justify-between text-[12px] font-medium">
+            <div className="mb-2 flex items-center justify-between text-sm font-medium">
               <span>{t(lang, "lutTitle")}</span>
               <div className="flex items-center gap-1">
                 {packed && packed.channels.length > 0 && (
@@ -274,7 +274,7 @@ export function Advanced() {
                     }
                     aria-pressed={channelLocked}
                     title={t(lang, "lockChannelsHint")}
-                    className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
+                    className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs transition-colors ${
                       channelLocked
                         ? "bg-amber-400/20 text-amber-500 ring-1 ring-inset ring-amber-400/40"
                         : "text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
@@ -311,7 +311,7 @@ export function Advanced() {
             <div className="mt-3 flex flex-col gap-3" data-tour="channels">
               {luts.map((lut, i) => (
                 <div key={i} className="liquid-glass liquid-glass--chip p-2.5">
-                  <label className="flex items-center gap-2 text-[12px]">
+                  <label className="flex items-center gap-2 text-sm">
                     <input
                       type="checkbox"
                       checked={lut.visible}
@@ -331,7 +331,7 @@ export function Advanced() {
                     <span className="h-2.5 w-2.5 rounded-full" style={{ background: rgbCss(lut.color) }} />
                     <span className="font-mono">{packed?.channels[i]?.name ?? i}</span>
                   </label>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[var(--text-dim)]">
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-[var(--text-dim)]">
                     <label>
                       {t(lang, "min")}
                       <input
@@ -363,7 +363,7 @@ export function Advanced() {
                       />
                     </label>
                   </div>
-                  <label className="mt-1 block text-[11px] text-[var(--text-dim)]">
+                  <label className="mt-1 block text-xs text-[var(--text-dim)]">
                     γ {lut.gamma.toFixed(2)}
                     <input
                       type="range"
@@ -385,7 +385,7 @@ export function Advanced() {
                 </div>
               ))}
             </div>
-            <label className="mt-2 flex items-center gap-2 text-[12px]">
+            <label className="mt-2 flex items-center gap-2 text-sm">
               <input type="checkbox" checked={histLog} onChange={(e) => setHistLog(e.target.checked)} />
               {t(lang, "log")}
             </label>
@@ -411,7 +411,7 @@ export function Advanced() {
                     setResult(null);
                   }}
                   aria-pressed={tool === k}
-                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${
+                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
                     tool === k ? "bg-white text-black shadow-sm" : "text-white/65 hover:bg-white/10 hover:text-white"
                   }`}
                 >
@@ -423,14 +423,14 @@ export function Advanced() {
                 type="button"
                 onClick={() => void runMip("max")}
                 aria-pressed={view === "mip"}
-                className="rounded-lg px-2.5 py-1.5 text-[11px] text-white/65 transition-colors hover:bg-white/10 hover:text-white"
+                className="rounded-lg px-2.5 py-1.5 text-xs text-white/65 transition-colors hover:bg-white/10 hover:text-white"
               >
                 {t(lang, "mip")}
               </button>
               <button
                 type="button"
                 onClick={() => void runMip("min")}
-                className="rounded-lg px-2.5 py-1.5 text-[11px] text-white/65 transition-colors hover:bg-white/10 hover:text-white"
+                className="rounded-lg px-2.5 py-1.5 text-xs text-white/65 transition-colors hover:bg-white/10 hover:text-white"
               >
                 {t(lang, "minip")}
               </button>
@@ -442,21 +442,21 @@ export function Advanced() {
                   setError(null);
                 }}
                 aria-pressed={view === "overlay"}
-                className={`rounded-lg px-2.5 py-1.5 text-[11px] transition-colors ${view === "overlay" ? "bg-white text-black" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
+                className={`rounded-lg px-2.5 py-1.5 text-xs transition-colors ${view === "overlay" ? "bg-white text-black" : "text-white/65 hover:bg-white/10 hover:text-white"}`}
               >
                 {t(lang, "overlay")}
               </button>
               <button
                 type="button"
                 onClick={() => setTour(0)}
-                className="ml-auto rounded-lg px-2.5 py-1.5 text-[11px] text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                className="ml-auto rounded-lg px-2.5 py-1.5 text-xs text-white/60 transition-colors hover:bg-white/10 hover:text-white"
               >
                 {t(lang, "help")}
               </button>
               <button
                 type="button"
                 onClick={() => nav("/workspace")}
-                className="rounded-lg px-2.5 py-1.5 text-[11px] text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                className="rounded-lg px-2.5 py-1.5 text-xs text-white/60 transition-colors hover:bg-white/10 hover:text-white"
               >
                 {t(lang, "back")}
               </button>
@@ -476,7 +476,7 @@ export function Advanced() {
               )}
             </div>
             {loading && (
-              <div role="status" className="pointer-events-none absolute right-3 top-14 flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-2 font-mono text-[11px] text-white/65">
+              <div role="status" className="pointer-events-none absolute right-3 top-14 flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-2 font-mono text-xs text-white/65">
                 <span className="spinner h-3 w-3 border-white/25 border-t-[var(--accent)]" />
                 {t(lang, "previewLoading")}
               </div>
@@ -484,13 +484,13 @@ export function Advanced() {
             {error && (
               <p
                 role="alert"
-                className="absolute bottom-3 left-3 max-w-[calc(100%-1.5rem)] rounded-lg border border-red-300/15 bg-black/80 px-3 py-2 text-[12px] leading-5 text-red-100 shadow-lg"
+                className="absolute bottom-3 left-3 max-w-[calc(100%-1.5rem)] rounded-lg border border-red-300/15 bg-black/80 px-3 py-2 text-sm leading-5 text-red-100 shadow-lg"
               >
                 {error}
               </p>
             )}
             {file && (
-              <p className="absolute right-3 top-12 font-mono text-[11px] text-white/70">
+              <p className="absolute right-3 top-12 font-mono text-xs text-white/70">
                 {file.name}{file.objective ? ` · ${file.objective}` : ""}
               </p>
             )}
@@ -502,12 +502,12 @@ export function Advanced() {
               <Guide title="mip" body="mipGuide" />
             </div>
             {nZ <= 1 && (
-              <p className="mt-3 rounded-lg bg-[var(--bg)] px-3 py-2 text-[12px] leading-5 text-[var(--text-dim)]">
+              <p className="mt-3 rounded-lg bg-[var(--bg)] px-3 py-2 text-sm leading-5 text-[var(--text-dim)]">
                 {t(lang, nT <= 1 ? "noProjection" : "noZ")}
               </p>
             )}
             {probe && packed && (
-              <div className="mt-3 font-mono text-[12px]">
+              <div className="mt-3 font-mono text-sm">
                 <p>
                   {t(lang, "probe")} ({probe.x}, {probe.y})
                 </p>
@@ -519,7 +519,7 @@ export function Advanced() {
               </div>
             )}
             {result && (
-              <div className="mt-4 text-[12px]">
+              <div className="mt-4 text-sm">
                 <p className="font-medium">{t(lang, "measure")}</p>
                 {result.length_um != null && (
                   <p>
@@ -562,7 +562,7 @@ export function Advanced() {
         <div className="px-3 pb-3 pt-2" data-tour="nd">
           <Glass shape="island" className="flex flex-wrap items-center gap-4 px-4 py-2">
           {nT > 1 && (
-            <div className="flex items-center gap-2 font-mono text-[12px]">
+            <div className="flex items-center gap-2 font-mono text-sm">
               <label className="flex items-center gap-2">
                 T {tIdx + 1}/{nT}
                 <input type="range" min={0} max={nT - 1} value={tIdx} onChange={(e) => setT(Number(e.target.value))} />
@@ -578,19 +578,19 @@ export function Advanced() {
             </div>
           )}
           {nZ > 1 && (
-            <label className="flex items-center gap-2 font-mono text-[12px]">
+            <label className="flex items-center gap-2 font-mono text-sm">
               Z {zIdx + 1}/{nZ}
               <input type="range" min={0} max={nZ - 1} value={zIdx} onChange={(e) => setZ(Number(e.target.value))} />
             </label>
           )}
           {nP > 1 && (
-            <label className="flex items-center gap-2 font-mono text-[12px]">
+            <label className="flex items-center gap-2 font-mono text-sm">
               XY {pIdx + 1}/{nP}
               <input type="range" min={0} max={nP - 1} value={pIdx} onChange={(e) => setP(Number(e.target.value))} />
             </label>
           )}
           {nT <= 1 && nZ <= 1 && nP <= 1 && (
-            <span className="text-[12px] text-[var(--text-dim)]">{t(lang, "ndBar")}: XY · C</span>
+            <span className="text-sm text-[var(--text-dim)]">{t(lang, "ndBar")}: XY · C</span>
           )}
           </Glass>
         </div>
@@ -614,8 +614,8 @@ export function Advanced() {
                 />
               ))}
             </div>
-            <p className="min-h-14 text-[14px] leading-6">{tourCopy[tour]}</p>
-            <div className="mt-5 flex items-center justify-between text-[13px]">
+            <p className="min-h-14 text-md leading-6">{tourCopy[tour]}</p>
+            <div className="mt-5 flex items-center justify-between text-base">
               <button
                 type="button"
                 className="rounded-lg px-2 py-1.5 text-[var(--text-dim)] hover:bg-[var(--bg)] hover:text-[var(--text)]"

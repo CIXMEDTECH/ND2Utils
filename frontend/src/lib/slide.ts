@@ -173,7 +173,7 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, width: number, heigh
   const x0 = x1 - px;
   const y = height - pad;
   ctx.save();
-  ctx.font = `${12 * k}px "Geist Mono Variable", ui-monospace, monospace`;
+  ctx.font = `${12 * k}px "JetBrains Mono Variable", "Noto Sans SC Variable", ui-monospace, monospace`;
   ctx.textBaseline = "bottom";
   const label = formatLength(um);
   const textW = ctx.measureText(label).width;
@@ -1293,7 +1293,7 @@ export class SlideViewer {
     const k = opts.uiScale ?? Math.max(1, Math.min(outW, outH) / 700);
     if (opts.legend && channels.length) {
       ctx.save();
-      ctx.font = `${12 * k}px "Geist Variable", system-ui, sans-serif`;
+      ctx.font = `${12 * k}px "Inter Variable", "Noto Sans SC Variable", system-ui, sans-serif`;
       ctx.textBaseline = "middle";
       const row = 20 * k;
       const width = Math.max(...channels.map((c) => ctx.measureText(opts.names[c] ?? `C${c + 1}`).width)) + 34 * k;

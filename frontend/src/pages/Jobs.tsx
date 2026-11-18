@@ -46,14 +46,14 @@ export function Jobs() {
       <main className="mx-auto max-w-4xl px-5 py-10 sm:py-14">
         <div className="flex items-end justify-between gap-4 border-b border-[var(--line)] pb-6">
           <div>
-            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "jobsEyebrow")}</p>
+            <p className="font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "jobsEyebrow")}</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{t(lang, "jobs")}</h1>
           </div>
-          <span className="font-mono text-[11px] text-[var(--text-dim)]">{jobs.length}</span>
+          <span className="font-mono text-xs text-[var(--text-dim)]">{jobs.length}</span>
         </div>
 
         {error && (
-          <p role="alert" className="mt-5 text-[13px] text-[var(--danger)]">
+          <p role="alert" className="mt-5 text-base text-[var(--danger)]">
             {error}
           </p>
         )}
@@ -63,7 +63,7 @@ export function Jobs() {
             <span className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
               <ArrowDown size={24} weight="duotone" />
             </span>
-            <p className="max-w-sm text-[14px] leading-6 text-[var(--text-dim)]">{t(lang, "noJobs")}</p>
+            <p className="max-w-sm text-md leading-6 text-[var(--text-dim)]">{t(lang, "noJobs")}</p>
             <Link to="/workspace" className="text-action mt-4">
               {t(lang, "goWorkspace")}
               <ArrowRight size={14} />
@@ -81,19 +81,19 @@ export function Jobs() {
 
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <p className="font-mono text-[12px] font-medium uppercase tracking-wide">
+                    <p className="font-mono text-sm font-medium uppercase tracking-wide">
                       {job.format ?? "export"} · {job.file_ids.length} {t(lang, "nFiles")}
                     </p>
-                    <time className="font-mono text-[10px] text-[var(--text-dim)]">
+                    <time className="font-mono text-2xs text-[var(--text-dim)]">
                       {dateFormatter.format(new Date(job.created_at * 1000))}
                     </time>
                   </div>
                   {(job.download_name || job.label) && (
-                    <p className="mt-1 truncate font-mono text-[11px] text-[var(--text)]" title={job.download_name ?? job.label ?? undefined}>
+                    <p className="mt-1 truncate font-mono text-xs text-[var(--text)]" title={job.download_name ?? job.label ?? undefined}>
                       {job.download_name ?? `/${job.label}`}
                     </p>
                   )}
-                  <p className={`mt-1 text-[12px] ${job.status === "error" ? "text-[var(--danger)]" : "text-[var(--text-dim)]"}`}>
+                  <p className={`mt-1 text-sm ${job.status === "error" ? "text-[var(--danger)]" : "text-[var(--text-dim)]"}`}>
                     {job.status === "error" ? t(lang, "exportFailedHint") : t(lang, statusKey[job.status])}
                     {job.status === "error" && job.error ? ` (${job.error})` : ""}
                   </p>
@@ -108,7 +108,7 @@ export function Jobs() {
                 {job.status === "done" && (
                   <a
                     href={jobDownloadUrl(job.id)}
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[12px] font-medium text-white transition-colors hover:bg-[var(--accent-strong)]"
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-sm font-medium text-white transition-colors hover:bg-[var(--accent-strong)]"
                   >
                     <ArrowDown size={14} />
                     {t(lang, "download")}

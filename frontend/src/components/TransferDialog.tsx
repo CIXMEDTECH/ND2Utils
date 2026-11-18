@@ -21,7 +21,7 @@ interface Workspace {
 }
 
 const fieldClass =
-  "h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 text-[12.5px] text-[var(--text)] focus:border-[var(--accent)] focus:outline-none";
+  "h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 text-sm text-[var(--text)] focus:border-[var(--accent)] focus:outline-none";
 
 function codeName(code: AccessCode, lang: "zh" | "en") {
   const label = code.label || code.code;
@@ -87,10 +87,10 @@ function SelectTree({
             ) : (
               <Folder size={15} weight="duotone" className="shrink-0 text-[var(--accent)]" />
             )}
-            <span className={`truncate text-[12.5px] ${isRoot ? "font-semibold" : "font-medium"}`}>
+            <span className={`truncate text-sm ${isRoot ? "font-semibold" : "font-medium"}`}>
               {isRoot ? t(lang, "workspaceRoot") : node.name}
             </span>
-            <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-dim)]">{node.total}</span>
+            <span className="ml-auto shrink-0 font-mono text-2xs text-[var(--text-dim)]">{node.total}</span>
           </label>
         </div>
         {isOpen && (
@@ -110,8 +110,8 @@ function SelectTree({
                       disabled={viaFolder}
                       onChange={() => onToggleFile(file.id)}
                     />
-                    <span className="min-w-0 flex-1 truncate text-[12px]">{file.name}</span>
-                    <span className="shrink-0 font-mono text-[9.5px] text-[var(--text-dim)]">{formatBytes(file.size_bytes, lang)}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm">{file.name}</span>
+                    <span className="shrink-0 font-mono text-2xs text-[var(--text-dim)]">{formatBytes(file.size_bytes, lang)}</span>
                   </label>
                 </li>
               );
@@ -247,7 +247,7 @@ export function TransferDialog({
     }
   }
 
-  const label = "grid gap-1 text-[11px] font-medium text-[var(--text-dim)]";
+  const label = "grid gap-1 text-xs font-medium text-[var(--text-dim)]";
 
   return (
     <Modal open={open} title={t(lang, "transferTitle")} subtitle={t(lang, "transferIntro")} onClose={onClose} width={620}>
@@ -264,7 +264,7 @@ export function TransferDialog({
         </label>
 
         <div>
-          <p className="mb-1 text-[11px] font-medium text-[var(--text-dim)]">{t(lang, "transferPick")}</p>
+          <p className="mb-1 text-xs font-medium text-[var(--text-dim)]">{t(lang, "transferPick")}</p>
           <div className="max-h-[38dvh] min-h-24 overflow-auto rounded-lg border border-[var(--line)] bg-[var(--bg)]/40">
             {sourceWs ? (
               <SelectTree
@@ -278,7 +278,7 @@ export function TransferDialog({
               <div className="m-2 h-20 animate-pulse rounded-md bg-[var(--bg)]" aria-hidden />
             )}
           </div>
-          <p className="mt-1 font-mono text-[10.5px] text-[var(--text-dim)]">
+          <p className="mt-1 font-mono text-2xs text-[var(--text-dim)]">
             {t(lang, "selected")} {selectedCount} {t(lang, "nFiles")}
           </p>
         </div>
@@ -307,7 +307,7 @@ export function TransferDialog({
               {targetWs?.folders.map((folder) => <option key={folder} value={folder} />)}
             </datalist>
           </label>
-          <p className="-mt-1.5 text-[11px] leading-4 text-[var(--text-dim)] sm:col-span-2">{t(lang, "targetFolderHint")}</p>
+          <p className="-mt-1.5 text-xs leading-4 text-[var(--text-dim)] sm:col-span-2">{t(lang, "targetFolderHint")}</p>
 
           <div className={label}>
             {t(lang, "transferMode")}
@@ -318,7 +318,7 @@ export function TransferDialog({
                   type="button"
                   aria-pressed={mode === value}
                   onClick={() => setMode(value)}
-                  className={`h-7 rounded-md text-[11.5px] transition-colors ${mode === value ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
+                  className={`h-7 rounded-md text-xs transition-colors ${mode === value ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
                 >
                   {t(lang, value === "copy" ? "modeCopy" : "modeMove")}
                 </button>
@@ -334,29 +334,29 @@ export function TransferDialog({
           </label>
         </div>
 
-        {mode === "move" && <p className="text-[11.5px] leading-5 text-[var(--text-dim)]">{t(lang, "moveHint")}</p>}
+        {mode === "move" && <p className="text-xs leading-5 text-[var(--text-dim)]">{t(lang, "moveHint")}</p>}
 
         {error && (
-          <p role="alert" className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]">
+          <p role="alert" className="flex items-start gap-1.5 text-sm leading-5 text-[var(--danger)]">
             <WarningCircle size={15} className="mt-0.5 shrink-0" />
             {error}
           </p>
         )}
         {result && (
-          <p role="status" className="rounded-lg bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--ok)]">
+          <p role="status" className="rounded-lg bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-3 py-2 text-sm text-[var(--ok)]">
             {result}
           </p>
         )}
 
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="h-9 rounded-lg px-3 text-[12px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+          <button type="button" onClick={onClose} className="h-9 rounded-lg px-3 text-sm text-[var(--text-dim)] hover:bg-[var(--bg)]">
             {t(lang, "close")}
           </button>
           <button
             type="button"
             disabled={busy || !selectedCount || !target}
             onClick={() => void run()}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 text-[12px] font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40"
           >
             {t(lang, mode === "copy" ? "modeCopy" : "modeMove")} {selectedCount} {t(lang, "nFiles")}
             <ArrowRight size={13} />

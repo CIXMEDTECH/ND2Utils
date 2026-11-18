@@ -21,7 +21,7 @@ const SECTIONS: { key: Section; path: string; label: MsgKey; Icon: typeof Gauge;
 ];
 
 const segmented = (active: boolean) =>
-  `h-8 rounded-lg text-[12px] transition-colors ${active ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`;
+  `h-8 rounded-lg text-sm transition-colors ${active ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`;
 
 function Card({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
@@ -29,7 +29,7 @@ function Card({ icon, title, children }: { icon: ReactNode; title: string; child
       <div className="flex items-start gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">{icon}</span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-[14px] font-semibold">{title}</h2>
+          <h2 className="text-md font-semibold">{title}</h2>
           {children}
         </div>
       </div>
@@ -39,11 +39,11 @@ function Card({ icon, title, children }: { icon: ReactNode; title: string; child
 
 function Rows({ rows, mono = false }: { rows: [string, string][]; mono?: boolean }) {
   return (
-    <dl className={`mt-3 grid gap-2 rounded-xl bg-[var(--bg)]/50 p-3 text-[12px] ${mono ? "font-mono text-[11px] tabular-nums" : ""}`}>
+    <dl className={`mt-3 grid gap-2 rounded-xl bg-[var(--bg)]/50 p-3 text-sm ${mono ? "font-mono text-xs tabular-nums" : ""}`}>
       {rows.map(([k, v]) => (
         <div key={k} className="flex items-center justify-between gap-4">
           <dt className="text-[var(--text-dim)]">{k}</dt>
-          <dd className="truncate text-right font-mono text-[11px] tabular-nums">{v}</dd>
+          <dd className="truncate text-right font-mono text-xs tabular-nums">{v}</dd>
         </div>
       ))}
     </dl>
@@ -71,8 +71,8 @@ function LocalCache({ lang, info }: { lang: Lang; info: ServerSettings }) {
 
   return (
     <div className="mt-5 border-t border-[var(--line)] pt-4">
-      <h3 className="text-[12.5px] font-medium">{t(lang, "localCacheTitle")}</h3>
-      <p className="mt-1 text-[12px] leading-5 text-[var(--text-dim)]">
+      <h3 className="text-sm font-medium">{t(lang, "localCacheTitle")}</h3>
+      <p className="mt-1 text-sm leading-5 text-[var(--text-dim)]">
         {info.local_cache
           ? `${t(lang, "localCacheOn")}${info.local_cache_auto ? ` ${t(lang, "localCacheAutoOn")}` : ""}`
           : t(lang, "localCacheOff")}
@@ -96,12 +96,12 @@ function LocalCache({ lang, info }: { lang: Lang; info: ServerSettings }) {
                   window.setTimeout(() => setCleared(false), 2000);
                 })
               }
-              className="inline-flex h-8 items-center rounded-lg border border-[var(--line)] px-3 text-[12px] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+              className="inline-flex h-8 items-center rounded-lg border border-[var(--line)] px-3 text-sm transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
             >
               {t(lang, "localCacheClear")}
             </button>
             {cleared && (
-              <span className="inline-flex items-center gap-1 text-[11.5px] text-[var(--accent)]" aria-live="polite">
+              <span className="inline-flex items-center gap-1 text-xs text-[var(--accent)]" aria-live="polite">
                 <Check size={13} weight="bold" /> {t(lang, "localCacheCleared")}
               </span>
             )}
@@ -117,6 +117,8 @@ function General({ info, error }: { info: ServerSettings | null; error: string |
   const theme = useApp((s) => s.theme);
   const setLang = useApp((s) => s.setLang);
   const setTheme = useApp((s) => s.setTheme);
+  const textSize = useApp((s) => s.textSize);
+  const setTextSize = useApp((s) => s.setTextSize);
   const user = useApp((s) => s.user);
 
   return (
@@ -131,7 +133,7 @@ function General({ info, error }: { info: ServerSettings | null; error: string |
               [t(lang, "usage"), `${user.usage.files} ${t(lang, "nFiles")} · ${formatBytes(user.usage.bytes, lang)}`],
             ]}
           />
-          <p className="mt-3 text-[12px] leading-5 text-[var(--text-dim)]">
+          <p className="mt-3 text-sm leading-5 text-[var(--text-dim)]">
             {user.kind === "permanent"
               ? t(lang, "permanentNote")
               : `${t(lang, "temporaryNote")} ${info?.ttl_hours ?? "…"} ${t(lang, "temporaryNoteTail")}`}
@@ -140,9 +142,9 @@ function General({ info, error }: { info: ServerSettings | null; error: string |
       )}
 
       <Card icon={<Palette size={18} weight="duotone" />} title={t(lang, "settingsDisplay")}>
-        <p className="mt-1 text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "settingsIntro")}</p>
+        <p className="mt-1 text-sm leading-5 text-[var(--text-dim)]">{t(lang, "settingsIntro")}</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-[5rem_minmax(0,1fr)] sm:items-center">
-          <span className="text-[12px] text-[var(--text-dim)]">{t(lang, "settingsLang")}</span>
+          <span className="text-sm text-[var(--text-dim)]">{t(lang, "settingsLang")}</span>
           <div className="grid grid-cols-2 gap-1 rounded-xl bg-[var(--bg)]/50 p-1">
             {(["zh", "en"] as const).map((key) => (
               <button key={key} type="button" aria-pressed={lang === key} onClick={() => setLang(key)} className={segmented(lang === key)}>
@@ -150,7 +152,7 @@ function General({ info, error }: { info: ServerSettings | null; error: string |
               </button>
             ))}
           </div>
-          <span className="text-[12px] text-[var(--text-dim)]">{t(lang, "settingsTheme")}</span>
+          <span className="text-sm text-[var(--text-dim)]">{t(lang, "settingsTheme")}</span>
           <div className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--bg)]/50 p-1">
             {(["light", "dark", "system"] as const).map((key) => (
               <button key={key} type="button" aria-pressed={theme === key} onClick={() => setTheme(key)} className={segmented(theme === key)}>
@@ -158,11 +160,19 @@ function General({ info, error }: { info: ServerSettings | null; error: string |
               </button>
             ))}
           </div>
+          <span className="text-sm text-[var(--text-dim)]">{t(lang, "settingsTextSize")}</span>
+          <div className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--bg)]/50 p-1">
+            {(["normal", "large", "xlarge"] as const).map((key) => (
+              <button key={key} type="button" aria-pressed={textSize === key} onClick={() => setTextSize(key)} className={segmented(textSize === key)}>
+                {t(lang, key === "normal" ? "textSizeNormal" : key === "large" ? "textSizeLarge" : "textSizeXLarge")}
+              </button>
+            ))}
+          </div>
         </div>
       </Card>
 
       <Card icon={<Database size={18} weight="duotone" />} title={t(lang, "settingsStorage")}>
-        <p className="mt-1 text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "settingsStorageHint")}</p>
+        <p className="mt-1 text-sm leading-5 text-[var(--text-dim)]">{t(lang, "settingsStorageHint")}</p>
         {info ? (
           <>
             <Rows
@@ -215,7 +225,7 @@ export function Settings() {
     <Shell dense>
       <main className={`mx-auto px-5 py-10 sm:py-14 ${sections.length > 1 ? "max-w-5xl" : "max-w-2xl"}`}>
         <div className="border-b border-[var(--line)] pb-6">
-          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "settingsEyebrow")}</p>
+          <p className="font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "settingsEyebrow")}</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{t(lang, "settings")}</h1>
         </div>
 
@@ -229,7 +239,7 @@ export function Settings() {
                       to={path}
                       end
                       className={({ isActive }) =>
-                        `flex h-9 items-center gap-2 rounded-lg px-3 text-[12.5px] transition-colors ${
+                        `flex h-9 items-center gap-2 rounded-lg px-3 text-sm transition-colors ${
                           isActive ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:bg-[var(--bg-elev)] hover:text-[var(--text)]"
                         }`
                       }
@@ -248,14 +258,14 @@ export function Settings() {
             {section === "codes" && <AdminCodes />}
             {section === "performance" && <AdminPerformance />}
             {error && (
-              <p role="alert" className="mt-5 text-[12px] text-[var(--danger)]">
+              <p role="alert" className="mt-5 text-sm text-[var(--danger)]">
                 {error}
               </p>
             )}
           </div>
         </div>
 
-        <p className="mx-auto mt-10 max-w-lg text-center text-[11px] leading-5 text-[var(--text-dim)]">{t(lang, "legal")}</p>
+        <p className="mx-auto mt-10 max-w-lg text-center text-xs leading-5 text-[var(--text-dim)]">{t(lang, "legal")}</p>
       </main>
     </Shell>
   );

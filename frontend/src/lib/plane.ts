@@ -199,7 +199,7 @@ export function createPreviewLayers(packed: PackedPlane, luts: LutSetting[]): Pr
 
 function drawLabel(context: CanvasRenderingContext2D, name: string, x: number, y: number): void {
   context.save();
-  context.font = '13px "Geist Mono Variable", ui-monospace, monospace';
+  context.font = '13px "JetBrains Mono Variable", "Noto Sans SC Variable", ui-monospace, monospace';
   context.textBaseline = "top";
   const width = context.measureText(name).width;
   context.fillStyle = "rgb(8 8 10 / 0.92)";
@@ -234,7 +234,7 @@ function drawScaleBar(context: CanvasRenderingContext2D, width: number, height: 
   context.fillRect(x0 - 6, barY - 18, pixels + 12, 25);
   context.fillStyle = "rgb(240 244 248)";
   context.fillRect(x0, barY, pixels, 3);
-  context.font = '12px "Geist Mono Variable", ui-monospace, monospace';
+  context.font = '12px "JetBrains Mono Variable", "Noto Sans SC Variable", ui-monospace, monospace';
   context.textBaseline = "top";
   context.fillText(`${Number(um.toPrecision(6))} µm`, x0, barY - 16);
   context.restore();

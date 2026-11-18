@@ -49,11 +49,13 @@ import {
   deleteFolder,
   detectNuclei,
   getFile,
+  listProjects,
   rebuildCache,
   renameFolder,
   resetFile,
   slideInfo,
   updateFile,
+  updateProject,
 } from "../lib/api";
 import { forget as forgetPreviews, getDisplay, isPending, prefetch as prefetchPreviews } from "../lib/previewCache";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
@@ -167,6 +169,8 @@ export function Workspace() {
   const [restoring, setRestoring] = useState(false);
 
   const closeMenu = useCallback(() => setMenu(null), []);
+  const secondaryAction =
+    "inline-flex min-h-10 min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-sm font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]";
 
   useEffect(() => {
     void refreshFiles().catch((err) => setError(detailMessage(err, lang)));
@@ -417,11 +421,18 @@ export function Workspace() {
     }
   }
 
-  async function handleOpenInStudio(ids: string[]) {
+  async function handleOpenInStudio(ids: string[], projectId?: string) {
     const targetIds = ids.filter((id) => Boolean(files.find((f) => f.id === id)));
     if (targetIds.length === 0) return;
     try {
       setError(null);
+      if (projectId) {
+        const existing = (await listProjects()).find((p) => p.id === projectId);
+        const merged = [...new Set([...(existing?.file_ids ?? []), ...targetIds])];
+        await updateProject(projectId, { file_ids: merged });
+        nav(`/studio/${projectId}`);
+        return;
+      }
       const proj = await createProject({
         name: `${t(lang, "newProject")} ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
         file_ids: targetIds,
@@ -430,6 +441,32 @@ export function Workspace() {
     } catch (err) {
       setError(detailMessage(err, lang));
     }
+  }
+
+  /** "Add to project": pick one of the recent projects or start a new one (it used to create a
+   * new project on every click). */
+  function openProjectPicker(event: React.MouseEvent, ids: string[]) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    void listProjects()
+      .catch(() => [])
+      .then((projects) => {
+        const items: MenuItem[] = [
+          {
+            key: "new",
+            label: t(lang, "newProject"),
+            icon: <FolderSimplePlus size={15} />,
+            onSelect: () => void handleOpenInStudio(ids),
+          },
+          ...projects.slice(0, 8).map((project, index) => ({
+            key: project.id,
+            label: `${project.name} · ${project.file_ids.length}`,
+            icon: <SquaresFour size={15} />,
+            separated: index === 0,
+            onSelect: () => void handleOpenInStudio(ids, project.id),
+          })),
+        ];
+        setMenu({ x: box.left, y: box.bottom + 6, title: t(lang, "addToProject"), items });
+      });
   }
 
   // Slides are shown with the tiled viewer, zoomable down to full resolution.
@@ -844,27 +881,27 @@ export function Workspace() {
       onDoubleClick={(e) => e.stopPropagation()}
       className="fade-in absolute inset-x-3 top-14 z-30 mx-auto max-w-3xl"
     >
-      <Glass tone="dark" shape="island" className="flex flex-col gap-2.5 p-3 text-[11.5px] text-white shadow-2xl">
+      <Glass tone="dark" shape="island" className="flex flex-col gap-2.5 p-3 text-xs text-white shadow-2xl">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-sky-400/20 text-sky-300">
               <Crop size={14} weight="bold" />
             </span>
             <span className="font-semibold tracking-tight">{t(lang, "cropTitle")}</span>
-            <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-sky-200">
+            <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-2xs tabular-nums text-sky-200">
               {Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
             </span>
             {newScaleBarUm > 0 && (
-              <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-emerald-300">
+              <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-2xs tabular-nums text-emerald-300">
                 {t(lang, "cropNewScale")}: {formatUm(newScaleBarUm)}
               </span>
             )}
           </div>
-          <span className="hidden text-[11px] text-white/50 sm:inline">{t(lang, "cropRegionInfo")}</span>
+          <span className="hidden text-xs text-white/50 sm:inline">{t(lang, "cropRegionInfo")}</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-[11px] text-white/60">{t(lang, "cropRatio")}:</span>
+          <span className="mr-1 text-xs text-white/60">{t(lang, "cropRatio")}:</span>
           {ASPECT_PRESETS.map((preset) => {
             const active = aspectPreset === preset.key;
             const label =
@@ -879,7 +916,7 @@ export function Workspace() {
                 type="button"
                 onClick={() => setAspectPreset(preset.key)}
                 aria-pressed={active}
-                className={`cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors ${
+                className={`cursor-pointer rounded-md px-2 py-1 font-mono text-xs transition-colors ${
                   active
                     ? "bg-sky-400 font-semibold text-slate-950 shadow-sm"
                     : "bg-white/8 text-white/75 hover:bg-white/15 hover:text-white"
@@ -891,7 +928,7 @@ export function Workspace() {
           })}
 
           {aspectPreset === "custom" && (
-            <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-white/15 bg-black/40 px-1.5 py-0.5 font-mono text-[11px]">
+            <div className="ml-1 inline-flex items-center gap-1 rounded-md border border-white/15 bg-black/40 px-1.5 py-0.5 font-mono text-xs">
               <input
                 type="number"
                 min={0.1}
@@ -919,7 +956,7 @@ export function Workspace() {
             type="button"
             disabled={detectingNucleus}
             onClick={() => void handleDetectNucleus()}
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-emerald-400/20 px-2.5 py-1 text-[11px] font-medium text-emerald-200 transition-colors hover:bg-emerald-400/30 disabled:opacity-50"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-emerald-400/20 px-2.5 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-400/30 disabled:opacity-50"
             title={t(lang, "autoNucleusCenter")}
           >
             <Crosshair size={13} weight="bold" />
@@ -935,7 +972,7 @@ export function Workspace() {
                     key={nuc.id}
                     type="button"
                     onClick={() => handleSelectNucleus(nuc.id)}
-                    className={`cursor-pointer rounded px-1.5 py-0.5 font-mono text-[10.5px] transition-colors ${
+                    className={`cursor-pointer rounded px-1.5 py-0.5 font-mono text-2xs transition-colors ${
                       isTarget
                         ? "bg-emerald-400 font-bold text-slate-950"
                         : "bg-white/10 text-emerald-200 hover:bg-white/20"
@@ -951,14 +988,14 @@ export function Workspace() {
 
         <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-2">
           <label className="flex min-w-[180px] flex-1 items-center gap-2 rounded-lg border border-white/12 bg-black/35 px-2.5 py-1">
-            <span className="shrink-0 text-[11px] text-white/55">{t(lang, "fileName")}</span>
+            <span className="shrink-0 text-xs text-white/55">{t(lang, "fileName")}</span>
             <input
               type="text"
               value={cropName}
               onChange={(e) => setCropName(e.target.value)}
               placeholder={`${selected.name.replace(/\.[^.]+$/, "")}_crop_${Math.round(cropBox.w)}x${Math.round(cropBox.h)}`}
               aria-label={t(lang, "cropNamePlaceholder")}
-              className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-white placeholder:text-white/30 focus:outline-none"
+              className="min-w-0 flex-1 bg-transparent font-mono text-xs text-white placeholder:text-white/30 focus:outline-none"
             />
           </label>
 
@@ -966,7 +1003,7 @@ export function Workspace() {
             <button
               type="button"
               onClick={resetCropBox}
-              className="inline-flex h-7 items-center gap-1 rounded-lg bg-white/8 px-2.5 text-[11px] text-white/75 transition-colors hover:bg-white/15 hover:text-white"
+              className="inline-flex h-7 items-center gap-1 rounded-lg bg-white/8 px-2.5 text-xs text-white/75 transition-colors hover:bg-white/15 hover:text-white"
             >
               <ArrowCounterClockwise size={13} />
               {t(lang, "cropReset")}
@@ -974,7 +1011,7 @@ export function Workspace() {
             <button
               type="button"
               onClick={() => setCropping(false)}
-              className="inline-flex h-7 items-center gap-1 rounded-lg bg-white/8 px-2.5 text-[11px] text-white/75 transition-colors hover:bg-white/15 hover:text-white"
+              className="inline-flex h-7 items-center gap-1 rounded-lg bg-white/8 px-2.5 text-xs text-white/75 transition-colors hover:bg-white/15 hover:text-white"
             >
               <X size={13} />
               {t(lang, "cropCancel")}
@@ -983,7 +1020,7 @@ export function Workspace() {
               type="button"
               disabled={croppingBusy}
               onClick={() => void handleCreateCrop("inplace")}
-              className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-emerald-400/20 px-2.5 text-[11px] font-semibold text-emerald-200 transition-all hover:bg-emerald-400/30 disabled:opacity-50"
+              className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-emerald-400/20 px-2.5 text-xs font-semibold text-emerald-200 transition-all hover:bg-emerald-400/30 disabled:opacity-50"
             >
               <Check size={13} weight="bold" />
               {croppingBusy ? t(lang, "applyingChanges") : t(lang, "applyInplace")}
@@ -992,7 +1029,7 @@ export function Workspace() {
               type="button"
               disabled={croppingBusy}
               onClick={() => void handleCreateCrop("new")}
-              className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-sky-400 px-3 text-[11px] font-semibold text-slate-950 shadow-sm transition-all hover:bg-sky-300 disabled:opacity-50"
+              className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-sky-400 px-3 text-xs font-semibold text-slate-950 shadow-sm transition-all hover:bg-sky-300 disabled:opacity-50"
             >
               <Sparkle size={13} weight="fill" />
               {croppingBusy ? t(lang, "cropCreating") : t(lang, "cropSaveNew")}
@@ -1028,10 +1065,10 @@ export function Workspace() {
           >
             <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-[var(--accent)] group-focus-visible:bg-[var(--accent)] group-active:bg-[var(--accent)]" />
           </div>
-          <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-[12px] text-[var(--text-dim)]">
+          <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-[var(--text-dim)]">
             <span className="inline-flex items-center gap-2 font-medium text-[var(--text)]">
               {t(lang, "files")}
-              <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--accent)]">
+              <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-2xs font-semibold text-[var(--accent)]">
                 {files.length}
               </span>
             </span>
@@ -1040,7 +1077,7 @@ export function Workspace() {
                 <button
                   type="button"
                   onClick={() => void handleOpenInStudio(selectedIds.length > 0 ? selectedIds : selected ? [selected.id] : [])}
-                  className="inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-1 text-[11px] font-medium text-[var(--accent)] transition-colors hover:opacity-90"
+                  className="inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-1 text-xs font-medium text-[var(--accent)] transition-colors hover:opacity-90"
                   title={t(lang, "addToProject")}
                 >
                   <SquaresFour size={13} weight="duotone" />
@@ -1052,7 +1089,7 @@ export function Workspace() {
                 <button
                   type="button"
                   onClick={() => checkAll(!allChecked)}
-                  className="rounded-md px-1.5 py-1 text-[11px] transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                  className="rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)]"
                 >
                   {t(lang, allChecked ? "clearSelection" : "selectAll")}
                 </button>
@@ -1073,7 +1110,7 @@ export function Workspace() {
           </div>
 
           {error && (
-            <p role="alert" className="mx-3 mb-2 rounded-lg bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-2.5 py-1.5 text-[12px] leading-5 text-[var(--danger)]">
+            <p role="alert" className="mx-3 mb-2 rounded-lg bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-2.5 py-1.5 text-sm leading-5 text-[var(--danger)]">
               {error}
             </p>
           )}
@@ -1081,19 +1118,19 @@ export function Workspace() {
           <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--line)] max-lg:max-h-[70dvh]">
             <FileTree onMenu={openMenu} />
             {files.length === 0 && (
-              <p className="mx-3 my-4 rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[12px] leading-5 text-[var(--text-dim)]">
+              <p className="mx-3 my-4 rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-sm leading-5 text-[var(--text-dim)]">
                 <FileIcon size={24} weight="duotone" className="mx-auto mb-2 text-[var(--accent)]" />
                 {t(lang, "emptyFiles")}
               </p>
             )}
           </div>
-          <p className="border-t border-[var(--line)] px-3 py-2 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, "treeHint")}</p>
+          <p className="border-t border-[var(--line)] px-3 py-2 text-xs leading-4 text-[var(--text-dim)]">{t(lang, "treeHint")}</p>
         </Glass>
 
         {/* Center Pane: Optical Viewport */}
         <main className="relative min-h-[450px] bg-[var(--well)]">
           {cropToast && (
-            <div className="fade-in absolute right-3 top-14 z-30 flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-slate-950/90 px-3 py-2 text-[12px] text-emerald-200 shadow-xl backdrop-blur">
+            <div className="fade-in absolute right-3 top-14 z-30 flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-slate-950/90 px-3 py-2 text-sm text-emerald-200 shadow-xl backdrop-blur">
               <CheckCircle size={16} weight="fill" className="shrink-0 text-emerald-400" />
               <span>
                 {t(lang, "cropSuccess")}: <strong className="font-mono text-white">{cropToast.name}</strong>
@@ -1105,7 +1142,7 @@ export function Workspace() {
                   setTab("export");
                   setCropToast(null);
                 }}
-                className="ml-1 rounded-md bg-emerald-400/20 px-2 py-0.5 text-[11px] font-medium text-emerald-200 hover:bg-emerald-400/30"
+                className="ml-1 rounded-md bg-emerald-400/20 px-2 py-0.5 text-xs font-medium text-emerald-200 hover:bg-emerald-400/30"
               >
                 {t(lang, "export")}
               </button>
@@ -1122,14 +1159,14 @@ export function Workspace() {
 
           {selected && selectedIsSlide ? (
             <div className="flex h-full min-h-[450px] flex-col">
-              <div className="flex min-h-10 items-center gap-1.5 border-b border-white/[0.07] bg-black/30 px-3 text-[11px] text-white/65">
+              <div className="flex min-h-10 items-center gap-1.5 border-b border-white/[0.07] bg-black/30 px-3 text-xs text-white/65">
                 <SlideZoomControls viewer={slideViewer} view={slideReady ? slideView : null} />
                 <span className="mx-1 h-4 w-px bg-white/10" aria-hidden />
                 <button
                   type="button"
                   onClick={() => (cropping ? setCropping(false) : startCropping())}
                   aria-pressed={cropping}
-                  className={`inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium transition-colors ${
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors ${
                     cropping ? "bg-sky-400 text-slate-950 shadow-sm" : "text-white/75 hover:bg-white/10 hover:text-white"
                   }`}
                 >
@@ -1173,7 +1210,7 @@ export function Workspace() {
                       type="button"
                       onClick={() => setScaleBar((value) => !value)}
                       aria-pressed={scaleBar}
-                      className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                      className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
                         scaleBar ? "bg-sky-400 text-slate-950 shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"
                       }`}
                     >
@@ -1242,7 +1279,7 @@ export function Workspace() {
                     type="button"
                     onClick={action}
                     aria-pressed={active}
-                    className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                    className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                       active ? "bg-white text-slate-950 shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"
                     }`}
                   >
@@ -1256,7 +1293,7 @@ export function Workspace() {
                       type="button"
                       onClick={() => (cropping ? setCropping(false) : startCropping())}
                       aria-pressed={cropping}
-                      className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                      className={`inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                         cropping
                           ? "bg-sky-400 text-slate-950 shadow-sm"
                           : "text-sky-300 hover:bg-sky-400/15 hover:text-sky-200"
@@ -1283,7 +1320,7 @@ export function Workspace() {
 
         {/* Right Pane: Inspector & Export */}
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col border-t lg:border-l lg:border-t-0">
-          <div className="flex gap-1 border-b border-[var(--line)] p-2 text-[12px]" role="tablist">
+          <div className="flex gap-1 border-b border-[var(--line)] p-2 text-sm" role="tablist">
             {WORKSPACE_TABS.map(({ key, label }) => (
               <button
                 key={key}
@@ -1304,7 +1341,7 @@ export function Workspace() {
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
             {!selected && (
-              <div className="flex min-h-48 flex-col items-center justify-center text-center text-[13px] leading-5 text-[var(--text-dim)]">
+              <div className="flex min-h-48 flex-col items-center justify-center text-center text-base leading-5 text-[var(--text-dim)]">
                 <FileIcon size={26} weight="duotone" className="mb-3 text-[var(--accent)]" />
                 <p className="max-w-[27ch]">{t(lang, "noneSelected")}</p>
               </div>
@@ -1317,18 +1354,18 @@ export function Workspace() {
                     {/* Header Summary Card */}
                     <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--bg)]/60 p-3">
                       <div className="flex items-start justify-between gap-2">
-                        <h2 className="truncate text-[13px] font-semibold tracking-tight text-[var(--text)]" title={selected.name}>
+                        <h2 className="truncate text-base font-semibold tracking-tight text-[var(--text)]" title={selected.name}>
                           {selected.name}
                         </h2>
                         <div className="flex shrink-0 items-center gap-1">
                           {selected.edited && (
-                            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-medium text-amber-500">
+                            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 font-mono text-2xs font-medium text-amber-500">
                               <SlidersHorizontal size={11} weight="bold" />
                               {t(lang, "editedBadge")}
                             </span>
                           )}
                           {selected.cropped && (
-                            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
+                            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-2xs font-medium text-[var(--accent)]">
                               <Crop size={11} weight="bold" />
                               {t(lang, "croppedBadge")}
                               {selected.crop?.ratio_label ? ` ${selected.crop.ratio_label}` : ""}
@@ -1336,7 +1373,7 @@ export function Workspace() {
                           )}
                         </div>
                       </div>
-                      <p className="mt-1 font-mono text-[11px] tabular-nums text-[var(--text-dim)]">
+                      <p className="mt-1 font-mono text-xs tabular-nums text-[var(--text-dim)]">
                         {selected.width ?? "–"} × {selected.height ?? "–"} px
                         {selected.voxel_um?.[0]
                           ? ` · ${formatUm((selected.width ?? 0) * selected.voxel_um[0])} × ${formatUm((selected.height ?? 0) * selected.voxel_um[0])}`
@@ -1347,9 +1384,9 @@ export function Workspace() {
                     {/* Channels Card with Lock */}
                     <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--bg)]/40 p-3">
                       <div className="mb-2 flex items-center justify-between">
-                        <span className="text-[11.5px] font-semibold text-[var(--text-dim)]">{t(lang, "channels")}</span>
+                        <span className="text-xs font-semibold text-[var(--text-dim)]">{t(lang, "channels")}</span>
                         {channelLocked && (
-                          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-500">
+                          <span className="inline-flex items-center gap-1 font-mono text-2xs text-amber-500">
                             <LockSimple size={11} weight="fill" />
                             {t(lang, "channelsLocked")}
                           </span>
@@ -1363,7 +1400,7 @@ export function Workspace() {
                       />
                     </div>
 
-                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/30 p-3 text-[12.5px]">
+                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)]/30 p-3 text-sm">
                       {isSlide(selected) ? (
                         <>
                           <dt className="text-[var(--text-dim)]">{t(lang, "format")}</dt>
@@ -1408,70 +1445,75 @@ export function Workspace() {
                       <dt className="text-[var(--text-dim)]">{t(lang, "software")}</dt>
                       <dd>{selected.software ?? "–"}</dd>
                       <dt className="text-[var(--text-dim)]">{t(lang, "acquired")}</dt>
-                      <dd className="font-mono text-[11px] tabular-nums">{selected.acquired ?? "–"}</dd>
+                      <dd className="font-mono text-xs tabular-nums">{selected.acquired ?? "–"}</dd>
                     </dl>
 
-                    <div className="mt-5 flex flex-wrap gap-2">
+                    <div className="mt-5 grid gap-2">
                       {isSlide(selected) ? (
-                        <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 flex-1 px-3 text-[12px]">
-                          <Stack size={15} />
+                        <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action w-full min-h-10 px-3">
+                          <Stack size={18} className="shrink-0" />
                           {t(lang, "openSlide")}
                         </button>
                       ) : (
-                        <button type="button" onClick={() => nav(`/advanced/${selected.id}`)} className="primary-action min-h-9 flex-1 px-3 text-[12px]">
-                          <SlidersHorizontal size={15} />
+                        <button type="button" onClick={() => nav(`/advanced/${selected.id}`)} className="primary-action w-full min-h-10 px-3">
+                          <SlidersHorizontal size={18} className="shrink-0" />
                           {t(lang, "openAdvanced")}
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => (cropping ? setCropping(false) : startCropping())}
-                        className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                      >
-                        <Crop size={14} weight="bold" />
-                        {t(lang, "cropTool")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleOpenInStudio(selectedIds.length > 0 ? selectedIds : [selected.id])}
-                        className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-3 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                        title={t(lang, "addToProject")}
-                      >
-                        <SquaresFour size={14} weight="duotone" />
-                        {t(lang, "studio")}
-                      </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => (cropping ? setCropping(false) : startCropping())}
+                          className={secondaryAction}
+                        >
+                          <Crop size={16} weight="bold" className="shrink-0" />
+                          <span className="truncate">{t(lang, "cropTool")}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => openProjectPicker(event, selectedIds.length > 0 ? selectedIds : [selected.id])}
+                          className={secondaryAction}
+                          title={t(lang, "addToProject")}
+                          aria-haspopup="menu"
+                        >
+                          <SquaresFour size={16} weight="duotone" className="shrink-0" />
+                          <span className="truncate">{t(lang, "studio")}</span>
+                        </button>
+                      </div>
                       {(selected.cropped || selected.edited) && (
                         <button
                           type="button"
                           disabled={restoring}
                           onClick={() => void handleRestoreOriginal(selected.id)}
-                          className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-2.5 text-[12px] font-medium text-[var(--text-dim)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50"
+                          className={`${secondaryAction} text-[var(--text-dim)] disabled:opacity-50`}
                           title={t(lang, "restoreOriginal")}
                         >
-                          <ArrowCounterClockwise size={14} />
-                          {t(lang, "restoreOriginal")}
+                          <ArrowCounterClockwise size={16} className="shrink-0" />
+                          <span className="truncate">{t(lang, "restoreOriginal")}</span>
                         </button>
                       )}
                       {pendingDelete !== selected.id && (
-                        <button
-                          type="button"
-                          onClick={() => setPendingDelete(selected.id)}
-                          className="inline-flex min-h-9 items-center gap-1.5 rounded-xl px-2.5 text-[12px] text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)]"
-                          title={t(lang, "delete")}
-                        >
-                          <Trash size={14} />
-                        </button>
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setPendingDelete(selected.id)}
+                            className="inline-flex min-h-9 items-center gap-1.5 whitespace-nowrap rounded-xl px-2.5 text-sm text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)]"
+                          >
+                            <Trash size={16} className="shrink-0" />
+                            {t(lang, "delete")}
+                          </button>
+                        </div>
                       )}
                     </div>
 
                     {pendingDelete === selected.id && (
                       <div className="mt-4 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_28%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg))] p-3">
-                        <p className="text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "deleteHint")}</p>
+                        <p className="text-sm leading-5 text-[var(--text-dim)]">{t(lang, "deleteHint")}</p>
                         <div className="mt-3 flex gap-2">
-                          <button type="button" onClick={() => void confirmDelete()} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--danger)] px-3 text-[11px] font-medium text-white">
+                          <button type="button" onClick={() => void confirmDelete()} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--danger)] px-3 text-xs font-medium text-white">
                             <Check size={13} /> {t(lang, "confirmDelete")}
                           </button>
-                          <button type="button" onClick={() => setPendingDelete(null)} className="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-[11px] text-[var(--text-dim)] hover:bg-[var(--bg)]">
+                          <button type="button" onClick={() => setPendingDelete(null)} className="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs text-[var(--text-dim)] hover:bg-[var(--bg)]">
                             <X size={13} /> {t(lang, "cancel")}
                           </button>
                         </div>
@@ -1482,7 +1524,7 @@ export function Workspace() {
 
                 {tab === "metadata" && (
                   <div className="flex flex-col gap-3">
-                    {loadingDetail && <p className="text-[12px] text-[var(--text-dim)]">{t(lang, "loadingFile")}</p>}
+                    {loadingDetail && <p className="text-sm text-[var(--text-dim)]">{t(lang, "loadingFile")}</p>}
                     {!loadingDetail && detail && (
                       <>
                         <label className="relative block">
@@ -1491,7 +1533,7 @@ export function Workspace() {
                             value={q}
                             onChange={(event) => setQ(event.target.value)}
                             placeholder={t(lang, "searchMeta")}
-                            className="h-9 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-9 pr-3 text-[12.5px] transition-colors focus:border-[var(--accent)] focus:outline-none"
+                            className="h-9 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-9 pr-3 text-sm transition-colors focus:border-[var(--accent)] focus:outline-none"
                           />
                         </label>
                         <button
@@ -1501,7 +1543,7 @@ export function Workspace() {
                             setCopied(true);
                             window.setTimeout(() => setCopied(false), 1200);
                           }}
-                          className="inline-flex min-h-8 items-center gap-1.5 self-start rounded-lg px-2 text-[12px] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                          className="inline-flex min-h-8 items-center gap-1.5 self-start rounded-lg px-2 text-sm text-[var(--accent)] hover:bg-[var(--accent-soft)]"
                         >
                           {copied ? <Check size={14} weight="bold" /> : <Copy size={14} />}
                           {copied ? t(lang, "copied") : t(lang, "copyJson")}
@@ -1509,22 +1551,22 @@ export function Workspace() {
 
                         {filteredText.map((row) => (
                           <section key={row.k}>
-                            <h3 className="text-[11.5px] font-semibold text-[var(--text-dim)]">{row.k}</h3>
-                            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5 font-mono text-[10px] leading-relaxed">
+                            <h3 className="text-xs font-semibold text-[var(--text-dim)]">{row.k}</h3>
+                            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5 font-mono text-2xs leading-relaxed">
                               {row.v}
                             </pre>
                           </section>
                         ))}
                         {detail.events?.length ? (
                           <section>
-                            <h3 className="text-[11.5px] font-semibold text-[var(--text-dim)]">{t(lang, "events")}</h3>
-                            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5 font-mono text-[10px] leading-relaxed">
+                            <h3 className="text-xs font-semibold text-[var(--text-dim)]">{t(lang, "events")}</h3>
+                            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5 font-mono text-2xs leading-relaxed">
                               {JSON.stringify(detail.events, null, 2)}
                             </pre>
                           </section>
                         ) : null}
                         {filteredText.length === 0 && !detail.events?.length && (
-                          <p className="py-6 text-center text-[12px] text-[var(--text-dim)]">
+                          <p className="py-6 text-center text-sm text-[var(--text-dim)]">
                             {t(lang, q ? "noSearchResults" : "noMetadata")}
                           </p>
                         )}
@@ -1535,7 +1577,7 @@ export function Workspace() {
 
                 {tab === "export" && (
                   <>
-                    <p className="mb-3 truncate font-mono text-[11.5px] text-[var(--text-dim)]" title={exportIds.length === 1 ? joinPath(selected.folder, selected.name) : undefined}>
+                    <p className="mb-3 truncate font-mono text-xs text-[var(--text-dim)]" title={exportIds.length === 1 ? joinPath(selected.folder, selected.name) : undefined}>
                       {selectedIds.length
                         ? `${t(lang, "checkedCount")} ${selectedIds.length} ${t(lang, "nFiles")}`
                         : joinPath(selected.folder, selected.name)}
@@ -1546,7 +1588,7 @@ export function Workspace() {
                       <div className="flex flex-col gap-3">
                         <Guide title="export" body="slideExportHint" />
                         {isSlide(selected) && (
-                          <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 self-start px-4 text-[12px]">
+                          <button type="button" onClick={() => nav(`/slide/${selected.id}`)} className="primary-action min-h-9 self-start px-4 text-sm">
                             {t(lang, "openSlide")}
                           </button>
                         )}
@@ -1559,7 +1601,7 @@ export function Workspace() {
           </div>
 
           {selected && (
-            <p className="border-t border-[var(--line)] px-4 py-2 font-mono text-[10px] text-[var(--text-dim)] tabular-nums">
+            <p className="border-t border-[var(--line)] px-4 py-2 font-mono text-2xs text-[var(--text-dim)] tabular-nums">
               T{axisSize(selected.axes, "T")} · Z{axisSize(selected.axes, "Z")} · C{axisSize(selected.axes, "C")} · P{axisSize(selected.axes, "P")}
             </p>
           )}
@@ -1583,7 +1625,7 @@ export function Workspace() {
         subtitle={
           exportTarget && (
             <>
-              <span className="block truncate font-mono text-[11px] text-[var(--text)]">/{exportTarget.label}</span>
+              <span className="block truncate font-mono text-xs text-[var(--text)]">/{exportTarget.label}</span>
               {t(lang, "exportStructureHint")}
             </>
           )
@@ -1622,7 +1664,7 @@ export function Workspace() {
         body={
           deleteAction && (
             <>
-              <span className="mb-1 block truncate font-mono text-[11px] text-[var(--text)]">
+              <span className="mb-1 block truncate font-mono text-xs text-[var(--text)]">
                 /{deleteAction.type === "folder" ? deleteAction.path : joinPath(deleteAction.file.folder, deleteAction.file.name)}
               </span>
               {t(lang, deleteAction.type === "folder" ? "deleteFolderHint" : "deleteHint")}

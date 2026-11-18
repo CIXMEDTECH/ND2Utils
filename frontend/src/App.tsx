@@ -27,7 +27,7 @@ export function App() {
   }, [checkAuth]);
 
   const fallback = (
-    <div role="status" className="flex min-h-[100dvh] items-center justify-center gap-2 bg-[var(--bg)] font-mono text-[11px] text-[var(--text-dim)]">
+    <div role="status" className="flex min-h-[100dvh] items-center justify-center gap-2 bg-[var(--bg)] font-mono text-xs text-[var(--text-dim)]">
       <span className="spinner h-3.5 w-3.5 border-[var(--line-strong)] border-t-[var(--accent)]" />
       {t(lang, "loadingPage")}
     </div>

@@ -219,7 +219,7 @@ export function ZoomStage({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-11 flex-wrap items-center gap-1.5 border-b border-white/[0.07] bg-[#0b0e14]/90 px-3 py-1 text-[11px] text-white/65 backdrop-blur-md">
+      <div className="flex min-h-11 flex-wrap items-center gap-1.5 border-b border-white/[0.07] bg-[#0b0e14]/90 px-3 py-1 text-xs text-white/65 backdrop-blur-md">
         <button
           type="button"
           className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 font-medium transition-colors hover:bg-white/10 hover:text-white"
@@ -260,7 +260,7 @@ export function ZoomStage({
           aria-label={t(lang, "zoomLevel")}
           className="stage-zoom-slider hidden w-20 sm:block"
         />
-        <span className="min-w-12 text-center font-mono text-[11px] tabular-nums text-white/80">
+        <span className="min-w-12 text-center font-mono text-xs tabular-nums text-white/80">
           {Math.round(zoom * 100)}%
         </span>
         <button
@@ -346,14 +346,14 @@ export function ZoomStage({
             {mediaOverlay}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center px-8 text-center text-[13px] leading-5 text-white/40">
+          <div className="flex h-full items-center justify-center px-8 text-center text-base leading-5 text-white/40">
             {t(lang, src || mediaLoading ? "previewLoading" : "noneSelected")}
           </div>
         )}
 
         {previewLoading && (
           <div role="status" className="pointer-events-none absolute right-3 top-3 z-10">
-            <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-3 py-1.5 font-mono text-[11px] text-white/75 shadow-lg backdrop-blur-md">
+            <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-3 py-1.5 font-mono text-xs text-white/75 shadow-lg backdrop-blur-md">
               <span className="spinner h-3 w-3 border-white/25 border-t-[var(--accent)]" />
               {t(lang, "previewLoading")}
             </div>

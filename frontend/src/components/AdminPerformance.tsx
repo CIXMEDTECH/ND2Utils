@@ -116,7 +116,7 @@ export function AdminPerformance() {
     return (
       <div key={item.key} className="grid gap-1.5">
         <div className="flex items-baseline justify-between gap-3">
-          <label htmlFor={`perf-${item.key}`} className="text-[12.5px] font-medium">
+          <label htmlFor={`perf-${item.key}`} className="text-sm font-medium">
             {t(lang, item.label)}
           </label>
           <span className="flex items-center gap-1.5">
@@ -128,9 +128,9 @@ export function AdminPerformance() {
               step={item.step ?? 1}
               value={value}
               onChange={(event) => set(Number(event.target.value))}
-              className="h-8 w-24 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-right font-mono text-[12px] tabular-nums focus:border-[var(--accent)]"
+              className="h-8 w-24 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-right font-mono text-sm tabular-nums focus:border-[var(--accent)]"
             />
-            {unit && <span className="w-14 text-[11px] text-[var(--text-dim)]">{unit}</span>}
+            {unit && <span className="w-14 text-xs text-[var(--text-dim)]">{unit}</span>}
           </span>
         </div>
         <input
@@ -142,7 +142,7 @@ export function AdminPerformance() {
           onChange={(event) => set(Number(event.target.value))}
           aria-label={t(lang, item.label)}
         />
-        <p className="flex justify-between gap-3 text-[11px] leading-4 text-[var(--text-dim)]">
+        <p className="flex justify-between gap-3 text-xs leading-4 text-[var(--text-dim)]">
           <span>{t(lang, item.hint)}</span>
           <span className="shrink-0 font-mono">
             {t(lang, "perfDefault")} {String(spec.default)}
@@ -154,7 +154,7 @@ export function AdminPerformance() {
 
   const status = view?.status;
   const segmented = (active: boolean) =>
-    `relative h-9 rounded-lg text-[12px] transition-colors ${active ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`;
+    `relative h-9 rounded-lg text-sm transition-colors ${active ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`;
 
   return (
     <Glass as="section" shape="card" className="p-5 sm:p-6">
@@ -163,17 +163,17 @@ export function AdminPerformance() {
           <Gauge size={18} weight="duotone" />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-[14px] font-semibold">{t(lang, "perfTitle")}</h2>
-          <p className="mt-2 text-[12px] leading-5 text-[var(--text-dim)]">{t(lang, "perfIntro")}</p>
+          <h2 className="text-md font-semibold">{t(lang, "perfTitle")}</h2>
+          <p className="mt-2 text-sm leading-5 text-[var(--text-dim)]">{t(lang, "perfIntro")}</p>
 
           {status && (
-            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-[var(--bg)]/50 p-3 text-[12px] sm:grid-cols-3">
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-[var(--bg)]/50 p-3 text-sm sm:grid-cols-3">
               <div>
-                <dt className="text-[11px] text-[var(--text-dim)]">{t(lang, "perfCpu")}</dt>
+                <dt className="text-xs text-[var(--text-dim)]">{t(lang, "perfCpu")}</dt>
                 <dd className="font-mono tabular-nums">{status.cpu_count ?? "–"}</dd>
               </div>
               <div>
-                <dt className="text-[11px] text-[var(--text-dim)]">{t(lang, "perfMemory")}</dt>
+                <dt className="text-xs text-[var(--text-dim)]">{t(lang, "perfMemory")}</dt>
                 <dd className="font-mono tabular-nums">
                   {status.memory_total ? formatBytes(status.memory_total, lang) : "–"}
                   {status.memory_available ? (
@@ -185,15 +185,15 @@ export function AdminPerformance() {
                 </dd>
               </div>
               <div>
-                <dt className="text-[11px] text-[var(--text-dim)]">{t(lang, "perfCacheUse")}</dt>
+                <dt className="text-xs text-[var(--text-dim)]">{t(lang, "perfCacheUse")}</dt>
                 <dd className="font-mono tabular-nums">{formatBytes(status.tile_cache_bytes + status.render_cache_bytes, lang)}</dd>
               </div>
               <div>
-                <dt className="text-[11px] text-[var(--text-dim)]">{t(lang, "perfOpenSlides")}</dt>
+                <dt className="text-xs text-[var(--text-dim)]">{t(lang, "perfOpenSlides")}</dt>
                 <dd className="font-mono tabular-nums">{status.open_slides}</dd>
               </div>
               <div>
-                <dt className="text-[11px] text-[var(--text-dim)]">{t(lang, "perfExportsNow")}</dt>
+                <dt className="text-xs text-[var(--text-dim)]">{t(lang, "perfExportsNow")}</dt>
                 <dd className="font-mono tabular-nums">
                   {status.exports_running} {t(lang, "perfRunning")} · {status.exports_waiting} {t(lang, "perfWaiting")}
                 </dd>
@@ -225,7 +225,7 @@ export function AdminPerformance() {
               {group === "render" && (
                 <>
                   <fieldset>
-                    <legend className="text-[12.5px] font-medium">{t(lang, "perfRenderMode")}</legend>
+                    <legend className="text-sm font-medium">{t(lang, "perfRenderMode")}</legend>
                     <div className="mt-2 grid grid-cols-3 gap-1 rounded-xl bg-[var(--bg)]/50 p-1" role="radiogroup">
                       {MODES.map((mode) => (
                         <button
@@ -240,7 +240,7 @@ export function AdminPerformance() {
                         </button>
                       ))}
                     </div>
-                    <p className="mt-2 text-[11.5px] leading-5 text-[var(--text-dim)]">
+                    <p className="mt-2 text-xs leading-5 text-[var(--text-dim)]">
                       {t(lang, MODES.find((m) => m.key === draft.render_mode)?.hint ?? "renderAutoHint")}
                     </p>
                   </fieldset>
@@ -266,17 +266,17 @@ export function AdminPerformance() {
 
               {group === "cache" && (
                 <div className="grid gap-4">
-                  <p className="text-[11.5px] leading-5 text-[var(--text-dim)]">{t(lang, "perfCacheIntro")}</p>
+                  <p className="text-xs leading-5 text-[var(--text-dim)]">{t(lang, "perfCacheIntro")}</p>
                   {CACHE_SWITCHES.map((item) => {
                     const disabled = Boolean(item.needs && !draft[item.needs]);
                     const on = draft[item.key] && !disabled;
                     return (
                       <div key={item.key} className={`flex items-start justify-between gap-4 ${disabled ? "opacity-45" : ""}`}>
                         <div className="min-w-0">
-                          <p id={`perf-${item.key}`} className="text-[12.5px] font-medium">
+                          <p id={`perf-${item.key}`} className="text-sm font-medium">
                             {t(lang, item.label)}
                           </p>
-                          <p className="mt-0.5 text-[11px] leading-4 text-[var(--text-dim)]">{t(lang, item.hint)}</p>
+                          <p className="mt-0.5 text-xs leading-4 text-[var(--text-dim)]">{t(lang, item.hint)}</p>
                         </div>
                         <button
                           type="button"
@@ -297,7 +297,7 @@ export function AdminPerformance() {
               )}
 
               {error && (
-                <p role="alert" className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]">
+                <p role="alert" className="flex items-start gap-1.5 text-sm leading-5 text-[var(--danger)]">
                   <WarningCircle size={15} className="mt-0.5 shrink-0" />
                   {error}
                 </p>
@@ -308,7 +308,7 @@ export function AdminPerformance() {
                   type="button"
                   disabled={!dirty || busy}
                   onClick={() => void run(() => updatePerformance(draft))}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 text-[12px] font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40"
                 >
                   {t(lang, "perfSave")}
                 </button>
@@ -316,11 +316,11 @@ export function AdminPerformance() {
                   type="button"
                   disabled={busy}
                   onClick={() => void run(resetPerformance)}
-                  className="inline-flex h-9 items-center rounded-xl px-3 text-[12px] text-[var(--text-dim)] transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)] disabled:opacity-40"
+                  className="inline-flex h-9 items-center rounded-xl px-3 text-sm text-[var(--text-dim)] transition-colors hover:bg-[var(--bg)] hover:text-[var(--text)] disabled:opacity-40"
                 >
                   {t(lang, "perfReset")}
                 </button>
-                <span className="ml-auto text-[11.5px] text-[var(--text-dim)]" aria-live="polite">
+                <span className="ml-auto text-xs text-[var(--text-dim)]" aria-live="polite">
                   {saved ? (
                     <span className="inline-flex items-center gap-1 text-[var(--accent)]">
                       <Check size={13} weight="bold" /> {t(lang, "perfSaved")}
@@ -338,7 +338,7 @@ export function AdminPerformance() {
               <span className="h-24 animate-pulse rounded-xl bg-[var(--bg)]/50" />
             </div>
           )}
-          {!view && error && <p className="mt-3 text-[12px] text-[var(--danger)]">{error}</p>}
+          {!view && error && <p className="mt-3 text-sm text-[var(--danger)]">{error}</p>}
         </div>
       </div>
     </Glass>

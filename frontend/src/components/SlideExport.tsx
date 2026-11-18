@@ -129,12 +129,12 @@ export function SlideExport({
   }
 
   const selectClass =
-    "h-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-[13px] text-[var(--text)] transition-colors hover:border-[var(--line-strong)] focus:border-[var(--accent)]";
+    "h-10 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base text-[var(--text)] transition-colors hover:border-[var(--line-strong)] focus:border-[var(--accent)]";
   const running = job && (job.status === "queued" || job.status === "running");
 
   return (
     <div className="flex flex-col gap-4">
-      <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+      <label className="grid gap-1.5 text-xs font-medium text-[var(--text-dim)]">
         {t(lang, "format")}
         <select value={format} onChange={(event) => setFormat(event.target.value as SlideExportFormat)} className={selectClass}>
           <option value="ome-tiff">OME-TIFF</option>
@@ -146,7 +146,7 @@ export function SlideExport({
       <Guide title="export" body={HINTS[format]} />
 
       <fieldset className="grid gap-1.5">
-        <legend className="mb-1.5 text-[11px] font-medium text-[var(--text-dim)]">{t(lang, "exportRegion")}</legend>
+        <legend className="mb-1.5 text-xs font-medium text-[var(--text-dim)]">{t(lang, "exportRegion")}</legend>
         <div className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--bg)] p-1" role="radiogroup">
           {(["view", "selection", "full"] as const).map((key) => (
             <button
@@ -155,16 +155,16 @@ export function SlideExport({
               role="radio"
               aria-checked={mode === key}
               onClick={() => setMode(key)}
-              className={`rounded-lg px-1.5 py-1.5 text-[11.5px] transition-colors ${mode === key ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
+              className={`rounded-lg px-1.5 py-1.5 text-xs transition-colors ${mode === key ? "bg-[var(--text)] text-[var(--bg)]" : "text-[var(--text-dim)] hover:text-[var(--text)]"}`}
             >
               {t(lang, key === "view" ? "regionView" : key === "selection" ? "regionSelection" : "regionFull")}
             </button>
           ))}
         </div>
-        {mode === "selection" && !selection && <p className="text-[11.5px] leading-5 text-[var(--text-dim)]">{t(lang, "needSelection")}</p>}
+        {mode === "selection" && !selection && <p className="text-xs leading-5 text-[var(--text-dim)]">{t(lang, "needSelection")}</p>}
       </fieldset>
 
-      <label className="grid gap-1.5 text-[11px] font-medium text-[var(--text-dim)]">
+      <label className="grid gap-1.5 text-xs font-medium text-[var(--text-dim)]">
         {t(lang, "resolution")}
         <select value={level} onChange={(event) => setLevel(Number(event.target.value))} className={selectClass}>
           {info.levels.map((lv, i) => (
@@ -176,19 +176,19 @@ export function SlideExport({
         </select>
       </label>
 
-      <p className={`flex items-baseline justify-between rounded-xl bg-[var(--bg)] px-3 py-2 text-[12px] ${tooLarge ? "text-[var(--danger)]" : ""}`}>
+      <p className={`flex items-baseline justify-between rounded-xl bg-[var(--bg)] px-3 py-2 text-sm ${tooLarge ? "text-[var(--danger)]" : ""}`}>
         <span className="text-[var(--text-dim)]">{t(lang, "outputSize")}</span>
         <span className="font-mono tabular-nums">
           {size.w} × {size.h} px · {megapixels(pixels)}
         </span>
       </p>
-      {tooLarge && <p className="-mt-2 text-[11.5px] leading-5 text-[var(--danger)]">{t(lang, "tooLargeRaster")}</p>}
+      {tooLarge && <p className="-mt-2 text-xs leading-5 text-[var(--danger)]">{t(lang, "tooLargeRaster")}</p>}
 
       <fieldset>
-        <legend className="mb-1.5 text-[11px] font-medium text-[var(--text-dim)]">{t(lang, "exportChannels")}</legend>
+        <legend className="mb-1.5 text-xs font-medium text-[var(--text-dim)]">{t(lang, "exportChannels")}</legend>
         <div className="grid grid-cols-2 gap-1">
           {info.channels.map((ch, i) => (
-            <label key={i} className="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-[11.5px] hover:bg-[var(--bg)]">
+            <label key={i} className="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-xs hover:bg-[var(--bg)]">
               <input
                 type="checkbox"
                 checked={channels[i] ?? false}
@@ -205,13 +205,13 @@ export function SlideExport({
       </fieldset>
 
       {composite && (
-        <label className="flex cursor-pointer items-center gap-2.5 rounded-xl bg-[var(--bg)] p-3 text-[12px]">
+        <label className="flex cursor-pointer items-center gap-2.5 rounded-xl bg-[var(--bg)] p-3 text-sm">
           <input type="checkbox" checked={scaleBar} onChange={(event) => setScaleBar(event.target.checked)} />
           {t(lang, "scaleBar")}
         </label>
       )}
       {format === "jpeg" && (
-        <label className="grid gap-2 text-[11px] font-medium text-[var(--text-dim)]">
+        <label className="grid gap-2 text-xs font-medium text-[var(--text-dim)]">
           <span className="flex items-center justify-between">
             {t(lang, "jpegQ")}
             <span className="font-mono tabular-nums text-[var(--text)]">{quality}</span>
@@ -221,7 +221,7 @@ export function SlideExport({
       )}
 
       {error && (
-        <p role="alert" className="flex items-start gap-1.5 text-[12px] leading-5 text-[var(--danger)]">
+        <p role="alert" className="flex items-start gap-1.5 text-sm leading-5 text-[var(--danger)]">
           <WarningCircle size={15} className="mt-0.5 shrink-0" />
           {error}
         </p>
@@ -231,7 +231,7 @@ export function SlideExport({
         type="button"
         disabled={blocked || Boolean(running)}
         onClick={() => void run()}
-        className="group inline-flex min-h-11 items-center justify-between rounded-xl bg-[var(--accent)] px-4 text-[13px] font-semibold text-white shadow-[0_10px_24px_var(--accent-glow)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] active:scale-[0.98] disabled:translate-y-0 disabled:opacity-40"
+        className="group inline-flex min-h-11 items-center justify-between rounded-xl bg-[var(--accent)] px-4 text-base font-semibold text-white shadow-[0_10px_24px_var(--accent-glow)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] active:scale-[0.98] disabled:translate-y-0 disabled:opacity-40"
       >
         <span className="inline-flex items-center gap-2">
           {(busy || running) && (
@@ -243,12 +243,12 @@ export function SlideExport({
       </button>
 
       {job && (
-        <div className="rounded-xl border border-[var(--line)] p-3 text-[12px]" aria-live="polite">
+        <div className="rounded-xl border border-[var(--line)] p-3 text-sm" aria-live="polite">
           <div className="flex items-center justify-between gap-2">
             <span className={job.status === "error" ? "text-[var(--danger)]" : "text-[var(--text-dim)]"}>
               {job.status === "done" ? t(lang, "exportReady") : job.status === "error" ? t(lang, "jobError") : t(lang, "jobRunning")}
             </span>
-            <span className="font-mono tabular-nums text-[11px]">{Math.round((job.progress ?? 0) * 100)}%</span>
+            <span className="font-mono tabular-nums text-xs">{Math.round((job.progress ?? 0) * 100)}%</span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--bg)]">
             <div
@@ -261,16 +261,16 @@ export function SlideExport({
             {job.status === "done" && (
               <a
                 href={jobDownloadUrl(job.id)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--text)] px-3 text-[11.5px] font-medium text-[var(--bg)]"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--text)] px-3 text-xs font-medium text-[var(--bg)]"
               >
                 <DownloadSimple size={14} /> {t(lang, "download")}
               </a>
             )}
-            <button type="button" onClick={() => nav("/jobs")} className="h-8 rounded-lg px-2 text-[11.5px] text-[var(--accent)] hover:bg-[var(--accent-soft)]">
+            <button type="button" onClick={() => nav("/jobs")} className="h-8 rounded-lg px-2 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]">
               {t(lang, "viewJobs")}
             </button>
           </div>
-          {job.download_name && <p className="mt-2 truncate font-mono text-[10.5px] text-[var(--text-dim)]">{job.download_name}</p>}
+          {job.download_name && <p className="mt-2 truncate font-mono text-2xs text-[var(--text-dim)]">{job.download_name}</p>}
         </div>
       )}
     </div>

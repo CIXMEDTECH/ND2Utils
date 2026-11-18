@@ -326,7 +326,7 @@ export function SlideStage({
       <div ref={hostRef} className="absolute inset-0" />
       {viewer && minimap && <Minimap viewer={viewer} info={info} display={display} />}
       {error && (
-        <p role="alert" className="absolute bottom-14 left-3 z-20 max-w-[calc(100%-1.5rem)] rounded-lg border border-red-300/15 bg-black/70 px-3 py-2 text-[12px] leading-5 text-red-100 backdrop-blur-md">
+        <p role="alert" className="absolute bottom-14 left-3 z-20 max-w-[calc(100%-1.5rem)] rounded-lg border border-red-300/15 bg-black/70 px-3 py-2 text-sm leading-5 text-red-100 backdrop-blur-md">
           {error}
         </p>
       )}
@@ -341,8 +341,8 @@ export function SlideLoading({ preparing = true }: { preparing?: boolean }) {
   return (
     <div role="status" className="flex h-full flex-1 flex-col items-center justify-center gap-3 bg-[#050607] px-8 text-center">
       <span className="spinner h-5 w-5 rounded-full border border-white/25 border-t-[var(--accent)]" />
-      <p className="font-mono text-[11px] text-white/65">{t(lang, "slideOpening")}</p>
-      {preparing && <p className="max-w-[42ch] text-[12px] leading-5 text-white/40">{t(lang, "slidePreparing")}</p>}
+      <p className="font-mono text-xs text-white/65">{t(lang, "slideOpening")}</p>
+      {preparing && <p className="max-w-[42ch] text-sm leading-5 text-white/40">{t(lang, "slidePreparing")}</p>}
     </div>
   );
 }
@@ -359,7 +359,7 @@ export function SlideZoomControls({ viewer, view, dark = true }: { viewer: Slide
       <button type="button" className={button} onClick={() => viewer?.fit()} aria-label={t(lang, "fit")} title={`${t(lang, "fit")} (0)`}>
         <CornersOut size={15} />
       </button>
-      <button type="button" className={`${button} text-[11px]`} onClick={() => viewer?.zoomTo(1)} title={`${t(lang, "oneToOne")} (1)`}>
+      <button type="button" className={`${button} text-xs`} onClick={() => viewer?.zoomTo(1)} title={`${t(lang, "oneToOne")} (1)`}>
         {t(lang, "oneToOne")}
       </button>
       <button
@@ -371,7 +371,7 @@ export function SlideZoomControls({ viewer, view, dark = true }: { viewer: Slide
       >
         <MagnifyingGlassMinus size={15} />
       </button>
-      <span className={`min-w-12 text-center font-mono text-[11px] tabular-nums ${dark ? "text-white/75" : ""}`} title={t(lang, "zoomLevel")}>
+      <span className={`min-w-12 text-center font-mono text-xs tabular-nums ${dark ? "text-white/75" : ""}`} title={t(lang, "zoomLevel")}>
         {percent >= 10 ? Math.round(percent) : percent >= 1 ? percent.toFixed(1) : percent.toFixed(2)}%
       </span>
       <button
