@@ -16,7 +16,7 @@ from nd2utils.jsonutil import jsonable
 from nd2utils.models import ExportRequest
 from nd2utils.nd2io import axis_size, extract_channels, iter_coords, open_nd2
 from nd2utils.render import build_luts, composite_rgb, draw_scale_bar, encode_image, render_standalone_scale_bars
-from nd2utils.store import get_file_detail, get_owned_job, source_path, upsert_job
+from nd2utils.store import JobCancelled, get_file_detail, job_cancelled, get_owned_job, source_path, upsert_job
 
 _FORMAT_LABELS = {
     "ome-tiff": "OME-TIFF",
@@ -286,6 +286,8 @@ _README = (
 
 
 def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
+    if job_cancelled(job_id):
+        return  # deleted while it was queued
     created = time.time()
     rec = {
         "id": job_id,
@@ -314,6 +316,7 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
     seen_scale_specs: set[tuple[Path, int, int, float, int]] = set()
     stems_used: list[str] = []
     total = max(len(req.file_ids), 1)
+    zip_path: Path | None = None
     # OME-TIFF keeps native values. TIFF/PNG/JPEG are 8-bit display images.
     write_raw = req.format == "ome-tiff" and not req.burn_lut
     try:
@@ -476,6 +479,10 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
         rec["download_name"] = zip_name
         rec["zip_path"] = str(zip_path)
         upsert_job(rec)
+    except JobCancelled:
+        # Deleted by the user while running: drop whatever was produced.
+        if zip_path is not None:
+            zip_path.unlink(missing_ok=True)
     except Exception as exc:
         rec["status"] = "error"
         rec["error"] = str(exc)

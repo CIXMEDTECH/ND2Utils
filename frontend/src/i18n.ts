@@ -510,6 +510,12 @@ const dict = {
     textSizeNormal: "标准",
     textSizeLarge: "大",
     textSizeXLarge: "特大",
+    jobDelete: "删除记录",
+    jobCancel: "取消导出",
+    jobsPick: "选择此记录",
+    jobsDeletePicked: "删除所选",
+    jobsClearFinished: "清除已完成",
+    jobsClearFinishedHint: "删除所有已完成和失败的导出记录及其下载文件",
   },
   en: {
     app: "Lucida",
@@ -1020,6 +1026,12 @@ const dict = {
     textSizeNormal: "Standard",
     textSizeLarge: "Large",
     textSizeXLarge: "Extra large",
+    jobDelete: "Delete record",
+    jobCancel: "Cancel export",
+    jobsPick: "Select this record",
+    jobsDeletePicked: "Delete selected",
+    jobsClearFinished: "Clear finished",
+    jobsClearFinishedHint: "Delete every finished or failed export record and its download",
   },
 } as const;
 

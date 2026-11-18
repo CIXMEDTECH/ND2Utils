@@ -31,6 +31,15 @@ class PathError(ValueError):
     pass
 
 
+class JobCancelled(Exception):
+    """The job's record was deleted while it ran: stop and clean up."""
+
+
+# Ids of jobs deleted while queued/running. A running export keeps writing its progress;
+# without these markers the record would come back.
+_DELETED_JOBS: set[str] = set()
+
+
 # Large acquisition metadata lives in uploads/<id>/detail.json, not in index.json:
 # the index is consulted on every request and must stay small.
 DETAIL_KEYS = ("text_info", "experiment", "events", "metadata", "app_info", "groups")
@@ -376,11 +385,41 @@ def upsert_job(record: dict[str, Any]) -> dict[str, Any]:
     if not record.get(OWNER_FIELD):
         raise ValueError("job record is missing an owner")
     with _LOCK:
+        if record["id"] in _DELETED_JOBS:
+            raise JobCancelled(record["id"])
         jobs = load_jobs()
         # A copy: export threads keep mutating their own record between progress writes.
         jobs[record["id"]] = dict(record)
         save_jobs(jobs)
     return record
+
+
+def job_cancelled(job_id: str) -> bool:
+    return job_id in _DELETED_JOBS
+
+
+def delete_jobs(owner_id: str, job_ids: list[str] | None = None, *, finished_only: bool = False) -> list[str]:
+    """Delete these jobs (all of the owner's when None) and their downloads. Running ones are
+    cancelled: they stop at their next progress update. Returns the deleted ids."""
+    with _LOCK:
+        jobs = load_jobs()
+        wanted = set(job_ids) if job_ids is not None else None
+        doomed = [
+            rec
+            for job_id, rec in jobs.items()
+            if _owned(rec, owner_id)
+            and (wanted is None or job_id in wanted)
+            and (not finished_only or rec.get("status") in ("done", "error"))
+        ]
+        for rec in doomed:
+            jobs.pop(rec["id"], None)
+            if rec.get("status") in ("queued", "running"):
+                _DELETED_JOBS.add(rec["id"])
+        if doomed:
+            save_jobs(jobs)
+    for rec in doomed:
+        _remove_job_output(rec)
+    return [rec["id"] for rec in doomed]
 
 
 def fail_interrupted_jobs() -> int:

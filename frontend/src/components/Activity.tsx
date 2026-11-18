@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { CheckCircle, DownloadSimple, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircle, DownloadSimple, WarningCircle, X } from "@phosphor-icons/react";
 import { t, type MsgKey } from "../i18n";
 import { type Task, useTasks } from "../lib/activity";
 import { jobDownloadUrl } from "../lib/api";
@@ -62,6 +62,7 @@ export function ActivityLine() {
 /** Header pill: the most important task at a glance; click for every task. */
 export function ActivityIndicator() {
   const lang = useApp((s) => s.lang);
+  const removeJobs = useApp((s) => s.removeJobs);
   const tasks = useTasks();
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -161,6 +162,17 @@ export function ActivityIndicator() {
                     ) : isRunning(task) && task.ratio != null && !task.total ? (
                       <span className="ml-auto font-mono text-xs tabular-nums text-[var(--text-dim)]">{percent(task.ratio)}</span>
                     ) : null}
+                    {task.jobId && (
+                      <button
+                        type="button"
+                        onClick={() => void removeJobs([task.jobId!])}
+                        className={`${task.state === "done" || (isRunning(task) && task.ratio != null && !task.total) ? "" : "ml-auto"} inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-dim)] hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-[var(--danger)]`}
+                        title={t(lang, isRunning(task) ? "jobCancel" : "jobDelete")}
+                        aria-label={t(lang, isRunning(task) ? "jobCancel" : "jobDelete")}
+                      >
+                        <X size={13} weight="bold" />
+                      </button>
+                    )}
                   </div>
                   <p className="mt-0.5 truncate pl-5 font-mono text-2xs text-[var(--text-dim)]" title={detail(task, lang)}>
                     {detail(task, lang)}

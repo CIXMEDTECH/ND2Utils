@@ -334,6 +334,17 @@ export async function getJob(id: string): Promise<JobInfo> {
   return json(await fetch(`/api/jobs/${id}`));
 }
 
+export async function deleteJob(id: string): Promise<void> {
+  const res = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+  // Already gone (deleted in another tab, or purged): that is what the user wanted.
+  if (!res.ok && res.status !== 404) throw await parseError(res);
+}
+
+export async function clearJobs(body: { scope: "finished" | "all"; job_ids?: string[] }): Promise<string[]> {
+  const data = await json<{ deleted: string[] }>(await send("/api/jobs/clear", "POST", body));
+  return data.deleted;
+}
+
 export function jobDownloadUrl(id: string) {
   return `/api/jobs/${id}/download`;
 }

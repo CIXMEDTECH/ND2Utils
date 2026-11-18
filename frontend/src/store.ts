@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { AccessUser, FileDetail, FileSummary, JobInfo, Lang, TextSize, Theme } from "./lib/types";
 import { readPref, writePref } from "./lib/storage";
-import { listJobs, listWorkspace, logout as apiLogout, me, setUnauthorizedHandler } from "./lib/api";
+import { clearJobs, deleteJob, listJobs, listWorkspace, logout as apiLogout, me, setUnauthorizedHandler } from "./lib/api";
 import { configure as configureCache, signedOut as clearCache } from "./lib/previewCache";
 
 function systemDark(): boolean {
@@ -57,6 +57,8 @@ export interface AppState {
   signOut: () => Promise<void>;
   refreshFiles: () => Promise<void>;
   refreshJobs: () => Promise<void>;
+  /** Drop export records right away (the server call runs in the background). */
+  removeJobs: (ids: string[]) => Promise<void>;
   setCurrentFolder: (folder: string) => void;
   reveal: (folder: string) => void;
   select: (id: string | null) => void;
@@ -208,6 +210,18 @@ export const useApp = create<AppState>((set, get) => ({
   },
   refreshJobs: async () => {
     set({ jobs: await listJobs() });
+  },
+  removeJobs: async (ids) => {
+    if (!ids.length) return;
+    const gone = new Set(ids);
+    set({ jobs: get().jobs.filter((job) => !gone.has(job.id)) });
+    try {
+      if (ids.length === 1) await deleteJob(ids[0]);
+      else await clearJobs({ scope: "all", job_ids: ids });
+    } finally {
+      // Re-sync: a failed delete brings the record back.
+      await get().refreshJobs().catch(() => undefined);
+    }
   },
   setCurrentFolder: (folder) => set({ currentFolder: folder }),
   reveal: (folder) => set({ revealRequest: { path: folder, seq: (get().revealRequest?.seq ?? 0) + 1 } }),

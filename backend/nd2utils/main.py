@@ -98,6 +98,8 @@ from nd2utils.store import (
     upsert_files,
     upsert_job,
     fail_interrupted_jobs,
+    delete_jobs,
+    JobCancelled,
     workspace_usage,
 )
 
@@ -563,6 +565,8 @@ def _gated(job, *args) -> None:
     try:
         with perf.export_slot():
             job(*args)
+    except JobCancelled:
+        pass  # deleted by its owner
     except Exception:  # the job records its own error; keep the worker alive
         log.exception("Export job failed")
 
@@ -1923,6 +1927,25 @@ def api_export(body: ExportRequest, owner_id: Owner) -> dict[str, Any]:
 @app.get("/api/jobs")
 def api_jobs(owner_id: Owner) -> dict[str, Any]:
     return {"jobs": [_public(job) for job in list_jobs(owner_id)[:50]]}
+
+
+@app.delete("/api/jobs/{job_id}")
+def api_delete_job(job_id: str, owner_id: Owner) -> dict[str, str]:
+    """Delete an export record and its download; a queued or running export is cancelled."""
+    if not delete_jobs(owner_id, [job_id]):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Job not found."})
+    return {"id": job_id, "status": "deleted"}
+
+
+class JobsClearBody(BaseModel):
+    scope: Literal["finished", "all"] = "finished"
+    job_ids: list[str] | None = None
+
+
+@app.post("/api/jobs/clear")
+def api_clear_jobs(body: JobsClearBody, owner_id: Owner) -> dict[str, Any]:
+    deleted = delete_jobs(owner_id, body.job_ids, finished_only=body.scope == "finished")
+    return {"deleted": deleted, "count": len(deleted)}
 
 
 @app.get("/api/jobs/{job_id}")

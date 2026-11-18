@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import math
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Iterator, Literal
@@ -23,7 +24,7 @@ from nd2utils.config import settings
 from nd2utils.models import LutSetting
 from nd2utils.ometiff import TILE, Slide, iter_tiles, open_slide, read_region
 from nd2utils.render import _font, apply_lut, nice_scale_um
-from nd2utils.store import get_file_detail, get_owned_job, source_path, upsert_job
+from nd2utils.store import JobCancelled, get_file_detail, get_owned_job, job_cancelled, source_path, upsert_job
 
 
 def max_raster_pixels() -> int:
@@ -361,7 +362,11 @@ def output_name(meta: dict[str, Any], p: ExportPlan, req: SlideExportRequest, fu
 
 
 def run_slide_export(job_id: str, file_id: str, req: SlideExportRequest, owner_id: str) -> None:
-    rec = get_owned_job(job_id, owner_id) or {}
+    if job_cancelled(job_id):
+        return  # deleted while it was queued
+    rec = get_owned_job(job_id, owner_id)
+    if rec is None:
+        return
     rec.update({"status": "running", "progress": 0.01, "message": "Preparing export"})
     upsert_job(rec)
     dest: Path | None = None
@@ -400,6 +405,10 @@ def run_slide_export(job_id: str, file_id: str, req: SlideExportRequest, owner_i
             }
         )
         upsert_job(rec)
+    except JobCancelled:
+        if dest is not None:
+            dest.unlink(missing_ok=True)
+        shutil.rmtree(settings.exports_dir / job_id, ignore_errors=True)
     except Exception as exc:
         if dest is not None:
             dest.unlink(missing_ok=True)
