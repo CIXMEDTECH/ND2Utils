@@ -492,20 +492,88 @@ def _optics_of(file_id: str, rec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def backfill_optics() -> int:
-    """Fill in zoom / calibrated for files imported by older versions (startup, background)."""
-    from nd2utils import store
+# Version of the metadata readers. Records below it are re-read at startup: 2 = TIFF
+# descriptions with OME-XML the TIFF library missed, vendor JSON (EVOS), palette colours and
+# file-name hints.
+META_REV = 2
+_TIFF_FIELDS = ("channels", "voxel_um", "calibrated", "objective", "magnification", "na", "instrument", "software", "acquired")
 
-    todo = [(fid, rec) for fid, rec in store.index_items() if "calibrated" not in rec]
+
+def _tiff_metadata(file_id: str, rec: dict[str, Any]) -> dict[str, Any] | None:
+    from nd2utils import naming
+
+    source = settings.uploads_dir / file_id / "source.nd2"
+    try:
+        fresh = ometiff.identify_path(source, file_id, rec.get("name") or "", int(rec.get("size_bytes") or 0), float(rec.get("created_at") or 0))
+    except Exception:
+        log.debug("Could not re-read TIFF metadata of %s", file_id, exc_info=True)
+        return None
+    naming.enrich(fresh)
+    changes = {k: fresh.get(k) for k in _TIFF_FIELDS}
+    if fresh.get("magnification_source"):
+        changes["magnification_source"] = fresh["magnification_source"]
+    # Keep the user's channel adjustments (visibility, LUT) when only names/colours improve.
+    old = rec.get("channels") or []
+    if len(old) == len(changes["channels"] or []):
+        merged = []
+        for prev, new in zip(old, changes["channels"]):
+            item = dict(prev)
+            if str(prev.get("name") or "").startswith("Channel ") or not prev.get("name"):
+                item["name"] = new.get("name")
+            if not prev.get("color") or list(prev["color"]) == [255, 255, 255]:
+                item["color"] = new.get("color")
+            for key in ("emission_nm", "excitation_nm"):
+                item[key] = item.get(key) or new.get(key)
+            merged.append(item)
+        changes["channels"] = merged
+    detail_path = settings.uploads_dir / file_id / "detail.json"
+    try:
+        detail = json.loads(detail_path.read_text(encoding="utf-8"))
+        detail["text_info"] = fresh.get("text_info") or detail.get("text_info")
+        detail["metadata"] = fresh.get("metadata") or detail.get("metadata")
+        tmp = detail_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(detail, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(detail_path)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return changes
+
+
+def backfill_metadata() -> int:
+    """Bring records of older versions up to date (startup, background): zoom / calibration
+    (1.1) and the improved TIFF metadata reader (META_REV)."""
+    from nd2utils import naming, store
+
     changes: dict[str, dict[str, Any]] = {}
-    for file_id, rec in todo:
-        changes[file_id] = _optics_of(file_id, rec)
+    count = 0
+    for file_id, rec in store.index_items():
+        update: dict[str, Any] = {}
+        if "calibrated" not in rec:
+            update.update(_optics_of(file_id, rec))
+        if int(rec.get("meta_rev") or 0) < META_REV:
+            if rec.get("format") in ("tiff", "ome-tiff") and not rec.get("cropped"):
+                update.update(_tiff_metadata(file_id, rec) or {})
+            else:
+                hinted = naming.enrich({k: rec.get(k) for k in ("name", "magnification", "channels", "is_rgb")})
+                if hinted.get("magnification_source"):
+                    update["magnification"] = hinted["magnification"]
+                    update["magnification_source"] = hinted["magnification_source"]
+            update["meta_rev"] = META_REV
+            if update.get("channels") is not None and update["channels"] != rec.get("channels"):
+                # Thumbnails are coloured from the record: drop them and move the cache
+                # version on so browsers fetch the new look.
+                (settings.cache_dir / file_id / THUMB_NAME).unlink(missing_ok=True)
+                if rec.get("prepared_at"):
+                    update["prepared_at"] = round(time.time(), 3)
+        if update:
+            changes[file_id] = update
+            count += 1
         if len(changes) >= 200:
             store.patch_files(changes)
             changes = {}
     if changes:
         store.patch_files(changes)
-    return len(todo)
+    return count
 
 
 def wait_idle(timeout: float = 60) -> None:

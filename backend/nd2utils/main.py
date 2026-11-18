@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from nd2utils import __version__, analyses, auth, lifio, ometiff, perf, prepare, slide_render
+from nd2utils import __version__, analyses, auth, lifio, naming, ometiff, perf, prepare, slide_render
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import _write_ome_tiff, new_job_id, run_export
 from nd2utils.models import (
@@ -137,8 +137,9 @@ async def lifespan(_app: FastAPI):
     analyses.reset_interrupted()
     # Files imported before background preparation existed (or interrupted by a restart).
     prepare.schedule_missing()
-    # Optics fields added in 1.1 (zoom, calibrated): read them for older files in the background.
-    asyncio.get_running_loop().run_in_executor(None, prepare.backfill_optics)
+    # Optics fields added in 1.1 (zoom, calibrated) and the better TIFF metadata reader: bring
+    # older records up to date in the background.
+    asyncio.get_running_loop().run_in_executor(None, prepare.backfill_metadata)
     task = asyncio.create_task(_purge_loop())
     yield
     task.cancel()
@@ -287,10 +288,12 @@ def _source_name(raw: str | None) -> str:
 
 def _identify(path: Path, file_id: str, name: str, size: int, created: float) -> dict[str, Any]:
     if ometiff.is_tiff_name(name):
-        return ometiff.identify_path(path, file_id, name, size, created)
-    rec = identify_path(path, file_id, name, size, created)
-    rec["format"] = "nd2"
-    return rec
+        rec = ometiff.identify_path(path, file_id, name, size, created)
+    else:
+        rec = identify_path(path, file_id, name, size, created)
+        rec["format"] = "nd2"
+    rec["meta_rev"] = prepare.META_REV
+    return naming.enrich(rec)
 
 
 def _ingest_file(

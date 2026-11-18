@@ -129,8 +129,12 @@ def _parse_ome(xml: str | None, image_index: int) -> dict[str, Any]:
     """The bits of OME-XML the viewer uses. Missing or malformed XML gives an empty dict."""
     if not xml:
         return {}
+    if isinstance(xml, bytes):
+        xml = xml.decode("utf-8", errors="replace")
+    # The declaration may claim another encoding (EVOS writes "utf-16" into an ASCII tag).
+    xml = re.sub(r"^\s*<\?xml[^>]*\?>", "", xml, count=1)
     try:
-        root = ET.fromstring(xml.encode("utf-8") if isinstance(xml, str) else xml)
+        root = ET.fromstring(xml.encode("utf-8"))
     except ET.ParseError:
         return {}
     images = _children(root, "Image")
@@ -178,6 +182,113 @@ def _parse_ome(xml: str | None, image_index: int) -> dict[str, Any]:
     if microscope is not None:
         out["instrument"] = " ".join(v for v in (microscope.get("Manufacturer"), microscope.get("Model")) if v) or None
     return out
+
+
+_JSON_COMMENT = re.compile(r"<!--\s*(\{.*\})\s*-->", re.S)
+
+
+def _hex_color(value: Any) -> list[int] | None:
+    """"#AARRGGBB" / "#RRGGBB" → [r, g, b]."""
+    text = str(value or "").strip().lstrip("#")
+    if len(text) not in (6, 8) or any(ch not in "0123456789abcdefABCDEF" for ch in text):
+        return None
+    rgb = text[-6:]
+    return [int(rgb[i : i + 2], 16) for i in (0, 2, 4)]
+
+
+def _vendor_json(description: str) -> dict[str, Any]:
+    """JSON that some acquisition software (Thermo Fisher EVOS) appends to the OME-XML as an
+    XML comment. It carries the real pixel size, objective and channel colour."""
+    match = _JSON_COMMENT.search(description or "")
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _apply_vendor(out: dict[str, Any], js: dict[str, Any]) -> None:
+    obj = js.get("ObjectiveSettings") if isinstance(js.get("ObjectiveSettings"), dict) else {}
+    mpp = _float(js.get("MicronsPerPixel"))
+    if mpp and mpp > 0:
+        out["um_x"] = out["um_y"] = mpp
+        out["um_from_vendor"] = True
+    mag = _float(obj.get("Magnification"))
+    if mag:
+        out["magnification"] = mag
+    na = _float(js.get("Objective NA")) or _float(obj.get("NumericalAperture"))
+    if na:
+        out["na"] = na
+    if obj:
+        parts = [obj.get("Manufacturer"), obj.get("DisplayName") or obj.get("PartNumber")]
+        label = " ".join(str(p) for p in parts if p)
+        optics = f"{mag:g}x" if mag else ""
+        if na:
+            optics += f"/{na:g}"
+        out["objective"] = " ".join(v for v in (label, optics) if v) or out.get("objective")
+    if js.get("Software"):
+        out["creator"] = str(js["Software"])
+    ch = js.get("ChannelSettings") if isinstance(js.get("ChannelSettings"), dict) else {}
+    epi = js.get("EpiChannelSettings") if isinstance(js.get("EpiChannelSettings"), dict) else {}
+    color = _hex_color(ch.get("Color"))
+    if color is None and epi.get("PseudoColorEnabled"):
+        color = _hex_color(epi.get("PseudoColor"))
+    emission = _float(js.get("Emission Wavelength"))
+    channels = out.setdefault("channels", [])
+    if not channels and (ch.get("Name") or color):
+        channels.append({"name": ch.get("Name"), "color": None, "emission_nm": None, "excitation_nm": None, "samples": 1})
+    if len(channels) == 1:
+        first = channels[0]
+        first["name"] = first.get("name") or ch.get("Name")
+        if color and (not first.get("color") or first["color"] == [255, 255, 255]):
+            first["color"] = color
+        if emission and not first.get("emission_nm"):
+            first["emission_nm"] = emission
+    out["vendor"] = js
+
+
+def _description(tif: tifffile.TiffFile) -> str:
+    try:
+        return tif.pages.first.description or ""
+    except Exception:
+        return ""
+
+
+def _metadata(tif: tifffile.TiffFile, image_index: int) -> dict[str, Any]:
+    """OME-XML (also when tifffile does not recognise it, e.g. an XML declaration claiming
+    utf-16 in an ASCII description), plus vendor JSON appended as a comment."""
+    description = _description(tif)
+    if tif.is_ome:
+        out = _parse_ome(tif.ome_metadata, image_index)
+    elif "<OME" in description[:4096]:
+        out = _parse_ome(description, image_index)
+    else:
+        out = {}
+    pixels = out.get("pixels") or {}
+    um_x = out.get("um_x")
+    size_x = _float(pixels.get("SizeX"))
+    # Some writers put the field width in PhysicalSizeX (EVOS: 318 "µm/px" on a 2048 px image).
+    if um_x and size_x and um_x > 20 and 0.01 <= um_x / size_x <= 20:
+        out["um_x"] = um_x / size_x
+        size_y = _float(pixels.get("SizeY")) or size_x
+        out["um_y"] = (out.get("um_y") or um_x) / size_y
+    vendor = _vendor_json(description)
+    if vendor:
+        _apply_vendor(out, vendor)
+    return out
+
+
+def _palette_color(slide: "Slide") -> list[int] | None:
+    """Colour of an indexed (palette) image whose colormap is a single-hue ramp."""
+    page = slide.levels[0].pages[0] if slide.levels and slide.levels[0].pages else None
+    kf = page.keyframe if page is not None else None
+    if kf is None or kf.photometric != tifffile.PHOTOMETRIC.PALETTE or kf.colormap is None:
+        return None
+    cmap = np.asarray(kf.colormap, dtype=np.float64)
+    top = cmap[:, -1] / (257.0 if cmap.max() > 255 else 1.0)
+    return [int(round(v)) for v in top] if top.max() > 0 else None
 
 
 # --- open slides --------------------------------------------------------------
@@ -318,7 +429,7 @@ def _open(path: Path, cache_key: str | None) -> Slide:
         levels.sort(key=lambda lv: -lv.width)
         real = len(levels)
         levels += _virtual_levels(cache_key, n_planes)
-        ome = _parse_ome(tif.ome_metadata, index) if tif.is_ome else {}
+        ome = _metadata(tif, index)
         return Slide(
             path=path,
             tif=tif,
@@ -611,6 +722,8 @@ def _channels(slide: Slide) -> list[dict[str, Any]]:
         else:
             name = str(meta.get("name") or f"Channel {i + 1}")
             color = meta.get("color")
+            if n == 1 and (color is None or color == [255, 255, 255]):
+                color = _palette_color(slide) or color
         out.append(
             {
                 "index": i,
@@ -697,6 +810,12 @@ def identify_path(path: Path, file_id: str, name: str, size_bytes: int, created_
             desc = slide.tif.pages.first.description if slide.tif.pages else ""
             if desc:
                 text_info["ImageDescription"] = desc[:65536]
+        vendor = ome.get("vendor") or {}
+        if vendor:
+            text_info["Acquisition"] = "\n".join(
+                f"{key}: {json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value}"
+                for key, value in vendor.items()
+            )
         text_info["pyramid"] = "\n".join(
             f"L{i}: {lv['width']} × {lv['height']}  (1/{lv['downsample']:.4g})" for i, lv in enumerate(levels)
         )
@@ -721,7 +840,7 @@ def identify_path(path: Path, file_id: str, name: str, size_bytes: int, created_
             "calibrated": calibrated,
             "na": ome.get("na"),
             "acquired": ome.get("acquired"),
-            "instrument": ome.get("instrument"),
+            "instrument": ome.get("instrument") or _tiff_make(slide),
             "software": ome.get("creator") or _tiff_software(slide),
             "bits_significant": ome.get("bits") or (int(np.iinfo(slide.dtype).bits) if np.issubdtype(slide.dtype, np.integer) else None),
             "is_rgb": False,
@@ -737,6 +856,15 @@ def identify_path(path: Path, file_id: str, name: str, size_bytes: int, created_
         }
     finally:
         slide.close()
+
+
+def _tiff_make(slide: Slide) -> str | None:
+    try:
+        tags = slide.tif.pages.first.tags
+        parts = [str(tags[k].value).strip() for k in ("Make", "Model") if k in tags]
+        return " ".join(p for p in parts if p) or None
+    except Exception:
+        return None
 
 
 def _tiff_software(slide: Slide) -> str | None:
