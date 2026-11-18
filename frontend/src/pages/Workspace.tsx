@@ -5,6 +5,7 @@ import {
   ArrowCounterClockwise,
   ArrowsLeftRight,
   Binoculars,
+  ChartBar,
   ClipboardText,
   ArrowElbowDownRight,
   FolderOpen,
@@ -51,6 +52,7 @@ import { ZoomStage } from "../components/ZoomStage";
 import { t } from "../i18n";
 import {
   clientSettings,
+  createAnalysis,
   createFolder,
   createProject,
   cropFile,
@@ -462,6 +464,16 @@ export function Workspace() {
     }
   }
 
+  async function startCometAnalysis(items: MoveSet, label: string) {
+    try {
+      setError(null);
+      const rec = await createAnalysis({ name: label, file_ids: items.file_ids, folders: items.folders });
+      nav(`/analysis/${rec.id}`);
+    } catch (err) {
+      setError(detailMessage(err, lang));
+    }
+  }
+
   /** "Add to project": pick one of the recent projects or start a new one (it used to create a
    * new project on every click). */
   function openProjectPicker(event: React.MouseEvent, ids: string[]) {
@@ -787,6 +799,13 @@ export function Workspace() {
             ]
           : []),
         { key: "organize", label: t(lang, "organizeByMag"), icon: <Binoculars size={15} />, disabled: count === 0, onSelect: () => setOrganizeFolder(path) },
+        {
+          key: "comet",
+          label: t(lang, "cometAnalyze"),
+          icon: <ChartBar size={15} />,
+          disabled: count === 0,
+          onSelect: () => void startCometAnalysis(picked.folders.length || picked.file_ids.length ? picked : { file_ids: [], folders: [path] }, path.split("/").pop() || t(lang, "workspaceRoot")),
+        },
         { key: "export", label: t(lang, "exportEllipsis"), icon: <ExportIcon size={15} />, separated: true, disabled: count === 0, onSelect: () => exportFolder(path) },
         { key: "upload", label: t(lang, "uploadFilesHere"), icon: <UploadSimple size={15} />, separated: true, onSelect: () => uploadInto(path, false) },
         { key: "upload-dir", label: t(lang, "uploadFolderHere"), icon: <FolderSimplePlus size={15} />, onSelect: () => uploadInto(path, true) },
@@ -836,6 +855,12 @@ export function Workspace() {
         label: exportChecked ? `${t(lang, "addToProject")} (${checkedFiles.length})` : t(lang, "addToProject"),
         icon: <SquaresFour size={15} />,
         onSelect: () => void handleOpenInStudio((exportChecked ? checkedFiles : [file]).map((f) => f.id)),
+      },
+      {
+        key: "comet",
+        label: exportChecked ? `${t(lang, "cometAnalyze")} (${checkedFiles.length})` : t(lang, "cometAnalyze"),
+        icon: <ChartBar size={15} />,
+        onSelect: () => void startCometAnalysis(selectionFor({ file: file.id }), file.folder.split("/").pop() || file.name),
       },
       isSlide(file)
         ? { key: "slide", label: t(lang, "openSlide"), icon: <Stack size={15} />, onSelect: () => nav(`/slide/${file.id}`) }
@@ -1164,6 +1189,9 @@ export function Workspace() {
                   <SquaresFour size={15} className="shrink-0" />
                 </button>
               )}
+              <button type="button" onClick={() => void startCometAnalysis(currentSelection(), `${pickedCount} ${t(lang, "items")}`)} className={barButton} title={t(lang, "cometAnalyze")}>
+                <ChartBar size={15} className="shrink-0" />
+              </button>
               <button
                 type="button"
                 onClick={() => {

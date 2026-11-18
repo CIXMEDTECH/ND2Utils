@@ -878,6 +878,9 @@ def delete_workspace(owner_id: str) -> None:
             if _owned(proj, owner_id):
                 projects.pop(pid, None)
         save_projects(projects)
+    from nd2utils import analyses  # local import: analyses imports store
+
+    analyses.delete_owner(owner_id)
 
 
 def purge_expired(now: float | None = None) -> list[str]:

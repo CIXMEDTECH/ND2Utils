@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from nd2utils import __version__, auth, lifio, ometiff, perf, prepare, slide_render
+from nd2utils import __version__, analyses, auth, lifio, ometiff, perf, prepare, slide_render
 from nd2utils.config import ensure_dirs, repo_root, settings
 from nd2utils.export_jobs import _write_ome_tiff, new_job_id, run_export
 from nd2utils.models import (
@@ -134,6 +134,7 @@ async def lifespan(_app: FastAPI):
     purge_expired()
     # Jobs that were queued or running when the server stopped will never finish.
     fail_interrupted_jobs()
+    analyses.reset_interrupted()
     # Files imported before background preparation existed (or interrupted by a restart).
     prepare.schedule_missing()
     # Optics fields added in 1.1 (zoom, calibrated): read them for older files in the background.
@@ -2055,6 +2056,206 @@ def api_export(body: ExportRequest, owner_id: Owner) -> dict[str, Any]:
     )
     _submit_export(run_export, job_id, body, owner_id)
     return {"id": job_id, "status": "queued", "file_count": len(file_ids)}
+
+
+# --- analyses (comet assay) -------------------------------------------------------
+
+
+class AnalysisCreate(BaseModel):
+    name: str = ""
+    file_ids: list[str] = []
+    folders: list[str] = []
+    params: dict[str, Any] | None = None
+    run: bool = True
+
+
+class AnalysisPatch(BaseModel):
+    name: str | None = None
+    params: dict[str, Any] | None = None
+    groups: dict[str, str] | None = None
+    file_ids: list[str] | None = None
+
+
+class ResultPatch(BaseModel):
+    deleted: list[int] | None = None
+    # Per-image parameters (re-analyses that image); null removes the override.
+    params: dict[str, Any] | None = None
+    reset_params: bool = False
+
+
+def _need_analysis(analysis_id: str, owner_id: str) -> dict[str, Any]:
+    rec = analyses.get_owned(analysis_id, owner_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Analysis not found."})
+    return rec
+
+
+def _analysis_view(rec: dict[str, Any], owner_id: str, full: bool) -> dict[str, Any]:
+    out = _public(rec)
+    files = []
+    for fid in rec["file_ids"]:
+        f = get_owned_file(fid, owner_id)
+        if not f:
+            continue
+        item = {
+            "file_id": fid,
+            "name": f.get("name"),
+            "folder": f.get("folder") or "",
+            "group": (rec.get("groups") or {}).get(fid, "/"),
+            "width": f.get("width"),
+            "height": f.get("height"),
+            "channels": f.get("channels") or [],
+            "override": (rec.get("overrides") or {}).get(fid),
+        }
+        if full:
+            item.update(analyses.file_summary(analyses.read_result(rec["id"], fid)))
+        files.append(item)
+    out["files"] = files if full else None
+    out["file_count"] = len(files)
+    return out
+
+
+@app.get("/api/analyses")
+def api_list_analyses(owner_id: Owner) -> dict[str, Any]:
+    return {"analyses": [_analysis_view(rec, owner_id, full=False) for rec in analyses.list_analyses(owner_id)]}
+
+
+@app.post("/api/analyses")
+def api_create_analysis(body: AnalysisCreate, owner_id: Owner) -> dict[str, Any]:
+    ids = list(body.file_ids)
+    for raw in body.folders:
+        folder = _folder_arg(raw)
+        ids.extend(rec["id"] for rec in files_in_folder(owner_id, folder))
+    if not ids:
+        raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select images first."})
+    for fid in ids:
+        _need(fid, owner_id)  # 404 for unknown or someone else's files
+    rec = analyses.create(owner_id, name=body.name, file_ids=ids, params=body.params)
+    if body.run:
+        analyses.run(rec["id"], owner_id)
+    return _analysis_view(analyses.get_owned(rec["id"], owner_id) or rec, owner_id, full=True)
+
+
+@app.get("/api/analyses/{analysis_id}")
+def api_get_analysis(analysis_id: str, owner_id: Owner) -> dict[str, Any]:
+    return _analysis_view(_need_analysis(analysis_id, owner_id), owner_id, full=True)
+
+
+@app.patch("/api/analyses/{analysis_id}")
+def api_update_analysis(analysis_id: str, body: AnalysisPatch, owner_id: Owner) -> dict[str, Any]:
+    _need_analysis(analysis_id, owner_id)
+    rec = analyses.update(analysis_id, owner_id, body.model_dump(exclude_unset=True))
+    return _analysis_view(rec or _need_analysis(analysis_id, owner_id), owner_id, full=True)
+
+
+@app.delete("/api/analyses/{analysis_id}")
+def api_delete_analysis(analysis_id: str, owner_id: Owner) -> dict[str, str]:
+    if not analyses.delete(analysis_id, owner_id):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Analysis not found."})
+    return {"id": analysis_id, "status": "deleted"}
+
+
+class RunBody(BaseModel):
+    file_ids: list[str] | None = None
+
+
+@app.post("/api/analyses/{analysis_id}/run")
+def api_run_analysis(analysis_id: str, body: RunBody, owner_id: Owner) -> dict[str, Any]:
+    _need_analysis(analysis_id, owner_id)
+    return {"queued": analyses.run(analysis_id, owner_id, body.file_ids)}
+
+
+@app.get("/api/analyses/{analysis_id}/results/{file_id}")
+def api_analysis_result(analysis_id: str, file_id: str, owner_id: Owner) -> dict[str, Any]:
+    rec = _need_analysis(analysis_id, owner_id)
+    if file_id not in rec["file_ids"]:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not in this analysis."})
+    res = analyses.read_result(analysis_id, file_id)
+    if res is None:
+        return JSONResponse(status_code=202, content={"status": "pending"})
+    return res
+
+
+@app.patch("/api/analyses/{analysis_id}/results/{file_id}")
+def api_patch_result(analysis_id: str, file_id: str, body: ResultPatch, owner_id: Owner) -> dict[str, Any]:
+    rec = _need_analysis(analysis_id, owner_id)
+    if file_id not in rec["file_ids"]:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not in this analysis."})
+    out: dict[str, Any] = {}
+    if body.deleted is not None:
+        out["result"] = analyses.set_deleted(analysis_id, file_id, body.deleted)
+    if body.params is not None or body.reset_params:
+        analyses.set_override(analysis_id, owner_id, file_id, None if body.reset_params else body.params)
+        out["queued"] = analyses.run(analysis_id, owner_id, [file_id])
+    return out
+
+
+@app.get("/api/analyses/{analysis_id}/image/{file_id}")
+def api_analysis_image(analysis_id: str, file_id: str, owner_id: Owner) -> Response:
+    rec = _need_analysis(analysis_id, owner_id)
+    if file_id not in rec["file_ids"]:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not in this analysis."})
+    try:
+        body = analyses.analysis_image(analysis_id, owner_id, file_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not found."}) from exc
+    return Response(content=body, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/analyses/{analysis_id}/summary")
+def api_analysis_summary(analysis_id: str, owner_id: Owner, include_outliers: bool = False) -> dict[str, Any]:
+    return analyses.summary(_need_analysis(analysis_id, owner_id), include_outliers)
+
+
+def run_analysis_export(job_id: str, analysis_id: str, owner_id: str) -> None:
+    rec = get_owned_job(job_id, owner_id)
+    if rec is None:
+        return
+    analysis = analyses.get_owned(analysis_id, owner_id) or {}
+    stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(analysis.get("name") or "comet")).strip("_") or "comet"
+    name = f"{stem}_comet_{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    dest = settings.exports_dir / name
+    rec.update({"status": "running", "progress": 0.02, "message": "Writing tables"})
+    upsert_job(rec)
+    try:
+
+        def progress(ratio: float) -> None:
+            rec["progress"] = 0.05 + 0.9 * ratio
+            rec["message"] = "Drawing overlays"
+            upsert_job(rec)
+
+        analyses.export_archive(analysis_id, owner_id, dest, progress)
+        rec.update({"status": "done", "progress": 1.0, "message": "Export complete", "download_name": name, "zip_path": str(dest)})
+        upsert_job(rec)
+    except JobCancelled:
+        dest.unlink(missing_ok=True)
+    except Exception as exc:
+        dest.unlink(missing_ok=True)
+        rec.update({"status": "error", "error": str(exc), "message": str(exc)})
+        upsert_job(rec)
+
+
+@app.post("/api/analyses/{analysis_id}/export")
+def api_export_analysis(analysis_id: str, owner_id: Owner) -> dict[str, Any]:
+    rec = _need_analysis(analysis_id, owner_id)
+    job_id = new_job_id()
+    upsert_job(
+        {
+            "id": job_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "Queued",
+            "created_at": time.time(),
+            "download_name": None,
+            "error": None,
+            "format": "comet · csv",
+            "file_ids": list(rec["file_ids"]),
+            "label": rec.get("name"),
+            "_owner": owner_id,
+        }
+    )
+    _submit_export(run_analysis_export, job_id, analysis_id, owner_id)
+    return {"id": job_id, "status": "queued"}
 
 
 @app.get("/api/jobs")

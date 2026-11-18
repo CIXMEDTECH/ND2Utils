@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     def projects_path(self) -> Path:
         return self.data_dir / "projects.json"
 
+    @property
+    def analyses_path(self) -> Path:
+        return self.data_dir / "analyses.json"
+
+    @property
+    def analyses_dir(self) -> Path:
+        return self.data_dir / "analyses"
+
 
 settings = Settings()
 

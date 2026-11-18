@@ -474,3 +474,138 @@ export async function projectionUrl(
   if (!res.ok) throw await parseError(res);
   return URL.createObjectURL(await res.blob());
 }
+
+// --- analyses (comet assay) -------------------------------------------------------------
+
+export type TailDirection = "right" | "left" | "up" | "down";
+export type HeadMode = "auto" | "profile" | "brightest";
+
+export interface CometParams {
+  channel: number | null;
+  tail: TailDirection;
+  background_correction: boolean;
+  head_mode: HeadMode;
+  min_area: number;
+}
+
+export interface AnalysisFile {
+  file_id: string;
+  name: string;
+  folder: string;
+  group: string;
+  width: number | null;
+  height: number | null;
+  channels: { index: number; name: string; color: number[] }[];
+  override: Partial<CometParams> | null;
+  analyzed?: boolean;
+  error?: string | null;
+  counts?: { valid: number; outlier: number; invalid: number; deleted: number };
+  analyzed_at?: number;
+}
+
+export interface AnalysisInfo {
+  id: string;
+  type: "comet";
+  name: string;
+  params: CometParams;
+  status: "idle" | "queued" | "running" | "done";
+  progress: number;
+  created_at: number;
+  updated_at: number;
+  file_count: number;
+  files: AnalysisFile[] | null;
+}
+
+export interface Comet {
+  key: number;
+  num?: number;
+  status: "valid" | "outlier" | "invalid";
+  reasons: string[];
+  outline: number[][];
+  hull?: number[][];
+  head?: { cx: number; cy: number; r: number } | null;
+  metrics?: Record<string, number>;
+  profiles?: { comet: number[]; head: number[]; tail: number[] };
+}
+
+export interface CometResult {
+  file_id: string;
+  name: string;
+  width: number;
+  height: number;
+  channel: number;
+  comets: Comet[];
+  deleted: number[];
+  um_per_px: number | null;
+  error: string | null;
+  analyzed_at: number;
+}
+
+export interface Stat {
+  n: number;
+  mean: number | null;
+  sd: number | null;
+  sem: number | null;
+  median: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+export interface AnalysisSummary {
+  total: number;
+  include_outliers: boolean;
+  groups: { group: string; metrics: Record<string, Stat>; values: Record<string, number[]> }[];
+}
+
+export async function listAnalyses(): Promise<AnalysisInfo[]> {
+  return (await json<{ analyses: AnalysisInfo[] }>(await fetch("/api/analyses"))).analyses;
+}
+
+export async function createAnalysis(body: { name?: string; file_ids?: string[]; folders?: string[]; params?: Partial<CometParams> }): Promise<AnalysisInfo> {
+  return json(await send("/api/analyses", "POST", body));
+}
+
+export async function getAnalysis(id: string): Promise<AnalysisInfo> {
+  return json(await fetch(`/api/analyses/${id}`));
+}
+
+export async function updateAnalysis(
+  id: string,
+  body: Partial<{ name: string; params: Partial<CometParams>; groups: Record<string, string>; file_ids: string[] }>,
+): Promise<AnalysisInfo> {
+  return json(await send(`/api/analyses/${id}`, "PATCH", body));
+}
+
+export async function deleteAnalysis(id: string): Promise<void> {
+  await json(await send(`/api/analyses/${id}`, "DELETE"));
+}
+
+export async function runAnalysis(id: string, fileIds?: string[]): Promise<{ queued: number }> {
+  return json(await send(`/api/analyses/${id}/run`, "POST", { file_ids: fileIds ?? null }));
+}
+
+export async function getCometResult(id: string, fileId: string): Promise<CometResult | null> {
+  const res = await fetch(`/api/analyses/${id}/results/${fileId}`);
+  if (res.status === 202) return null;
+  return json(res);
+}
+
+export async function patchCometResult(
+  id: string,
+  fileId: string,
+  body: { deleted?: number[]; params?: Partial<CometParams>; reset_params?: boolean },
+): Promise<unknown> {
+  return json(await send(`/api/analyses/${id}/results/${fileId}`, "PATCH", body));
+}
+
+export async function analysisSummary(id: string, includeOutliers: boolean): Promise<AnalysisSummary> {
+  return json(await fetch(`/api/analyses/${id}/summary?include_outliers=${includeOutliers}`));
+}
+
+export async function exportAnalysis(id: string): Promise<{ id: string }> {
+  return json(await send(`/api/analyses/${id}/export`, "POST"));
+}
+
+export function analysisImageUrl(id: string, fileId: string, version: number | undefined): string {
+  return `/api/analyses/${id}/image/${fileId}?v=${version ?? 0}`;
+}
