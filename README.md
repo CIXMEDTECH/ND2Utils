@@ -1,14 +1,25 @@
-# ND2Utils
+# Lucida 明室
 
-Self-hosted web tool for Nikon NIS-Elements `.nd2` files: identify, preview, inspect metadata, and batch-export to OME-TIFF / TIFF / PNG / JPEG. An Advanced workspace covers NIS-Elements Viewer-style LUTs, ND dimensions, scale bar, projections, and measurements. Multi-channel (whole-slide) OME-TIFF files open in a tiled slide viewer. Leica `.lif` projects are imported as a folder with one entry per image.
+Self-hosted microscopy workbench for Nikon `.nd2`, Leica `.lif`, OME-TIFF and plain TIFF images: import and organise files like a file manager, inspect and measure, edit and compose figures with magnification-aware scale bars, quantify comet assays, and batch-export to OME-TIFF / TIFF / PNG / JPEG.
 
-ND2Utils is not affiliated with Nikon, Laboratory Imaging or Leica Microsystems.
+Formerly ND2Utils — the repository, Docker image (`ghcr.io/cidmex/nd2utils`), environment variables (`ND2UTILS_*`) and data layout keep that name. Lucida is not affiliated with Nikon, Laboratory Imaging or Leica Microsystems.
 
 ---
 
 ## 中文
 
-把 ND2 文件丢进浏览器：识别通道与物镜、预览荧光叠加、查看采集信息，再批量导出。需要 LUT、直方图、测量时，进入高级模式。
+Lucida 明室（原 ND2Utils）是一个自托管的显微图像工作台：把 ND2 / LIF / OME-TIFF / TIFF 拖进浏览器，像文件管理器一样整理，查看通道、物镜和采集信息，精细查看与测量，多图编辑拼图，彗星实验统计，最后批量导出。
+
+### v1.1 新功能（beta1）
+
+- **更流畅**：导入时不再卡住其他操作（文件打开锁按文件拆分、上传写盘移出事件循环、导出任务独立线程池、未准备好的预览立即返回并优先处理；前端轮询不再整页重渲染）。
+- **字体**：内置思源黑体（Noto Sans SC）+ Inter，字号整体加大；“设置 → 语言与外观 → 字号”可选 标准 / 大 / 特大。
+- **文件管理器**：拖动文件或文件夹到另一个文件夹即可移动；Ctrl/⌘+X 剪切、Ctrl/⌘+V 粘贴；右键“移动到…”；Shift / Ctrl 多选；移动后可撤销。点文件夹在中间显示文件夹视图（列表或缩略图）。
+- **元信息与比例尺**：自动读取物镜倍数和共聚焦 zoom；比例尺长度按“物镜 × zoom”查表（100x → 10 µm 起，保持在图宽的 8%–40%），预览、裁切、项目编辑和导出一致；没有像素标定的图不再画假比例尺。
+- **按倍镜整理**：右键文件夹“按倍镜整理…”，把文件分到 `100x`、`100x zoom3` 这样的子文件夹（先预览，可撤销）；上传栏可勾选“导入后按倍镜整理”。
+- **彗星实验统计**（导航“分析”）：复刻 OpenComet 算法，自动找彗星、定位头部，计算尾部 DNA%、尾矩、Olive 尾矩等 16 项指标；点击彗星可删除 / 恢复；按实验组汇总（均值、标准差、SEM、中位数，可含离群）并画箱线图；导出 `comets.csv`、`summary.csv` 和标注图。
+- **导出记录**：可逐条删除、取消正在进行的导出、多选删除、一键清除已完成。
+- **新的首页与导航**：文件 · 查看 · 编辑 · 分析 · 导出 · 设置；首页按任务进入，并列出最近的编辑项目和分析。
 
 ### 部署
 
@@ -77,7 +88,18 @@ TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-
 
 ## English
 
-Upload `.nd2` files, inspect channels and optics, preview composites, and batch-export. Advanced mode follows NIS-Elements Viewer workflows (LUT, histogram, ND bar, scale bar, MIP, ROI).
+Lucida (formerly ND2Utils) is a self-hosted microscopy workbench: drop ND2 / LIF / OME-TIFF / TIFF files into the browser, organise them like a file manager, inspect channels, optics and acquisition data, measure, compose figures, quantify comet assays, and batch-export. Advanced mode follows NIS-Elements Viewer workflows (LUT, histogram, ND bar, scale bar, MIP, ROI).
+
+### New in v1.1 (beta1)
+
+- Responsive while importing: per-file open locks, uploads written off the event loop, exports on their own pool, previews of files still being prepared answer at once and jump the queue; the UI no longer re-renders everything on each poll.
+- Bundled Noto Sans SC + Inter, larger type, and a text size setting (standard / large / extra large).
+- File manager: drag files and folders onto folders, Ctrl/⌘+X / Ctrl/⌘+V, “Move to…”, Shift/Ctrl multi-select, undo; opening a folder shows its contents as a list or thumbnails.
+- Optics metadata (objective, confocal zoom, calibration) and magnification-aware scale bars shared by previews, crops, Studio and exports; uncalibrated images get no bar.
+- “Sort by magnification…” puts files into `100x` / `100x zoom3` subfolders (preview, undo), optionally right after import.
+- Comet assay analysis (OpenComet re-implementation): comets, heads, tail DNA %, tail moment, Olive moment and more; click to remove comets; per-group statistics and box plots; CSV tables and overlay images.
+- Export records can be deleted (running exports are cancelled), in bulk, or cleared.
+- New start page and navigation: Files · Inspect · Edit · Analyze · Exports · Settings.
 
 ### Deploy
 
@@ -102,4 +124,5 @@ On first start an admin access code is generated and printed to the server log (
 - Administrators can copy or move files and folders between any two workspaces (Settings → Access codes → Copy / move files, or the workspace context menu).
 - Leica `.lif` files are whole projects: uploading one creates a folder named after the file (`BRD9 VECTOR.lif` → `BRD9 VECTOR/`) with one workspace file per image (series); the project's own folders become subfolders. The images work like ND2 files (preview, Advanced mode with Z/T/mosaic positions, projections, measurements, batch export) with channel names, LUT colors, wavelengths, objective, pixel size and scan settings taken from the LIF metadata. All images of a project share one copy of the uploaded data (hard links). Uploading the same .lif again replaces images with the same name. Raw FLIM histogram data is not supported.
 - OME-TIFF keeps native bit depth in `*.ome.tif` (12-bit data looks dark in ordinary viewers). Each one has an 8-bit `*.tif` with the same name and the display LUT applied. TIFF / PNG / JPEG are 8-bit display images. Hidden channels are not exported.
+- Comet assay: images should show comets lying horizontally with the head on the left (other directions are rotated first, see the “tail direction” parameter). Per-comet numbers follow OpenComet, including its pixel units for lengths and areas; µm columns are added for calibrated images. Summary medians are computed correctly (OpenComet's are off for even counts).
 - The local `ND2demo/` directory is a development-only fixture and is not included in git. The application does not read it at runtime, and Docker excludes it from the build context.

@@ -1641,19 +1641,33 @@ export function Workspace() {
                           <SquaresFour size={16} weight="duotone" className="shrink-0" />
                           <span className="truncate">{t(lang, "studio")}</span>
                         </button>
-                      </div>
-                      {(selected.cropped || selected.edited) && (
                         <button
                           type="button"
-                          disabled={restoring}
-                          onClick={() => void handleRestoreOriginal(selected.id)}
-                          className={`${secondaryAction} text-[var(--text-dim)] disabled:opacity-50`}
-                          title={t(lang, "restoreOriginal")}
+                          onClick={() =>
+                            void startCometAnalysis(
+                              selectedIds.length > 0 ? { file_ids: selectedIds, folders: [] } : { file_ids: [selected.id], folders: [] },
+                              selected.folder.split("/").pop() || selected.name,
+                            )
+                          }
+                          className={secondaryAction}
+                          title={t(lang, "cometAnalyze")}
                         >
-                          <ArrowCounterClockwise size={16} className="shrink-0" />
-                          <span className="truncate">{t(lang, "restoreOriginal")}</span>
+                          <ChartBar size={16} weight="duotone" className="shrink-0" />
+                          <span className="truncate">{t(lang, "cometAnalyze")}</span>
                         </button>
-                      )}
+                        {(selected.cropped || selected.edited) && (
+                          <button
+                            type="button"
+                            disabled={restoring}
+                            onClick={() => void handleRestoreOriginal(selected.id)}
+                            className={`${secondaryAction} text-[var(--text-dim)] disabled:opacity-50`}
+                            title={t(lang, "restoreOriginal")}
+                          >
+                            <ArrowCounterClockwise size={16} className="shrink-0" />
+                            <span className="truncate">{t(lang, "restoreOriginal")}</span>
+                          </button>
+                        )}
+                      </div>
                       {pendingDelete !== selected.id && (
                         <div className="flex justify-end">
                           <button

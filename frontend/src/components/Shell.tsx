@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
+  ChartBar,
   ClockCounterClockwise,
+  FolderOpen,
   GearSix,
-  GridFour,
   Moon,
   ShieldCheck,
   SignOut,
@@ -21,11 +22,13 @@ import { useApp } from "../store";
 import { Glass } from "./Glass";
 import { Mark } from "./Mark";
 
+// Task order: bring files in, look at them, edit, quantify, take results out.
 const nav = [
-  { to: "/workspace", key: "basic" as const, Icon: GridFour },
-  { to: "/studio", key: "studio" as const, Icon: SquaresFour },
-  { to: "/advanced", key: "advanced" as const, Icon: SlidersHorizontal },
-  { to: "/jobs", key: "jobs" as const, Icon: ClockCounterClockwise },
+  { to: "/workspace", key: "navFiles" as const, Icon: FolderOpen },
+  { to: "/advanced", key: "navView" as const, Icon: SlidersHorizontal },
+  { to: "/studio", key: "navEdit" as const, Icon: SquaresFour },
+  { to: "/analysis", key: "navAnalyze" as const, Icon: ChartBar },
+  { to: "/jobs", key: "navExports" as const, Icon: ClockCounterClockwise },
   { to: "/settings", key: "settings" as const, Icon: GearSix },
 ];
 
