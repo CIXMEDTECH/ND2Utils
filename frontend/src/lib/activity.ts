@@ -56,8 +56,10 @@ export function useActivityTracker() {
   const files = useApp((s) => s.files);
   const folders = useApp((s) => s.folders);
   const jobs = useApp((s) => s.jobs);
-  const pendingIds = files.filter((f) => f.prepare === "pending").map((f) => f.id);
-  const pendingKey = pendingIds.join(",");
+  const pendingKey = useMemo(
+    () => files.filter((f) => f.prepare === "pending").map((f) => f.id).join(","),
+    [files],
+  );
   const jobsActive = jobs.some(isActive);
 
   // First page of a session: learn about files still being prepared and running exports.
@@ -93,11 +95,20 @@ export function useActivityTracker() {
   }, [pendingKey]);
 
   // Keep every prepared preview in the local cache (if enabled), starting next to the selection.
+  // Only when the set of ready previews changes, and not while uploading (the downloads would
+  // compete with the upload for the connection).
+  const uploading = useUploads((s) => Boolean(s.progress));
   const order = useMemo(() => orderedFiles(folders, files).filter((f) => !isSlide(f)), [folders, files]);
+  const warmKey = useMemo(
+    () => order.filter((f) => f.prepare === "ready").map((f) => `${f.id}@${f.prepared_at ?? 0}`).join(","),
+    [order],
+  );
   useEffect(() => {
+    if (uploading || !warmKey) return;
     const at = Math.max(0, order.findIndex((f) => f.id === useApp.getState().selectedId));
     warm([...order.slice(at), ...order.slice(0, at)]);
-  }, [order]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- order is read for the key's files
+  }, [warmKey, uploading]);
 
   useEffect(() => {
     const update = () => {

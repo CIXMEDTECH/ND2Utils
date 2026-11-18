@@ -141,7 +141,7 @@ function storedBytes(map: Map<string, Meta>): number {
 
 /** Store `gz` (compressed preview). Viewed previews make room by dropping the least recently
  * viewed; background downloads (`evict = false`) never push anything out. */
-async function store(file: CachedFile, gz: ArrayBuffer, evict: boolean): Promise<boolean> {
+async function store(file: CachedFile, gz: ArrayBuffer, evict: boolean, notify = true): Promise<boolean> {
   const [db, map] = await Promise.all([openDb(), loadIndex()]);
   if (!db || !config.enabled || gz.byteLength > config.limit) return false;
   const current = map.get(file.id);
@@ -172,7 +172,7 @@ async function store(file: CachedFile, gz: ArrayBuffer, evict: boolean): Promise
   }
   for (const id of drop) map.delete(id);
   map.set(file.id, meta);
-  emit();
+  if (notify) emit();
   return true;
 }
 
@@ -285,7 +285,8 @@ async function warmNext(): Promise<void> {
     try {
       const gz = await download(file.id, true, versionOf(file));
       // Full: stop instead of replacing previews the user actually looked at.
-      if (!(await store(file, gz, false))) warmQueue = [];
+      // The finally block below notifies once per download.
+      if (!(await store(file, gz, false, false))) warmQueue = [];
     } catch {
       // Deleted meanwhile, network hiccup…: the file is fetched when it is opened.
     } finally {

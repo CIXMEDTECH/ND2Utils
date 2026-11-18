@@ -206,12 +206,13 @@ export function Workspace() {
     setPendingDelete(null);
   }, [selectedId]);
 
-  const selected = files.find((file) => file.id === selectedId) ?? null;
+  const selected = useMemo(() => files.find((file) => file.id === selectedId) ?? null, [files, selectedId]);
 
-  // Apply channel visibility on file switch or when channel lock changes
+  // Apply channel visibility on file switch or when channel lock changes. Depends on the
+  // selected file object, which the store keeps while that file is unchanged.
   const previewFileId = useRef<string | null>(null);
   useEffect(() => {
-    const file = files.find((item) => item.id === selectedId);
+    const file = selected;
     if (!file) {
       previewFileId.current = null;
       setVisible([]);
@@ -226,7 +227,7 @@ export function Workspace() {
     } else if (channelLocked) {
       setVisible(resolveVisibleChannels(file.channels));
     }
-  }, [channelLocked, files, lockedChannels, resolveVisibleChannels, selectedId]);
+  }, [channelLocked, selected, lockedChannels, resolveVisibleChannels, selectedId]);
 
   const channelVisible = useMemo(
     () => selected?.channels.map((_, index) => visible[index] ?? true) ?? [],
@@ -453,6 +454,8 @@ export function Workspace() {
     [channelVisible, slide, slideReady],
   );
 
+  const channelsKey = useMemo(() => JSON.stringify(selected?.channels ?? null), [selected?.channels]);
+
   useEffect(() => {
     if (!selected || isSlide(selected)) {
       setLocalPreview(null);
@@ -511,7 +514,10 @@ export function Workspace() {
     return () => {
       cancelled = true;
     };
-  }, [lang, selected?.channels, selected?.height, selected?.id, selected?.prepared_at, selected?.prepare, selected?.width]);
+    // channelsKey, not the channels array: a file-list refresh creates a new array even when
+    // nothing changed, and re-decoding the preview on every poll is what made imports janky.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang, channelsKey, selected?.height, selected?.id, selected?.prepared_at, selected?.prepare, selected?.width]);
 
   // Ordered files for keyboard navigation and neighbour prefetching
   const allOrdered = useMemo(() => orderedFiles(folders, files), [folders, files]);

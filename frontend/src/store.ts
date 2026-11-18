@@ -89,6 +89,36 @@ const emptyWorkspace = {
   checked: {},
 };
 
+const fileKeys = new WeakMap<FileSummary, string>();
+const fileKey = (file: FileSummary): string => {
+  let key = fileKeys.get(file);
+  if (key === undefined) {
+    key = JSON.stringify(file);
+    fileKeys.set(file, key);
+  }
+  return key;
+};
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** `next`, reusing the objects of `prev` for files whose content did not change. */
+function shareFiles(prev: FileSummary[], next: FileSummary[]): FileSummary[] {
+  const byId = new Map(prev.map((f) => [f.id, f]));
+  let changed = prev.length !== next.length;
+  const out = next.map((file, i) => {
+    const old = byId.get(file.id);
+    if (old && fileKey(old) === fileKey(file)) {
+      if (prev[i] !== old) changed = true;
+      return old;
+    }
+    changed = true;
+    return file;
+  });
+  return changed ? out : prev;
+}
+
 export const useApp = create<AppState>((set, get) => ({
   lang: savedLang === "en" ? "en" : "zh",
   theme: savedTheme,
@@ -134,18 +164,27 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
   refreshFiles: async () => {
-    const { files, folders } = await listWorkspace();
-    const { selectedId, checked: currentChecked, currentFolder } = get();
+    const fresh = await listWorkspace();
+    const prev = get();
+    // Keep the objects of unchanged files (and the arrays when nothing changed at all), so a
+    // poll during an import re-renders only what actually changed.
+    const files = shareFiles(prev.files, fresh.files);
+    const folders = sameList(prev.folders, fresh.folders) ? prev.folders : fresh.folders;
+    const { selectedId, checked: currentChecked, currentFolder } = prev;
     const still = files.some((f) => f.id === selectedId);
-    const checked = Object.fromEntries(
-      files.filter((f) => currentChecked[f.id]).map((f) => [f.id, true]),
-    );
+    const checkedIds = files.filter((f) => currentChecked[f.id]).map((f) => f.id);
+    const checkedSame = checkedIds.length === Object.values(currentChecked).filter(Boolean).length;
+    const nextFolder = currentFolder && !folders.includes(currentFolder) ? "" : currentFolder;
+    const nextSelected = still ? selectedId : files[0]?.id ?? null;
+    if (files === prev.files && folders === prev.folders && checkedSame && nextFolder === currentFolder && nextSelected === selectedId) {
+      return;
+    }
     set({
       files,
       folders,
-      currentFolder: currentFolder && !folders.includes(currentFolder) ? "" : currentFolder,
-      selectedId: still ? selectedId : files[0]?.id ?? null,
-      checked,
+      currentFolder: nextFolder,
+      selectedId: nextSelected,
+      checked: checkedSame ? currentChecked : Object.fromEntries(checkedIds.map((id) => [id, true])),
     });
   },
   refreshJobs: async () => {

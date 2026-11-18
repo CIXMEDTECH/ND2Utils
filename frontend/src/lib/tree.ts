@@ -12,7 +12,21 @@ export interface FolderNode {
 
 const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, undefined, { numeric: true });
 
+let lastTree: { folders: string[]; files: FileSummary[]; tree: FolderNode } | null = null;
+
+/**
+ * The folder tree of the workspace. The file tree, keyboard navigation and the background
+ * cache all ask for it after every refresh; the result is shared while the inputs are the
+ * same objects (the store keeps them when nothing changed).
+ */
 export function buildTree(folders: string[], files: FileSummary[]): FolderNode {
+  if (lastTree && lastTree.folders === folders && lastTree.files === files) return lastTree.tree;
+  const tree = computeTree(folders, files);
+  lastTree = { folders, files, tree };
+  return tree;
+}
+
+function computeTree(folders: string[], files: FileSummary[]): FolderNode {
   const root: FolderNode = { path: "", name: "", folders: [], files: [], total: 0 };
   const nodes = new Map<string, FolderNode>([["", root]]);
   const ensure = (path: string): FolderNode => {
@@ -35,14 +49,20 @@ export function buildTree(folders: string[], files: FileSummary[]): FolderNode {
   return root;
 }
 
+const orderedCache = new WeakMap<FolderNode, FileSummary[]>();
+
 /** Files in display order (folders first, natural sort), e.g. for prefetching neighbours. */
 export function orderedFiles(folders: string[], files: FileSummary[]): FileSummary[] {
+  const tree = buildTree(folders, files);
+  const hit = orderedCache.get(tree);
+  if (hit) return hit;
   const out: FileSummary[] = [];
   const walk = (node: FolderNode) => {
     node.folders.forEach(walk);
     out.push(...node.files);
   };
-  walk(buildTree(folders, files));
+  walk(tree);
+  orderedCache.set(tree, out);
   return out;
 }
 

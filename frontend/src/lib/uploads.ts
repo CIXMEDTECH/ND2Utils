@@ -91,7 +91,12 @@ export const useUploads = create<UploadState>((set, get) => ({
       const label = `${t(lang, "uploading")} ${file.name}`;
       set({ progress: { label: `${label} (${i + 1}/${files.length})`, ratio: i / files.length } });
       try {
+        let lastReport = 0;
         const rec = await uploadFile(file, joinPath(target, dir), (ratio) => {
+          // Progress events fire many times per second; the bar does not need more than ~4.
+          const now = performance.now();
+          if (ratio < 1 && now - lastReport < 250) return;
+          lastReport = now;
           set({
             progress: {
               label: `${label} · ${Math.round(ratio * 100)}% (${i + 1}/${files.length})`,

@@ -867,23 +867,31 @@ export function Studio() {
     return aspectPreset;
   }, [aspectPreset, customRatioH, customRatioW]);
 
-  // Load PackedPlane buffers for all files in the active project
-  useEffect(() => {
-    let cancelled = false;
-    for (const file of projectFiles) {
-      if (planesByFile[file.id]) continue;
+  // Load PackedPlane buffers for all files in the active project, at most 4 at a time (a large
+  // project used to download and decode every image at once).
+  const loadingPlanes = useRef(new Set<string>());
+  const planeQueue = useRef<FileSummary[]>([]);
+  const pumpPlanes = useCallback(() => {
+    while (loadingPlanes.current.size < 4 && planeQueue.current.length) {
+      const file = planeQueue.current.shift()!;
+      if (loadingPlanes.current.has(file.id)) continue;
+      loadingPlanes.current.add(file.id);
       void getDisplay(file)
         .then((buf) => {
-          if (cancelled) return;
           const packed = unpackPlane(buf);
-          setPlanesByFile((prev) => ({ ...prev, [file.id]: packed }));
+          setPlanesByFile((prev) => (prev[file.id] ? prev : { ...prev, [file.id]: packed }));
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          loadingPlanes.current.delete(file.id);
+          pumpPlanes();
+        });
     }
-    return () => {
-      cancelled = true;
-    };
-  }, [planesByFile, projectFiles]);
+  }, []);
+  useEffect(() => {
+    planeQueue.current = projectFiles.filter((file) => !planesByFile[file.id] && !loadingPlanes.current.has(file.id));
+    pumpPlanes();
+  }, [planesByFile, projectFiles, pumpPlanes]);
 
   // Compute crop box dimensions for a file given scalePct & aspectRatio
   const computeScaledBox = useCallback(

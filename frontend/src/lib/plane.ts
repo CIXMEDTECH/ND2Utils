@@ -108,10 +108,36 @@ export function renderComposite(
   for (let i = 3; i < out.length; i += 4) out[i] = 255;
 }
 
+/** Per-value RGB for one channel (integer planes): one lookup per pixel instead of a pow. */
+function colorTables(size: number, min: number, max: number, gamma: number, brightness: number, color: number[]) {
+  const [red, green, blue] = color;
+  const span = Math.max(max - min, 1e-6);
+  const linear = Math.abs(gamma - 1) < 1e-6;
+  const inverseGamma = 1 / gamma;
+  const r = new Uint8ClampedArray(size);
+  const g = new Uint8ClampedArray(size);
+  const b = new Uint8ClampedArray(size);
+  for (let v = 0; v < size; v++) {
+    let level = (v - min) / span;
+    if (level <= 0) level = 0;
+    else if (level >= 1) level = 1;
+    else if (!linear) level = Math.pow(level, inverseGamma);
+    if (brightness !== 1 && level > 0) level = Math.min(1, level * brightness);
+    r[v] = level * red;
+    g[v] = level * green;
+    b[v] = level * blue;
+  }
+  return { r, g, b };
+}
+
 export function createPreviewLayers(packed: PackedPlane, luts: LutSetting[]): PreviewLayer[] {
   const previewScale = Math.min(1, MAX_PREVIEW_EDGE / Math.max(packed.width, packed.height));
   const previewWidth = Math.max(1, Math.round(packed.width * previewScale));
   const previewHeight = Math.max(1, Math.round(packed.height * previewScale));
+  const tableSize = packed.dtype === "u8" ? 256 : packed.dtype === "u16" ? 65536 : 0;
+  // Source column/row for every preview column/row (nearest neighbour), computed once.
+  const sourceX = new Uint32Array(previewWidth);
+  for (let x = 0; x < previewWidth; x++) sourceX[x] = Math.min(packed.width - 1, Math.floor(x / previewScale));
   return packed.channels.map((channel, index) => {
     const canvas = document.createElement("canvas");
     canvas.width = previewWidth;
@@ -125,47 +151,40 @@ export function createPreviewLayers(packed: PackedPlane, luts: LutSetting[]): Pr
     const max = lut?.max ?? channel.suggestedMax;
     const gamma = lut?.gamma && lut.gamma > 0 ? lut.gamma : 1;
     const brightness = lut?.brightness !== undefined ? Math.max(0, lut.brightness) : 1;
-    const linear = Math.abs(gamma - 1) < 1e-6;
-    const unitBrightness = Math.abs(brightness - 1) < 1e-6;
-    const inverseGamma = 1 / gamma;
-    const span = Math.max(max - min, 1e-6);
-    const [red, green, blue] = lut?.color ?? channel.color;
-    if (
-      previewWidth === packed.width &&
-      previewHeight === packed.height &&
-      linear &&
-      unitBrightness &&
-      min === 0 &&
-      max === 255
-    ) {
-      const rScale = red / 255;
-      const gScale = green / 255;
-      const bScale = blue / 255;
-      const data = channel.data;
-      for (let i = 0; i < data.length; i++) {
-        const v = data[i];
-        const offset = i * 4;
-        output[offset] = v * rScale;
-        output[offset + 1] = v * gScale;
-        output[offset + 2] = v * bScale;
-        output[offset + 3] = 255;
+    const color = lut?.color ?? channel.color;
+    const data = channel.data;
+    if (tableSize) {
+      const { r, g, b } = colorTables(tableSize, min, max, gamma, brightness, color);
+      const same = previewWidth === packed.width && previewHeight === packed.height;
+      for (let y = 0; y < previewHeight; y++) {
+        const rowStart = (same ? y : Math.min(packed.height - 1, Math.floor(y / previewScale))) * packed.width;
+        let offset = y * previewWidth * 4;
+        for (let x = 0; x < previewWidth; x++) {
+          const v = data[rowStart + (same ? x : sourceX[x])];
+          output[offset] = r[v];
+          output[offset + 1] = g[v];
+          output[offset + 2] = b[v];
+          output[offset + 3] = 255;
+          offset += 4;
+        }
       }
       context.putImageData(image, 0, 0);
       return { canvas, name: channel.name };
     }
+    const linear = Math.abs(gamma - 1) < 1e-6;
+    const unitBrightness = Math.abs(brightness - 1) < 1e-6;
+    const inverseGamma = 1 / gamma;
+    const span = Math.max(max - min, 1e-6);
+    const [red, green, blue] = color;
     for (let y = 0; y < previewHeight; y++) {
       const sourceY = Math.min(packed.height - 1, Math.floor(y / previewScale));
       for (let x = 0; x < previewWidth; x++) {
         const pixel = y * previewWidth + x;
-        const sourceX = Math.min(packed.width - 1, Math.floor(x / previewScale));
-        const sourcePixel = sourceY * packed.width + sourceX;
-        let level = (channel.data[sourcePixel] - min) / span;
+        let level = (data[sourceY * packed.width + sourceX[x]] - min) / span;
         if (level <= 0) level = 0;
         else if (level >= 1) level = 1;
         else if (!linear) level = Math.pow(level, inverseGamma);
-        if (!unitBrightness && level > 0) {
-          level = Math.min(1, level * brightness);
-        }
+        if (!unitBrightness && level > 0) level = Math.min(1, level * brightness);
         const offset = pixel * 4;
         output[offset] = level * red;
         output[offset + 1] = level * green;
