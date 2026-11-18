@@ -13,7 +13,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
+import anyio
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -96,6 +97,7 @@ from nd2utils.store import (
     upsert_file,
     upsert_files,
     upsert_job,
+    fail_interrupted_jobs,
     workspace_usage,
 )
 
@@ -118,11 +120,16 @@ async def _purge_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Sync routes, auth lookups and file reads share this pool; the default 40 threads ran
+    # out when imports, exports and viewers overlapped.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 128
     ensure_dirs()
     auth.ensure_admin()
     migrate_index()
     perf.apply()
     purge_expired()
+    # Jobs that were queued or running when the server stopped will never finish.
+    fail_interrupted_jobs()
     # Files imported before background preparation existed (or interrupted by a restart).
     prepare.schedule_missing()
     task = asyncio.create_task(_purge_loop())
@@ -166,7 +173,12 @@ def _unauthorized() -> JSONResponse:
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     token = request.cookies.get(SESSION_COOKIE)
-    user = await run_in_threadpool(auth.resolve_session, token) if token else None
+    user = None
+    if token:
+        # Recently verified sessions are answered from memory, without a thread hop.
+        user = auth.cached_session(token)
+        if user is None:
+            user = await run_in_threadpool(auth.resolve_session, token)
     request.state.user = user
     path = request.url.path
     if path.startswith("/api/") and path not in _PUBLIC_API and user is None:
@@ -548,8 +560,17 @@ def api_admin_reset_performance(_admin: AdminUser) -> dict[str, Any]:
 
 def _gated(job, *args) -> None:
     """Run an export job once the export gate (Settings → Performance) lets it."""
-    with perf.export_slot():
-        job(*args)
+    try:
+        with perf.export_slot():
+            job(*args)
+    except Exception:  # the job records its own error; keep the worker alive
+        log.exception("Export job failed")
+
+
+def _submit_export(job, *args) -> None:
+    # A dedicated pool, not the request thread pool: queued jobs wait on the export gate
+    # without holding threads that requests need.
+    perf.export_executor().submit(_gated, job, *args)
 
 
 # --- admin: access codes ----------------------------------------------------
@@ -712,26 +733,32 @@ def api_delete_folder(body: FolderBody, owner_id: Owner) -> dict[str, Any]:
     return {"path": folder, "removed_files": removed}
 
 
-@app.post("/api/files")
-async def api_upload(owner_id: Owner, folder: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
-    name = _source_name(file.filename)
-    target = _folder_arg(folder)
-    tmp = settings.staging_dir / f"{uuid.uuid4().hex}.nd2"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
+def _copy_upload(src: Any, dest: Path) -> int:
+    """Copy a spooled upload to `dest`, enforcing the size limit (runs in a worker thread)."""
     size = 0
-    with tmp.open("wb") as fh:
+    with dest.open("wb") as fh:
         while True:
-            chunk = await file.read(8 * 1024 * 1024)
+            chunk = src.read(8 * 1024 * 1024)
             if not chunk:
                 break
             size += len(chunk)
             if size > settings.max_upload_bytes:
-                fh.close()
-                tmp.unlink(missing_ok=True)
                 raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
             fh.write(chunk)
+    return size
+
+
+# Plain `def` routes: the disk writes and parsing run in the thread pool, never on the
+# event loop, so a large upload cannot stall every other request.
+@app.post("/api/files")
+def api_upload(owner_id: Owner, folder: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
+    name = _source_name(file.filename)
+    target = _folder_arg(folder)
+    tmp = settings.staging_dir / f"{uuid.uuid4().hex}.nd2"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
     try:
-        rec = await run_in_threadpool(_ingest_file, tmp, name, owner_id, size, target)
+        size = _copy_upload(file.file, tmp)
+        rec = _ingest_file(tmp, name, owner_id, size, target)
     finally:
         tmp.unlink(missing_ok=True)
     return _public(rec)
@@ -755,7 +782,7 @@ def api_chunk_init(body: ChunkInit, owner_id: Owner) -> dict[str, str]:
 
 
 @app.put("/api/uploads/{upload_id}/chunk")
-async def api_chunk(
+def api_chunk(
     upload_id: str,
     owner_id: Owner,
     offset: int = 0,
@@ -767,13 +794,12 @@ async def api_chunk(
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Upload session missing."})
     if offset < 0 or offset > settings.max_upload_bytes:
         raise HTTPException(status_code=400, detail={"code": "bad_offset", "message": "Invalid chunk offset."})
-    data = await file.read()
     with dest.open("r+b") as fh:
         if offset > dest.stat().st_size:
             fh.seek(offset - 1)
             fh.write(b"\0")
         fh.seek(offset)
-        fh.write(data)
+        shutil.copyfileobj(file.file, fh, 8 * 1024 * 1024)
         size = fh.seek(0, 2)
     if size > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail={"code": "too_large", "message": "File exceeds upload limit."})
@@ -1553,10 +1579,10 @@ def _gzip_response(request: Request, body: bytes) -> Response:
     return Response(content=gzip.decompress(body), media_type="application/octet-stream", headers=headers)
 
 
-def _prepared(file_id: str, owner_id: str, kind: str, t: int, z: int, p: int) -> Any:
+def _prepared(file_id: str, owner_id: str, kind: str, t: int, z: int, p: int, *, wait: bool = True) -> Any:
     rec = _need(file_id, owner_id)
     coords = (max(t, 0), max(z, 0), max(p, 0))
-    return prepare.get(file_id, rec, source_path(file_id), kind, coords)
+    return prepare.get(file_id, rec, source_path(file_id), kind, coords, wait=wait)
 
 
 @app.get("/api/files/{file_id}/display")
@@ -1572,8 +1598,14 @@ def api_display(
     """8-bit, auto-contrasted channels for the workspace preview (same layout as /plane).
 
     `wire=gzip` sends the stored gzip file as is (application/gzip): browsers keep it compressed
-    in their local cache and decompress it themselves."""
-    body = _prepared(file_id, owner_id, "display", t, z, p)
+    in their local cache and decompress it themselves.
+
+    A file that is still being prepared answers 202 at once (and jumps the queue) instead of
+    tying up a request thread; the client shows a placeholder until `prepare` is "ready"."""
+    try:
+        body = _prepared(file_id, owner_id, "display", t, z, p, wait=False)
+    except prepare.Pending:
+        return JSONResponse(status_code=202, content={"status": "pending"})
     if wire == "gzip":
         return Response(content=body, media_type="application/gzip")
     return _gzip_response(request, body)
@@ -1816,7 +1848,6 @@ def api_slide_render(
 def api_slide_export(
     file_id: str,
     body: SlideExportRequest,
-    background: BackgroundTasks,
     owner_id: Owner,
 ) -> dict[str, Any]:
     rec = _need_slide(file_id, owner_id)
@@ -1841,7 +1872,7 @@ def api_slide_export(
             "_owner": owner_id,
         }
     )
-    background.add_task(_gated, run_slide_export, job_id, file_id, body, owner_id)
+    _submit_export(run_slide_export, job_id, file_id, body, owner_id)
     return {"id": job_id, "status": "queued", "width": planned.width, "height": planned.height}
 
 
@@ -1864,7 +1895,7 @@ def _resolve_export(body: ExportRequest, owner_id: str) -> tuple[list[str], str 
 
 
 @app.post("/api/export")
-def api_export(body: ExportRequest, background: BackgroundTasks, owner_id: Owner) -> dict[str, Any]:
+def api_export(body: ExportRequest, owner_id: Owner) -> dict[str, Any]:
     file_ids, label = _resolve_export(body, owner_id)
     if not file_ids:
         raise HTTPException(status_code=400, detail={"code": "empty", "message": "There are no ND2 files to export."})
@@ -1885,7 +1916,7 @@ def api_export(body: ExportRequest, background: BackgroundTasks, owner_id: Owner
             "_owner": owner_id,
         }
     )
-    background.add_task(_gated, run_export, job_id, body, owner_id)
+    _submit_export(run_export, job_id, body, owner_id)
     return {"id": job_id, "status": "queued", "file_count": len(file_ids)}
 
 

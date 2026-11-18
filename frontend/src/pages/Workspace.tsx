@@ -55,7 +55,7 @@ import {
   slideInfo,
   updateFile,
 } from "../lib/api";
-import { forget as forgetPreviews, getDisplay, prefetch as prefetchPreviews } from "../lib/previewCache";
+import { forget as forgetPreviews, getDisplay, isPending, prefetch as prefetchPreviews } from "../lib/previewCache";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
 import { segmentNucleiFromPacked } from "../lib/nucleus";
 import { createPreviewLayers, drawPreview, niceScaleUm, unpackPlane } from "../lib/plane";
@@ -460,6 +460,7 @@ export function Workspace() {
       return;
     }
     let cancelled = false;
+    let pending = false;
     const file = selected;
     setLoadingPreview(true);
     void getDisplay(file)
@@ -494,17 +495,23 @@ export function Workspace() {
         });
       })
       .catch((err) => {
+        // Still being prepared: keep the loading state; the file list refresh that reports
+        // `prepare: "ready"` changes prepared_at and runs this effect again.
+        if (isPending(err)) {
+          pending = true;
+          return;
+        }
         if (!cancelled && !(err instanceof DOMException && err.name === "AbortError")) {
           setError(detailMessage(err, lang));
         }
       })
       .finally(() => {
-        if (!cancelled) setLoadingPreview(false);
+        if (!cancelled && !pending) setLoadingPreview(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [lang, selected?.channels, selected?.height, selected?.id, selected?.prepared_at, selected?.width]);
+  }, [lang, selected?.channels, selected?.height, selected?.id, selected?.prepared_at, selected?.prepare, selected?.width]);
 
   // Ordered files for keyboard navigation and neighbour prefetching
   const allOrdered = useMemo(() => orderedFiles(folders, files), [folders, files]);

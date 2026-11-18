@@ -198,6 +198,16 @@ async function readStored(file: CachedFile): Promise<ArrayBuffer | null> {
 
 // --- network -------------------------------------------------------------------------
 
+/** The server is still preparing this file's preview (it was moved to the front of its queue). */
+export class PreviewPending extends Error {
+  constructor(id: string) {
+    super(`preview of ${id} is being prepared`);
+    this.name = "PreviewPending";
+  }
+}
+
+export const isPending = (err: unknown): err is PreviewPending => err instanceof PreviewPending;
+
 function gunzip(gz: ArrayBuffer): Promise<ArrayBuffer> {
   return new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
@@ -208,6 +218,7 @@ async function download(id: string, compressed: boolean, version = 0): Promise<A
   if (version) qs.set("v", String(version));
   const query = qs.toString();
   const res = await fetch(`/api/files/${id}/display${query ? `?${query}` : ""}`);
+  if (res.status === 202) throw new PreviewPending(id);
   if (!res.ok) throw await parseError(res);
   return res.arrayBuffer();
 }

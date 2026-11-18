@@ -52,7 +52,13 @@ _QUEUED: dict[str, Future] = {}
 # Files whose cache was rebuilt while a worker was already preparing them: run them once more.
 _AGAIN: set[str] = set()
 _EXECUTOR: ThreadPoolExecutor | None = None
+# One extra worker for files someone is waiting for (opened while still queued).
+_URGENT: ThreadPoolExecutor | None = None
 _WORKERS = 2
+
+
+class Pending(Exception):
+    """The preview is not ready yet; it has been moved to the front of the queue."""
 
 
 def _executor() -> ThreadPoolExecutor:
@@ -76,14 +82,23 @@ def set_workers(count: int) -> None:
         old.shutdown(wait=False)
 
 
+def _urgent() -> ThreadPoolExecutor:
+    global _URGENT
+    if _URGENT is None:  # caller holds _GUARD
+        _URGENT = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nd2-prepare-urgent")
+    return _URGENT
+
+
 def shutdown() -> None:
-    global _EXECUTOR
+    global _EXECUTOR, _URGENT
     with _GUARD:
-        executor, _EXECUTOR = _EXECUTOR, None
+        executors = [_EXECUTOR, _URGENT]
+        _EXECUTOR = _URGENT = None
         _QUEUED.clear()
         _AGAIN.clear()
-    if executor:
-        executor.shutdown(wait=False, cancel_futures=True)
+    for executor in executors:
+        if executor:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _file_lock(file_id: str) -> RLock:
@@ -255,8 +270,19 @@ def _read(file_id: str, kind: str) -> Any:
     return path.read_bytes()
 
 
-def get(file_id: str, rec: dict[str, Any], source: Path, kind: str, coords: tuple[int, int, int]) -> Any:
-    """Gzip bytes for 'display'/'plane', a dict for 'autoscale'."""
+def get(
+    file_id: str,
+    rec: dict[str, Any],
+    source: Path,
+    kind: str,
+    coords: tuple[int, int, int],
+    *,
+    wait: bool = True,
+) -> Any:
+    """Gzip bytes for 'display'/'plane', a dict for 'autoscale'.
+
+    With `wait=False` an unprepared file raises Pending (after moving it to the front of
+    the queue) instead of building it on the calling request thread."""
     if kind == "plane":
         return raw_plane(rec, source, coords)
     if coords != DEFAULT:
@@ -265,6 +291,9 @@ def get(file_id: str, rec: dict[str, Any], source: Path, kind: str, coords: tupl
         return _read(file_id, kind)
     except (OSError, json.JSONDecodeError):
         pass
+    if not wait:
+        prioritize(file_id)
+        raise Pending(file_id)
     # Not prepared yet (queued, or cache removed): build it now, once, and keep it.
     with _file_lock(file_id):
         if is_prepared(file_id):
@@ -281,10 +310,11 @@ def _run(file_id: str) -> None:
     from nd2utils import store  # local import: store imports nd2io too
 
     try:
-        rec = store.load_index().get(file_id)
+        rec = store.index_get(file_id)
         if not rec:
             return
         owner = rec.get(store.OWNER_FIELD) or ""
+        built = False
         if not is_prepared(file_id):
             source = settings.uploads_dir / file_id / "source.nd2"
             with _file_lock(file_id):
@@ -294,14 +324,19 @@ def _run(file_id: str) -> None:
                     else:
                         with open_uncached(source) as handle:
                             _store(file_id, _build(rec, handle, DEFAULT))
-        if store.load_index().get(file_id) is None:
+                    built = True
+        current = store.index_get(file_id)
+        if current is None:
             # Deleted while we were working.
             shutil.rmtree(settings.cache_dir / file_id, ignore_errors=True)
             return
-        store.update_file(file_id, owner, {"prepare": "ready", "prepared_at": round(time.time(), 3)})
+        if built or current.get("prepare") != "ready" or not current.get("prepared_at"):
+            # prepared_at versions the browsers' cached previews: bump it only when the
+            # cache really changed (not when a moved/transferred file is re-checked).
+            store.update_file(file_id, owner, {"prepare": "ready", "prepared_at": round(time.time(), 3)})
     except Exception:
         log.exception("Preparing %s failed", file_id)
-        rec = store.load_index().get(file_id)
+        rec = store.index_get(file_id)
         if rec:
             store.update_file(file_id, rec.get(store.OWNER_FIELD) or "", {"prepare": "error"})
     finally:
@@ -311,6 +346,16 @@ def _run(file_id: str) -> None:
             _AGAIN.discard(file_id)
         if again:
             schedule(file_id)
+
+
+def prioritize(file_id: str) -> None:
+    """Someone is waiting for this file: prepare it next, ahead of the import backlog."""
+    with _GUARD:
+        future = _QUEUED.get(file_id)
+        if future is not None:
+            if future.running() or future.done() or not future.cancel():
+                return  # being prepared right now (or just finished)
+        _QUEUED[file_id] = _urgent().submit(_run, file_id)
 
 
 def schedule(file_id: str, *, again: bool = False) -> None:
@@ -331,7 +376,7 @@ def rebuild(file_ids: list[str]) -> int:
     atomically, and rebuilding them can take minutes. Returns the number of files queued."""
     from nd2utils import slide_render, store
 
-    index = store.load_index()
+    index = dict(store.index_items())
     ids = [file_id for file_id in dict.fromkeys(file_ids) if file_id in index]
     for file_id in ids:
         with _file_lock(file_id):
@@ -350,7 +395,7 @@ def schedule_missing() -> int:
 
     count = 0
     stamps: dict[str, dict[str, Any]] = {}
-    for file_id, rec in store.load_index().items():
+    for file_id, rec in store.index_items():
         if rec.get("prepare") != "ready" or not is_prepared(file_id):
             schedule(file_id)
             count += 1

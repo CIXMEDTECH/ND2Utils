@@ -15,8 +15,18 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Callable
 
-_LOCK = RLock()
+# One lock per state file: a slow index write must not hold up session lookups in auth.json.
+_LOCKS: dict[str, RLock] = {}
+_LOCKS_GUARD = RLock()
 _CACHE: dict[str, tuple[tuple[int, int], Any]] = {}
+
+
+def _lock(key: str) -> RLock:
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = _LOCKS[key] = RLock()
+        return lock
 
 
 def _stamp(path: Path) -> tuple[int, int] | None:
@@ -30,7 +40,7 @@ def _stamp(path: Path) -> tuple[int, int] | None:
 def read(path: Path, default: Callable[[], Any], *, strict: bool = False) -> Any:
     """Return the parsed file, or `default()` when missing (or unreadable unless `strict`)."""
     key = str(path)
-    with _LOCK:
+    with _lock(key):
         stamp = _stamp(path)
         if stamp is None:
             _CACHE.pop(key, None)
@@ -50,10 +60,11 @@ def read(path: Path, default: Callable[[], Any], *, strict: bool = False) -> Any
 
 def write(path: Path, payload: Any, *, mode: int | None = None) -> None:
     key = str(path)
-    with _LOCK:
+    with _lock(key):
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        # Compact output uses the C encoder (indent= falls back to pure Python, ~5x slower).
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         if mode is not None:
             os.chmod(tmp, mode)
         tmp.replace(path)
@@ -63,5 +74,6 @@ def write(path: Path, payload: Any, *, mode: int | None = None) -> None:
 
 
 def forget(path: Path) -> None:
-    with _LOCK:
-        _CACHE.pop(str(path), None)
+    key = str(path)
+    with _lock(key):
+        _CACHE.pop(key, None)

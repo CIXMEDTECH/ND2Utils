@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
 from io import BytesIO
 import math
 from pathlib import Path
@@ -8,6 +7,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from scipy import ndimage
 
 from nd2utils.models import LutSetting, NucleusParams
 
@@ -16,8 +16,17 @@ def _as_float(plane: np.ndarray) -> np.ndarray:
     return np.asarray(plane, dtype=np.float32)
 
 
+# Percentiles of a regular subsample are indistinguishable from the full plane's for
+# display limits, and avoid float32 copies of very large (stitched) planes.
+_AUTOSCALE_MAX_PIXELS = 4_000_000
+
+
 def autoscale_limits(plane: np.ndarray, p_lo: float = 5.0, p_hi: float = 99.85) -> tuple[float, float]:
-    data = _as_float(plane)
+    arr = np.asarray(plane)
+    if arr.ndim >= 2 and arr.size > _AUTOSCALE_MAX_PIXELS:
+        step = int(math.ceil(math.sqrt(arr.size / _AUTOSCALE_MAX_PIXELS)))
+        arr = arr[..., ::step, ::step]
+    data = _as_float(arr)
     if data.size == 0:
         return 0.0, 1.0
     finite = data[np.isfinite(data)]
@@ -668,31 +677,31 @@ def _auto_threshold_256(hist: np.ndarray, method: str = "Otsu") -> int:
 
 
 def _fill_holes(mask: np.ndarray) -> np.ndarray:
-    """Fill interior holes in a 2D boolean mask via border flood-fill."""
-    h, w = mask.shape
-    ext_bg = np.zeros((h, w), dtype=bool)
-    q: deque[tuple[int, int]] = deque()
-    for x in range(w):
-        if not mask[0, x] and not ext_bg[0, x]:
-            ext_bg[0, x] = True
-            q.append((0, x))
-        if not mask[h - 1, x] and not ext_bg[h - 1, x]:
-            ext_bg[h - 1, x] = True
-            q.append((h - 1, x))
-    for y in range(h):
-        if not mask[y, 0] and not ext_bg[y, 0]:
-            ext_bg[y, 0] = True
-            q.append((y, 0))
-        if not mask[y, w - 1] and not ext_bg[y, w - 1]:
-            ext_bg[y, w - 1] = True
-            q.append((y, w - 1))
-    while q:
-        cy, cx = q.popleft()
-        for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
-            if 0 <= ny < h and 0 <= nx < w and not ext_bg[ny, nx] and not mask[ny, nx]:
-                ext_bg[ny, nx] = True
-                q.append((ny, nx))
-    return ~ext_bg
+    """Fill interior holes in a 2D boolean mask (background is 4-connected to the border)."""
+    return ndimage.binary_fill_holes(mask)
+
+
+def _comp_arrays(comp: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
+    arr = np.asarray(comp, dtype=np.int64).reshape(-1, 2)
+    return arr[:, 0], arr[:, 1]
+
+
+def _boundary(comp: list[tuple[int, int]]) -> tuple[list[tuple[int, int]], int]:
+    """(x, y) pixels of `comp` with a 4-neighbour outside it, in raster order, and the number
+    of exposed pixel edges."""
+    ys, xs = _comp_arrays(comp)
+    y0, x0 = int(ys.min()), int(xs.min())
+    sub = np.zeros((int(ys.max()) - y0 + 3, int(xs.max()) - x0 + 3), dtype=bool)
+    sub[ys - y0 + 1, xs - x0 + 1] = True
+    core = sub[1:-1, 1:-1]
+    n_out = (
+        (~sub[:-2, 1:-1]).astype(np.int32)
+        + (~sub[2:, 1:-1])
+        + (~sub[1:-1, :-2])
+        + (~sub[1:-1, 2:])
+    ) * core
+    by, bx = np.nonzero(n_out)
+    return list(zip((bx + x0).tolist(), (by + y0).tolist())), int(n_out.sum())
 
 
 def _convex_hull_area(points_xy: list[tuple[int, int]]) -> float:
@@ -727,38 +736,42 @@ def _convex_hull_area(points_xy: list[tuple[int, int]]) -> float:
     return abs(area2) * 0.5 + perim * 0.5 + 1.0
 
 
+def _row_sweep(v: np.ndarray, idx: np.ndarray) -> np.ndarray:
+    """out[x] = min(v[x], out[x-1] + 1) for the whole row at once: x + cummin(v[k] - k)."""
+    return idx + np.minimum.accumulate(v - idx)
+
+
 def _chamfer_distance(submask: np.ndarray) -> np.ndarray:
-    """Two-pass 3-4 Chamfer distance transform inside a boolean submask."""
+    """Two-pass chamfer distance (weights 1 / 1.4142) inside a boolean submask.
+
+    Same recurrence as a pixel-by-pixel scan; each row is computed with numpy (the in-row
+    term is a running minimum), so it no longer holds the GIL for the whole component."""
     h, w = submask.shape
     dist = np.where(submask, 1e6, 0.0).astype(np.float32)
+    if h == 0 or w == 0:
+        return dist
+    fwd = np.arange(w, dtype=np.float32)
+    inf = np.float32(1e6)
+    diag = np.float32(1.4142)
+    one = np.float32(1.0)
     for y in range(h):
-        for x in range(w):
-            if not submask[y, x]:
-                continue
-            best = dist[y, x]
-            if y > 0:
-                best = min(best, dist[y - 1, x] + 1.0)
-                if x > 0:
-                    best = min(best, dist[y - 1, x - 1] + 1.4142)
-                if x + 1 < w:
-                    best = min(best, dist[y - 1, x + 1] + 1.4142)
-            if x > 0:
-                best = min(best, dist[y, x - 1] + 1.0)
-            dist[y, x] = best
+        v = dist[y].copy()
+        if y > 0:
+            prev = dist[y - 1]
+            v = np.minimum(v, prev + one)
+            v[1:] = np.minimum(v[1:], prev[:-1] + diag)
+            v[:-1] = np.minimum(v[:-1], prev[1:] + diag)
+        v = np.where(submask[y], v, np.float32(0.0))
+        dist[y] = np.where(submask[y], np.minimum(_row_sweep(v, fwd), inf), 0.0)
     for y in range(h - 1, -1, -1):
-        for x in range(w - 1, -1, -1):
-            if not submask[y, x]:
-                continue
-            best = dist[y, x]
-            if y + 1 < h:
-                best = min(best, dist[y + 1, x] + 1.0)
-                if x + 1 < w:
-                    best = min(best, dist[y + 1, x + 1] + 1.4142)
-                if x > 0:
-                    best = min(best, dist[y + 1, x - 1] + 1.4142)
-            if x + 1 < w:
-                best = min(best, dist[y, x + 1] + 1.0)
-            dist[y, x] = best
+        v = dist[y].copy()
+        if y + 1 < h:
+            nxt = dist[y + 1]
+            v = np.minimum(v, nxt + one)
+            v[:-1] = np.minimum(v[:-1], nxt[1:] + diag)
+            v[1:] = np.minimum(v[1:], nxt[:-1] + diag)
+        v = np.where(submask[y], v, np.float32(0.0))
+        dist[y] = np.where(submask[y], _row_sweep(v[::-1], fwd)[::-1], 0.0)
     return dist
 
 
@@ -774,23 +787,18 @@ def _split_touching_component(
     sh = y1 - y0 + 3
     sw = x1 - x0 + 3
     sub = np.zeros((sh, sw), dtype=bool)
-    for py, px in coords_yx:
-        sub[py - y0 + 1, px - x0 + 1] = True
+    cys, cxs = _comp_arrays(coords_yx)
+    sub[cys - y0 + 1, cxs - x0 + 1] = True
     dist = _chamfer_distance(sub)
     smooth = _gaussian_blur_2d(dist, 1.2)
     min_sep = max(5.0, min_radius_px * 1.15)
-    candidates: list[tuple[float, int, int]] = []
-    for sy in range(1, sh - 1):
-        for sx in range(1, sw - 1):
-            if not sub[sy, sx]:
-                continue
-            val = float(smooth[sy, sx])
-            if val < max(2.5, min_radius_px * 0.45):
-                continue
-            patch = smooth[max(0, sy - 2) : min(sh, sy + 3), max(0, sx - 2) : min(sw, sx + 3)]
-            if val >= float(patch.max()) - 1e-5:
-                candidates.append((val, sy, sx))
-    candidates.sort(reverse=True)
+    # Local maxima in a 5x5 window (clipped at the border, like "nearest" padding for a max).
+    local_max = ndimage.maximum_filter(smooth, size=5, mode="nearest")
+    cand = sub & (smooth >= max(2.5, min_radius_px * 0.45)) & (smooth >= local_max - 1e-5)
+    cand[0, :] = cand[-1, :] = False
+    cand[:, 0] = cand[:, -1] = False
+    pys, pxs = np.nonzero(cand)
+    candidates = sorted(zip(smooth[pys, pxs].tolist(), pys.tolist(), pxs.tolist()), reverse=True)
     peaks: list[tuple[int, int, float]] = []
     for val, sy, sx in candidates:
         if all(math.hypot(sy - py, sx - px) >= min_sep for py, px, _ in peaks):
@@ -799,19 +807,15 @@ def _split_touching_component(
                 break
     if len(peaks) < 2:
         return [coords_yx]
+    pk = np.asarray(peaks, dtype=np.float64)
+    sy_all = (cys - y0 + 1).astype(np.float64)[:, None]
+    sx_all = (cxs - x0 + 1).astype(np.float64)[:, None]
+    # Weight by peak radius so unequally sized touching nuclei split at their neck.
+    score = np.hypot(sy_all - pk[None, :, 0], sx_all - pk[None, :, 1]) / np.maximum(pk[None, :, 2], 1.0)
+    best = np.argmin(score, axis=1)
     groups: list[list[tuple[int, int]]] = [[] for _ in peaks]
-    for py, px in coords_yx:
-        sy = py - y0 + 1
-        sx = px - x0 + 1
-        best_idx = 0
-        best_score = float("inf")
-        for idx, (pky, pkx, pk_val) in enumerate(peaks):
-            # Weight by peak radius so unequally sized touching nuclei split at their neck
-            d = math.hypot(sy - pky, sx - pkx) / max(pk_val, 1.0)
-            if d < best_score:
-                best_score = d
-                best_idx = idx
-        groups[best_idx].append((py, px))
+    for idx, py, px in zip(best.tolist(), cys.tolist(), cxs.tolist()):
+        groups[idx].append((py, px))
     valid = [g for g in groups if len(g) >= 8]
     return valid if len(valid) >= 2 else [coords_yx]
 
@@ -856,28 +860,15 @@ def segment_nuclei(
 
     mask = _fill_holes(blurred > thr)
 
-    # Connected components (8-connectivity)
-    visited = np.zeros((wh, ww), dtype=bool)
+    # Connected components (8-connectivity), in raster order of their first pixel.
+    labels, n_labels = ndimage.label(mask, structure=np.ones((3, 3), dtype=bool))
     raw_components: list[list[tuple[int, int]]] = []
-    for y in range(wh):
-        for x in range(ww):
-            if not mask[y, x] or visited[y, x]:
-                continue
-            comp: list[tuple[int, int]] = []
-            q: deque[tuple[int, int]] = deque([(y, x)])
-            visited[y, x] = True
-            while q:
-                cy, cx = q.popleft()
-                comp.append((cy, cx))
-                for ny in (cy - 1, cy, cy + 1):
-                    if ny < 0 or ny >= wh:
-                        continue
-                    for nx in (cx - 1, cx, cx + 1):
-                        if 0 <= nx < ww and not visited[ny, nx] and mask[ny, nx]:
-                            visited[ny, nx] = True
-                            q.append((ny, nx))
-            if len(comp) >= 6:
-                raw_components.append(comp)
+    for label_id, sl in enumerate(ndimage.find_objects(labels) if n_labels else [], start=1):
+        if sl is None:
+            continue
+        ys_c, xs_c = np.nonzero(labels[sl] == label_id)
+        if ys_c.size >= 6:
+            raw_components.append(list(zip((ys_c + sl[0].start).tolist(), (xs_c + sl[1].start).tolist())))
 
     if um_per_px and um_per_px > 0:
         min_area_px = max(6.0, float(cfg.min_area_um2) / (ps * ps))
@@ -894,20 +885,11 @@ def segment_nuclei(
     for comp in raw_components:
         if len(comp) < min_area_px * 0.4:
             continue
-        ys = [p[0] for p in comp]
-        xs = [p[1] for p in comp]
-        y0, y1 = min(ys), max(ys)
-        x0, x1 = min(xs), max(xs)
+        ys_a, xs_a = _comp_arrays(comp)
+        y0, y1 = int(ys_a.min()), int(ys_a.max())
+        x0, x1 = int(xs_a.min()), int(xs_a.max())
         # Boundary pixels for convex hull
-        comp_set = set(comp)
-        boundary_xy = [
-            (px, py)
-            for py, px in comp
-            if (py - 1, px) not in comp_set
-            or (py + 1, px) not in comp_set
-            or (py, px - 1) not in comp_set
-            or (py, px + 1) not in comp_set
-        ]
+        boundary_xy, _ = _boundary(comp)
         hull_area = _convex_hull_area(boundary_xy or [(px, py) for py, px in comp])
         solidity = min(1.0, len(comp) / max(hull_area, 1.0))
         if cfg.watershed and solidity < float(cfg.ws_solidity) and len(comp) >= min_area_px * 1.3:
@@ -924,28 +906,12 @@ def segment_nuclei(
         area_px = len(comp)
         if area_px < min_area_px or area_px > max_area_px:
             continue
-        comp_set = set(comp)
-        ys = [p[0] for p in comp]
-        xs = [p[1] for p in comp]
-        y0, y1 = min(ys), max(ys)
-        x0, x1 = min(xs), max(xs)
+        ys_a, xs_a = _comp_arrays(comp)
+        y0, y1 = int(ys_a.min()), int(ys_a.max())
+        x0, x1 = int(xs_a.min()), int(xs_a.max())
         touches_edge = x0 <= 0 or y0 <= 0 or x1 >= ww - 1 or y1 >= wh - 1
 
-        boundary_pts: list[tuple[int, int]] = []
-        exposed_edges = 0
-        for py, px in comp:
-            n_out = 0
-            if (py - 1, px) not in comp_set:
-                n_out += 1
-            if (py + 1, px) not in comp_set:
-                n_out += 1
-            if (py, px - 1) not in comp_set:
-                n_out += 1
-            if (py, px + 1) not in comp_set:
-                n_out += 1
-            if n_out > 0:
-                boundary_pts.append((px, py))
-                exposed_edges += n_out
+        boundary_pts, exposed_edges = _boundary(comp)
 
         # Convert staircase boundary count to smooth Euclidean perimeter approximation
         perim = max(float(exposed_edges) * 0.785, 1.0)
@@ -956,16 +922,16 @@ def segment_nuclei(
         hull_area = _convex_hull_area(boundary_pts)
         solidity = min(1.0, float(area_px) / max(hull_area, 1.0))
 
-        mean_x = (sum(xs) / area_px + 0.5) * ds
-        mean_y = (sum(ys) / area_px + 0.5) * ds
-        intensities = [float(work[py, px]) for py, px in comp]
-        mean_int = float(sum(intensities) / max(len(intensities), 1))
-        sum_int = float(sum(intensities) * (ds * ds))
+        cx_w = float(xs_a.sum()) / area_px
+        cy_w = float(ys_a.sum()) / area_px
+        mean_x = (cx_w + 0.5) * ds
+        mean_y = (cy_w + 0.5) * ds
+        intensities = work[ys_a, xs_a].astype(np.float64)
+        mean_int = float(intensities.sum() / max(intensities.size, 1))
+        sum_int = float(intensities.sum() * (ds * ds))
         area_um2 = float(area_px * (ps * ps))
 
         # Order boundary contour by angle around centroid and subsample to <= 36 points
-        cx_w = sum(xs) / area_px
-        cy_w = sum(ys) / area_px
         sorted_b = sorted(boundary_pts, key=lambda pt: math.atan2(pt[1] - cy_w, pt[0] - cx_w))
         step = max(1, len(sorted_b) // 36)
         contour = [[round((bx + 0.5) * ds, 1), round((by + 0.5) * ds, 1)] for bx, by in sorted_b[::step]]

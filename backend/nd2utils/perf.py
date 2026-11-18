@@ -8,8 +8,9 @@ more (or fewer) jobs run at once.
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from threading import Condition, RLock
+from threading import Condition, Lock, RLock
 from typing import Any, Iterator
 
 from nd2utils import jsoncache
@@ -167,6 +168,19 @@ class _Gate:
 
 
 _GATE = _Gate(DEFAULTS["export_workers"])
+
+
+_EXPORT_POOL: ThreadPoolExecutor | None = None
+_EXPORT_POOL_GUARD = Lock()
+
+
+def export_executor() -> ThreadPoolExecutor:
+    """Threads for export jobs (queued ones wait on the gate here, not in the request pool)."""
+    global _EXPORT_POOL
+    with _EXPORT_POOL_GUARD:
+        if _EXPORT_POOL is None:
+            _EXPORT_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="export")
+        return _EXPORT_POOL
 
 
 def export_slot():

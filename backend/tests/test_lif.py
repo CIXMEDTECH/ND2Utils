@@ -11,7 +11,7 @@ import pytest
 import tifffile
 from PIL import Image
 
-from conftest import ROOT
+from conftest import wait_job, ROOT
 from nd2utils import lifio, prepare
 from nd2utils.store import get_owned_file, source_path
 
@@ -84,7 +84,7 @@ def _upload(client, path: Path, folder: str = "") -> dict:
 def _export(client, body: dict) -> ZipFile:
     r = client.post("/api/export", json=body)
     assert r.status_code == 200, r.text
-    job = client.get(f"/api/jobs/{r.json()['id']}").json()
+    job = wait_job(client, r.json()["id"])
     assert job["status"] == "done", job
     return ZipFile(BytesIO(client.get(f"/api/jobs/{job['id']}/download").content))
 

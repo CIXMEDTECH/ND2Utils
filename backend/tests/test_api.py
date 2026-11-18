@@ -11,7 +11,7 @@ import tifffile
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from conftest import admin_code, login
+from conftest import wait_job, admin_code, login
 from nd2utils import auth
 from nd2utils.config import settings
 from nd2utils.main import SESSION_COOKIE, app
@@ -37,7 +37,7 @@ def _export(client, body: dict) -> tuple[dict, ZipFile]:
     r = client.post("/api/export", json=body)
     assert r.status_code == 200, r.text
     job_id = r.json()["id"]
-    job = client.get(f"/api/jobs/{job_id}").json()
+    job = wait_job(client, job_id)
     assert job["status"] == "done", job
     dl = client.get(f"/api/jobs/{job_id}/download")
     assert dl.status_code == 200
@@ -519,16 +519,34 @@ def test_import_prepares_previews_in_background(client, sample_files):
     assert client.get(f"/api/files/{rec['id']}/display?t=3").status_code == 200
 
 
-def test_unprepared_file_is_built_on_first_view(client, sample_files):
+def test_unprepared_file_is_prioritized_on_first_view(client, sample_files):
     import shutil as _shutil
 
     from nd2utils import prepare
 
     rec = _upload(client, sample_files[0])
     prepare.wait_idle()
+    before = client.get(f"/api/files/{rec['id']}").json()["prepared_at"]
     _shutil.rmtree(settings.cache_dir / rec["id"])
-    assert client.get(f"/api/files/{rec['id']}/display").status_code == 200
+    # Not built on the request thread: 202 at once, and the file jumps the queue.
+    first = client.get(f"/api/files/{rec['id']}/display")
+    assert first.status_code in (200, 202)
+    prepare.wait_idle()
     assert prepare.is_prepared(rec["id"])
+    assert client.get(f"/api/files/{rec['id']}/display").status_code == 200
+    # The cache really changed, so its version moves on (browsers refetch it).
+    assert client.get(f"/api/files/{rec['id']}").json()["prepared_at"] >= before
+
+
+def test_reschedule_without_rebuild_keeps_cache_version(client, sample_files):
+    from nd2utils import prepare
+
+    rec = _upload(client, sample_files[0])
+    prepare.wait_idle()
+    before = client.get(f"/api/files/{rec['id']}").json()["prepared_at"]
+    prepare.schedule(rec["id"])
+    prepare.wait_idle()
+    assert client.get(f"/api/files/{rec['id']}").json()["prepared_at"] == before
 
 
 def test_migrate_index_moves_metadata_out(client, sample_files):

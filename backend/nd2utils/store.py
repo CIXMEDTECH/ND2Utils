@@ -83,9 +83,31 @@ def _ancestors(folder: str) -> list[str]:
 
 
 def load_index() -> dict[str, dict[str, Any]]:
-    ensure_dirs()
+    """The shared, cached index. Mutate it only while holding _LOCK (and save it back);
+    readers outside the lock should use index_items() / list_files() snapshots."""
     data = _read_json(settings.index_path, {})
     return data if isinstance(data, dict) else {}
+
+
+def _snapshot(loader: Any) -> list[tuple[str, dict[str, Any]]]:
+    # Writers mutate the cached object in place under _LOCK; copying under the same lock
+    # avoids "dictionary changed size during iteration" in concurrent readers.
+    with _LOCK:
+        return [(key, dict(rec)) for key, rec in loader().items() if isinstance(rec, dict)]
+
+
+def _get_copy(loader: Any, key: str) -> dict[str, Any] | None:
+    with _LOCK:
+        rec = loader().get(key)
+        return dict(rec) if isinstance(rec, dict) else None
+
+
+def index_items() -> list[tuple[str, dict[str, Any]]]:
+    return _snapshot(load_index)
+
+
+def index_get(file_id: str) -> dict[str, Any] | None:
+    return _get_copy(load_index, file_id)
 
 
 def save_index(index: dict[str, dict[str, Any]]) -> None:
@@ -164,9 +186,8 @@ def _owned(record: dict[str, Any] | None, owner_id: str) -> bool:
 
 
 def get_owned_file(file_id: str, owner_id: str) -> dict[str, Any] | None:
-    record = load_index().get(file_id)
-    # Copies: the index object is shared through the read cache.
-    return dict(record) if _owned(record, owner_id) else None
+    record = index_get(file_id)
+    return record if _owned(record, owner_id) else None
 
 
 def delete_file_record(file_id: str, owner_id: str) -> None:
@@ -186,20 +207,20 @@ def delete_file_record(file_id: str, owner_id: str) -> None:
 
 
 def list_files(owner_id: str) -> list[dict[str, Any]]:
-    items = [dict(record) for record in load_index().values() if _owned(record, owner_id)]
+    items = [record for _, record in index_items() if _owned(record, owner_id)]
     items.sort(key=lambda r: (r.get("folder") or "", (r.get("name") or "").lower()))
     return items
 
 
 def find_file(owner_id: str, folder: str, name: str) -> dict[str, Any] | None:
     lowered = name.lower()
-    for record in load_index().values():
+    for _, record in index_items():
         if (
             (record.get("folder") or "") == folder
             and (record.get("name") or "").lower() == lowered
             and _owned(record, owner_id)
         ):
-            return dict(record)
+            return record
     return None
 
 
@@ -279,7 +300,8 @@ def _register_folder(owner_id: str, folder: str) -> None:
 
 
 def list_folders(owner_id: str) -> list[str]:
-    explicit = set(_load_folders().get(owner_id) or [])
+    with _LOCK:
+        explicit = set(_load_folders().get(owner_id) or [])
     for record in list_files(owner_id):
         explicit.update(_ancestors(record.get("folder") or ""))
     out: set[str] = set()
@@ -342,7 +364,6 @@ def delete_folder(owner_id: str, folder: str) -> list[str]:
 
 
 def load_jobs() -> dict[str, dict[str, Any]]:
-    ensure_dirs()
     data = _read_json(settings.jobs_path, {})
     return data if isinstance(data, dict) else {}
 
@@ -356,18 +377,31 @@ def upsert_job(record: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("job record is missing an owner")
     with _LOCK:
         jobs = load_jobs()
-        jobs[record["id"]] = record
+        # A copy: export threads keep mutating their own record between progress writes.
+        jobs[record["id"]] = dict(record)
         save_jobs(jobs)
     return record
 
 
+def fail_interrupted_jobs() -> int:
+    """At startup: jobs left queued/running by a previous process will never finish."""
+    with _LOCK:
+        jobs = load_jobs()
+        stale = [rec for rec in jobs.values() if rec.get("status") in ("queued", "running")]
+        for rec in stale:
+            rec.update({"status": "error", "error": "interrupted", "message": "Interrupted by a server restart"})
+        if stale:
+            save_jobs(jobs)
+    return len(stale)
+
+
 def get_owned_job(job_id: str, owner_id: str) -> dict[str, Any] | None:
-    record = load_jobs().get(job_id)
-    return dict(record) if _owned(record, owner_id) else None
+    record = _get_copy(load_jobs, job_id)
+    return record if _owned(record, owner_id) else None
 
 
 def list_jobs(owner_id: str) -> list[dict[str, Any]]:
-    items = [dict(record) for record in load_jobs().values() if _owned(record, owner_id)]
+    items = [record for _, record in _snapshot(load_jobs) if _owned(record, owner_id)]
     items.sort(key=lambda record: record.get("created_at") or 0, reverse=True)
     return items
 
@@ -393,14 +427,14 @@ def save_projects(projects: dict[str, dict[str, Any]]) -> None:
 
 
 def list_projects(owner_id: str) -> list[dict[str, Any]]:
-    items = [dict(record) for record in load_projects().values() if _owned(record, owner_id)]
+    items = [record for _, record in _snapshot(load_projects) if _owned(record, owner_id)]
     items.sort(key=lambda r: r.get("updated_at") or r.get("created_at") or 0, reverse=True)
     return items
 
 
 def get_owned_project(project_id: str, owner_id: str) -> dict[str, Any] | None:
-    record = load_projects().get(project_id)
-    return dict(record) if _owned(record, owner_id) else None
+    record = _get_copy(load_projects, project_id)
+    return record if _owned(record, owner_id) else None
 
 
 def create_project(

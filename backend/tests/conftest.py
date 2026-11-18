@@ -21,6 +21,18 @@ from nd2utils import auth
 from nd2utils.main import app
 
 
+def wait_job(client: TestClient, job_id: str, timeout: float = 120) -> dict:
+    """Exports run on their own thread pool: poll until the job finishes."""
+    import time
+
+    end = time.time() + timeout
+    while True:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job.get("status") in ("done", "error") or time.time() > end:
+            return job
+        time.sleep(0.05)
+
+
 def admin_code() -> str:
     auth.ensure_admin()
     return next(rec["code"] for rec in auth.list_codes() if rec["role"] == "admin")

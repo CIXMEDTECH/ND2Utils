@@ -5,7 +5,7 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import Any, Iterator
 
 import nd2
@@ -189,16 +189,40 @@ class OpenNd2:
 
 _OPEN: OrderedDict[str, OpenNd2] = OrderedDict()
 _MAX_OPEN = 6
+# Guards only the cache dict; never held while a file is read. Opening a file (which may
+# read hundreds of MB) happens under a per-path lock, so other files stay available.
 _OPEN_LOCK = RLock()
+_PATH_LOCKS: dict[str, Lock] = {}
+
+
+def _path_lock(key: str) -> Lock:
+    with _OPEN_LOCK:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = _PATH_LOCKS[key] = Lock()
+        return lock
+
+
+def _close_quietly(handles: list[OpenNd2]) -> None:
+    for handle in handles:
+        handle.close()
+
+
+def _evict_over_limit() -> list[OpenNd2]:
+    """Pop handles beyond the limit (caller holds _OPEN_LOCK); close them after releasing it."""
+    evicted: list[OpenNd2] = []
+    while len(_OPEN) > _MAX_OPEN:
+        _, old = _OPEN.popitem(last=False)
+        evicted.append(old)
+    return evicted
 
 
 def set_max_open(limit: int) -> None:
     global _MAX_OPEN
     _MAX_OPEN = max(1, int(limit))
     with _OPEN_LOCK:
-        while len(_OPEN) > _MAX_OPEN:
-            _, old = _OPEN.popitem(last=False)
-            old.close()
+        evicted = _evict_over_limit()
+    _close_quietly(evicted)
 
 
 def _open_lif(path: Path) -> OpenNd2:
@@ -244,36 +268,56 @@ def _with_crop(handle: OpenNd2) -> OpenNd2:
     return handle
 
 
-def open_nd2(path: Path) -> OpenNd2:
-    key = str(path.resolve())
+def _cached(key: str, path: Path) -> OpenNd2 | None:
+    stale: OpenNd2 | None = None
     with _OPEN_LOCK:
-        if key in _OPEN:
-            cached = _OPEN[key]
+        cached = _OPEN.get(key)
+        if cached is not None:
             if cached.crop == read_crop(path):
                 _OPEN.move_to_end(key)
                 return cached
-            _OPEN.pop(key, None)
-            cached.close()
-        if lifio.is_lif(path):
-            handle = _open_lif(path)
-        elif _is_tiff(path):
-            handle = _open_tiff(path)
-        else:
-            nd = nd2.ND2File(path)
-            try:
-                sizes = dict(nd.sizes)
-                nbytes = int(np.prod(list(sizes.values()) or [1]) * np.dtype(nd.dtype).itemsize)
-                array = nd.asarray() if nbytes <= settings.in_memory_limit_bytes else nd.to_dask()
-                handle = OpenNd2(path=path, nd=nd, sizes=sizes, array=array, is_rgb=bool(nd.is_rgb))
-            except Exception:
-                nd.close()
-                raise
-        handle = _with_crop(handle)
-        _OPEN[key] = handle
-        while len(_OPEN) > _MAX_OPEN:
-            _, old = _OPEN.popitem(last=False)
-            old.close()
-        return handle
+            stale = _OPEN.pop(key, None)
+    if stale is not None:
+        stale.close()
+    return None
+
+
+def _load(path: Path) -> OpenNd2:
+    if lifio.is_lif(path):
+        return _with_crop(_open_lif(path))
+    if _is_tiff(path):
+        return _with_crop(_open_tiff(path))
+    nd = nd2.ND2File(path)
+    try:
+        sizes = dict(nd.sizes)
+        nbytes = int(np.prod(list(sizes.values()) or [1]) * np.dtype(nd.dtype).itemsize)
+        array = nd.asarray() if nbytes <= settings.in_memory_limit_bytes else nd.to_dask()
+        handle = OpenNd2(path=path, nd=nd, sizes=sizes, array=array, is_rgb=bool(nd.is_rgb))
+    except Exception:
+        nd.close()
+        raise
+    return _with_crop(handle)
+
+
+def open_nd2(path: Path) -> OpenNd2:
+    """Shared, cached handle (the whole image is read into memory when it is small enough).
+
+    Different files open in parallel; concurrent requests for the same file wait for the
+    one open in progress instead of reading it twice."""
+    key = str(path.resolve())
+    hit = _cached(key, path)
+    if hit is not None:
+        return hit
+    with _path_lock(key):
+        hit = _cached(key, path)
+        if hit is not None:
+            return hit
+        handle = _load(path)
+        with _OPEN_LOCK:
+            _OPEN[key] = handle
+            evicted = _evict_over_limit()
+    _close_quietly(evicted)
+    return handle
 
 
 @contextmanager
@@ -305,6 +349,7 @@ def close_nd2(path: Path) -> None:
     key = str(path.resolve())
     with _OPEN_LOCK:
         handle = _OPEN.pop(key, None)
+        _PATH_LOCKS.pop(key, None)
     if handle:
         handle.close()
 
@@ -313,18 +358,26 @@ def close_all() -> None:
     with _OPEN_LOCK:
         handles = list(_OPEN.values())
         _OPEN.clear()
-    for handle in handles:
-        handle.close()
+        _PATH_LOCKS.clear()
+    _close_quietly(handles)
 
 
 def identify_path(path: Path, file_id: str, name: str, size_bytes: int, created_at: float) -> dict[str, Any]:
     validate_magic(path)
+    # Metadata only: a private lazy handle neither reads the pixels nor evicts the
+    # handles that viewers are using.
     try:
-        handle = open_nd2(path)
+        with open_uncached(path) as handle:
+            return _identify_handle(handle, path, file_id, name, size_bytes, created_at)
     except Nd2Error:
         raise
     except Exception as exc:
         raise Nd2Error(f"Failed to parse ND2: {exc}", "parse_failed") from exc
+
+
+def _identify_handle(
+    handle: OpenNd2, path: Path, file_id: str, name: str, size_bytes: int, created_at: float
+) -> dict[str, Any]:
 
     nd = handle.nd
     sizes = handle.sizes

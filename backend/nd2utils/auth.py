@@ -30,6 +30,23 @@ _LOGIN_MAX_FAILURES = 10
 
 _LOCK = RLock()
 _FAILURES: dict[str, list[float]] = {}
+# token hash -> (verified at, user record). Lets the auth middleware answer most requests
+# without reading auth.json in a worker thread. Changes to codes clear it.
+_SESSION_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_SESSION_CACHE_TTL = 5.0
+
+
+def cached_session(token: str) -> dict[str, Any] | None:
+    if not token or len(token) > 256:
+        return None
+    hit = _SESSION_CACHE.get(_hash(token))
+    if hit and time.time() - hit[0] < _SESSION_CACHE_TTL:
+        return dict(hit[1])
+    return None
+
+
+def _forget_sessions() -> None:
+    _SESSION_CACHE.clear()
 
 
 class AuthError(Exception):
@@ -70,6 +87,8 @@ def _load() -> dict[str, Any]:
 def _save(data: dict[str, Any]) -> None:
     ensure_dirs()
     jsoncache.write(settings.auth_path, data, mode=0o600)
+    # Codes or sessions changed (disabled, deleted, regenerated…): re-verify everything.
+    _forget_sessions()
 
 
 def code_status(rec: dict[str, Any], now: float | None = None) -> str:
@@ -193,12 +212,14 @@ def resolve_session(token: str | None) -> dict[str, Any] | None:
         if now - float(sess.get("last_seen_at") or 0) > _TOUCH_INTERVAL:
             sess["last_seen_at"] = now
             _save(data)
+        _SESSION_CACHE[key] = (now, dict(rec))
         return dict(rec)
 
 
 def logout(token: str | None) -> None:
     if not token:
         return
+    _SESSION_CACHE.pop(_hash(token), None)
     with _LOCK:
         data = _load()
         if data["sessions"].pop(_hash(token), None) is not None:

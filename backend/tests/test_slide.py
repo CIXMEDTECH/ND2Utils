@@ -9,7 +9,7 @@ import pytest
 import tifffile
 from PIL import Image
 
-from conftest import ROOT
+from conftest import wait_job, ROOT
 from nd2utils import prepare
 
 
@@ -138,7 +138,7 @@ def test_non_pyramidal_tiff_gets_virtual_levels(client, tmp_path: Path):
 def _run_export(client, file_id: str, body: dict) -> tuple[dict, bytes]:
     r = client.post(f"/api/files/{file_id}/slide/export", json=body)
     assert r.status_code == 200, r.text
-    job = client.get(f"/api/jobs/{r.json()['id']}").json()
+    job = wait_job(client, r.json()["id"])
     assert job["status"] == "done", job
     dl = client.get(f"/api/jobs/{job['id']}/download")
     assert dl.status_code == 200
