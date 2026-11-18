@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - develop
     tags:
       - "v*"
   pull_request:
@@ -58,6 +59,9 @@ jobs:
             type=raw,value=v1.0.2-fix1,enable={{is_default_branch}}
             type=raw,value=fix1,enable={{is_default_branch}}
             type=raw,value=1.0,enable={{is_default_branch}}
+            type=raw,value=1.1-beta1,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=raw,value=v1.1-beta1,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=raw,value=beta,enable=${{ github.ref == 'refs/heads/develop' }}
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}

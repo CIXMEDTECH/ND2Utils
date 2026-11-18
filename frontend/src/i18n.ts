@@ -2,7 +2,7 @@ import type { Lang } from "./lib/types";
 
 const dict = {
   zh: {
-    app: "ND2Utils",
+    app: "Lucida 明室",
     tagline: "打开 ND2，先看清，再导出。",
     sub: "上传 Nikon ND2 文件，即可查看荧光通道、物镜、像素尺寸和采集记录；需要时导出原始数据或显示图。",
     homeEyebrow: "ND2 查看与导出",
@@ -109,7 +109,7 @@ const dict = {
     maxUpload: "单个文件上限",
     settingsStorage: "存储与限制",
     settingsStorageHint: "临时用户的文件会在保留时间结束后自动清理；导出包对所有用户都只保留同样时长，请及时下载。",
-    legal: "ND2Utils 不是 Nikon 或 NIS-Elements 的官方产品。ND2 为 Nikon 专有格式，本工具通过开源 nd2 项目提供读取支持。",
+    legal: "Lucida 明室（原 ND2Utils）不是 Nikon、NIS-Elements 或 Leica 的官方产品。ND2 为 Nikon 专有格式，本工具通过开源 nd2 项目提供读取支持。",
     jobsEyebrow: "导出与下载",
     settingsEyebrow: "偏好设置",
     jobQueued: "等待导出",
@@ -172,7 +172,7 @@ const dict = {
     errorNoAxis: "当前文件没有可用于该操作的维度。",
     loginEyebrow: "授权访问",
     loginTitle: "输入授权码",
-    loginIntro: "ND2Utils 仅对持有授权码的用户开放。每个授权码对应一个独立的工作空间。",
+    loginIntro: "Lucida 明室仅对持有授权码的用户开放。每个授权码对应一个独立的工作空间。",
     accessCode: "授权码",
     signIn: "进入工作空间",
     signingIn: "正在验证…",
@@ -508,7 +508,7 @@ const dict = {
     gridCols: "网格列数",
   },
   en: {
-    app: "ND2Utils",
+    app: "Lucida",
     tagline: "Open, inspect, and export ND2.",
     sub: "Upload Nikon ND2 files to inspect fluorescence channels, optics, pixel size, and acquisition records, then export raw data or display-ready images.",
     homeEyebrow: "ND2 viewing and export",
@@ -615,7 +615,7 @@ const dict = {
     maxUpload: "Maximum file size",
     settingsStorage: "Storage and limits",
     settingsStorageHint: "Files of temporary users are removed after the retention period. Export archives are kept for the same time for everyone, so download them promptly.",
-    legal: "ND2Utils is not an official Nikon or NIS-Elements product. ND2 is a proprietary Nikon format; open-source nd2 provides file-reading support.",
+    legal: "Lucida (formerly ND2Utils) is not an official Nikon, NIS-Elements or Leica product. ND2 is a proprietary Nikon format; open-source nd2 provides file-reading support.",
     jobsEyebrow: "Exports and downloads",
     settingsEyebrow: "Preferences",
     jobQueued: "Waiting",
@@ -678,7 +678,7 @@ const dict = {
     errorNoAxis: "This file does not contain the dimension required for that action.",
     loginEyebrow: "Authorized access",
     loginTitle: "Enter your access code",
-    loginIntro: "ND2Utils is available to holders of an access code. Every code has its own private workspace.",
+    loginIntro: "Lucida is available to holders of an access code. Every code has its own private workspace.",
     accessCode: "Access code",
     signIn: "Open workspace",
     signingIn: "Checking…",

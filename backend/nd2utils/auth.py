@@ -59,7 +59,7 @@ def _load() -> dict[str, Any]:
         data = jsoncache.read(path, lambda: {"codes": {}, "sessions": {}}, strict=True)
     except (json.JSONDecodeError, OSError):
         # Never silently start over: that would drop every code and session.
-        raise RuntimeError(f"{path} is unreadable; fix or remove it before starting ND2Utils.")
+        raise RuntimeError(f"{path} is unreadable; fix or remove it before starting Lucida.")
     if not isinstance(data, dict):
         data = {}
     data.setdefault("codes", {})
@@ -126,7 +126,7 @@ def ensure_admin() -> dict[str, Any]:
         data["codes"][rec["id"]] = rec
         _save(data)
     banner = "=" * 60
-    print(f"\n{banner}\n ND2Utils admin access code / 管理员授权码:\n\n    {code}\n\n{banner}\n", flush=True)
+    print(f"\n{banner}\n Lucida 明室 admin access code / 管理员授权码:\n\n    {code}\n\n{banner}\n", flush=True)
     return rec
 
 

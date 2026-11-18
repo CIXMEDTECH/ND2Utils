@@ -13,6 +13,8 @@ import {
   Translate,
 } from "@phosphor-icons/react";
 import { t } from "../i18n";
+import { clientSettings } from "../lib/api";
+import { APP_VERSION } from "../lib/version";
 import { useActivityTracker } from "../lib/activity";
 import { ActivityIndicator, ActivityLine } from "./Activity";
 import { useApp } from "../store";
@@ -40,6 +42,17 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
   const dark = theme === "dark" || (theme === "system" && systemDark);
+  const [version, setVersion] = useState(APP_VERSION);
+
+  useEffect(() => {
+    let alive = true;
+    clientSettings()
+      .then((s) => alive && s.version && setVersion(s.version))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     const query = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -56,11 +69,11 @@ export function Shell({ children, dense = false }: { children: React.ReactNode; 
       </a>
       <div className={`app-chrome ${dense ? "app-chrome--dense" : ""}`}>
         <Glass as="header" shape="island" className="app-header">
-          <Link to="/" className="group flex items-center gap-2.5 text-[var(--accent)]" aria-label="ND2Utils">
+          <Link to="/" className="group flex items-center gap-2.5 text-[var(--accent)]" aria-label={t(lang, "app")}>
             <Mark />
-            <span className="font-semibold tracking-[-0.025em] text-[var(--text)]">ND2Utils</span>
+            <span className="whitespace-nowrap font-semibold tracking-[-0.025em] text-[var(--text)]">{t(lang, "app")}</span>
             <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]">
-              v1.0.2
+              v{version}
             </span>
           </Link>
 

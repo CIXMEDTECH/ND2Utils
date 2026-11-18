@@ -1,3 +1,3 @@
-"""ND2Utils backend."""
+"""Lucida 明室 backend (formerly ND2Utils)."""
 
-__version__ = "1.0.2"
+__version__ = "1.1"

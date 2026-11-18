@@ -1,7 +1,7 @@
 [project]
 name = "nd2utils"
-version = "1.0.2"
-description = "Self-hosted ND2 preview, metadata, and export tool"
+version = "1.1"
+description = "Lucida 明室: self-hosted microscopy image viewer, editor and analysis tool"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",

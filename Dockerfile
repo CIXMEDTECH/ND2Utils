@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY backend/pyproject.toml /app/backend/pyproject.toml
 RUN mkdir -p /app/backend/nd2utils && \
-    printf '__version__ = "1.0.2"\n' > /app/backend/nd2utils/__init__.py && \
+    printf '__version__ = "1.1"\n' > /app/backend/nd2utils/__init__.py && \
     pip install --no-cache-dir --retries 10 --timeout 120 /app/backend
 COPY backend/nd2utils /app/backend/nd2utils
 RUN pip install --no-cache-dir --no-deps /app/backend

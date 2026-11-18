@@ -9,7 +9,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
   }
 
   componentDidCatch(error: Error) {
-    console.error("ND2Utils crashed", error);
+    console.error("Lucida crashed", error);
   }
 
   render() {

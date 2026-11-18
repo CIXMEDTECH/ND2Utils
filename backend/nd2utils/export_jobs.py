@@ -81,7 +81,7 @@ def _archive_name(stems: list[str], fmt: str, created_at: float, job_id: str) ->
     label = _FORMAT_LABELS.get(fmt, fmt.upper())
     unique = [s for s in dict.fromkeys(stems) if s]
     if not unique:
-        base = "ND2Utils"
+        base = "Lucida"
     elif len(unique) == 1:
         base = unique[0]
     elif len(unique) == 2:

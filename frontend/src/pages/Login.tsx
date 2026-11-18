@@ -50,7 +50,7 @@ export function Login({ sessionEnded = false }: { sessionEnded?: boolean }) {
         <Glass as="section" shape="card" className="p-7 sm:p-9">
           <div className="flex items-center gap-2.5 text-[var(--accent)]">
             <Mark />
-            <span className="font-semibold tracking-[-0.025em] text-[var(--text)]">ND2Utils</span>
+            <span className="font-semibold tracking-[-0.025em] text-[var(--text)]">{t(lang, "app")}</span>
           </div>
           <p className="mt-9 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{t(lang, "loginEyebrow")}</p>
           <h1 className="mt-2 text-[1.75rem] font-semibold leading-tight tracking-[-0.04em]">{t(lang, "loginTitle")}</h1>

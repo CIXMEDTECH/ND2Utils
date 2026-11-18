@@ -134,7 +134,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="ND2Utils",
+    title="Lucida",
     version=__version__,
     lifespan=lifespan,
     docs_url="/api/docs",
