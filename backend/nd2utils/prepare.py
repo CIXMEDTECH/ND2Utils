@@ -253,6 +253,7 @@ def raw_plane(rec: dict[str, Any], source: Path, coords: tuple[int, int, int]) -
 def _store(file_id: str, built: dict[str, Any]) -> None:
     folder = settings.cache_dir / file_id
     folder.mkdir(parents=True, exist_ok=True)
+    (folder / THUMB_NAME).unlink(missing_ok=True)  # derived from the display data
     for kind in _KINDS:
         path = _path(file_id, kind)
         tmp = path.with_name(path.name + ".tmp")
@@ -261,6 +262,63 @@ def _store(file_id: str, built: dict[str, Any]) -> None:
         else:
             tmp.write_bytes(built[kind])
         tmp.replace(path)
+
+
+THUMB_NAME = "thumb.jpg"
+THUMB_EDGE = 256
+
+
+def _unpack_display(raw: bytes) -> tuple[list[np.ndarray], list[tuple[int, int, int]]]:
+    """8-bit planes and colours from the packed display data (see nd2io.pack_planes)."""
+    n = int.from_bytes(raw[6:8], "little")
+    h = int.from_bytes(raw[8:12], "little")
+    w = int.from_bytes(raw[12:16], "little")
+    offset = 20
+    planes, colors = [], []
+    for _ in range(n):
+        offset += 32
+        colors.append((raw[offset], raw[offset + 1], raw[offset + 2]))
+        offset += 12
+        planes.append(np.frombuffer(raw, dtype=np.uint8, count=h * w, offset=offset).reshape(h, w))
+        offset += h * w
+    return planes, colors
+
+
+def thumbnail(file_id: str, rec: dict[str, Any]) -> bytes:
+    """Small JPEG of the workspace preview (folder view), built from the display cache once.
+    Raises Pending while the file is still being prepared."""
+    from PIL import Image
+
+    path = settings.cache_dir / file_id / THUMB_NAME
+    try:
+        return path.read_bytes()
+    except OSError:
+        pass
+    try:
+        raw = gzip.decompress(_read(file_id, "display"))
+    except (OSError, json.JSONDecodeError):
+        prioritize(file_id)
+        raise Pending(file_id)
+    planes, colors = _unpack_display(raw)
+    channels = rec.get("channels") or []
+    h, w = planes[0].shape if planes else (1, 1)
+    acc = np.zeros((h, w, 3), dtype=np.float32)
+    for i, (plane, color) in enumerate(zip(planes, colors)):
+        meta = channels[i] if i < len(channels) else {}
+        if meta.get("visible") is False:
+            continue
+        acc += plane[..., None].astype(np.float32) * (np.asarray(meta.get("color") or color, dtype=np.float32) / 255.0)
+    img = Image.fromarray(np.clip(acc, 0, 255).astype(np.uint8), "RGB")
+    img.thumbnail((THUMB_EDGE, THUMB_EDGE))
+    from io import BytesIO
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=82)
+    body = buf.getvalue()
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(body)
+    tmp.replace(path)
+    return body
 
 
 def _read(file_id: str, kind: str) -> Any:

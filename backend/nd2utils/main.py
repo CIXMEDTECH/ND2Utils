@@ -98,6 +98,8 @@ from nd2utils.store import (
     upsert_files,
     upsert_job,
     fail_interrupted_jobs,
+    move_items,
+    undo_move,
     delete_jobs,
     JobCancelled,
     workspace_usage,
@@ -754,6 +756,46 @@ def _copy_upload(src: Any, dest: Path) -> int:
 
 # Plain `def` routes: the disk writes and parsing run in the thread pool, never on the
 # event loop, so a large upload cannot stall every other request.
+class MoveBody(BaseModel):
+    file_ids: list[str] = []
+    folders: list[str] = []
+    target_folder: str = ""
+    conflict: Literal["skip", "replace", "rename"] = "skip"
+
+
+@app.post("/api/items/move")
+def api_move_items(body: MoveBody, owner_id: Owner) -> dict[str, Any]:
+    """Move files and folders inside the workspace (drag and drop, cut/paste, "Move to…")."""
+    if not body.file_ids and not body.folders:
+        raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select files or folders first."})
+    try:
+        return move_items(
+            owner_id,
+            file_ids=body.file_ids,
+            folders=body.folders,
+            target_folder=_folder_arg(body.target_folder),
+            conflict=body.conflict,
+        )
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "File or folder not found."}) from exc
+
+
+class UndoMoveBody(BaseModel):
+    files: list[dict[str, str]] = []
+    folders_removed: list[str] = []
+    folders_added: list[str] = []
+
+
+@app.post("/api/items/undo-move")
+def api_undo_move(body: UndoMoveBody, owner_id: Owner) -> dict[str, Any]:
+    try:
+        return undo_move(owner_id, body.model_dump())
+    except PathError as exc:
+        raise _bad_path(exc) from exc
+
+
 @app.post("/api/files")
 def api_upload(owner_id: Owner, folder: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
     name = _source_name(file.filename)
@@ -1613,6 +1655,18 @@ def api_display(
     if wire == "gzip":
         return Response(content=body, media_type="application/gzip")
     return _gzip_response(request, body)
+
+
+@app.get("/api/files/{file_id}/thumb")
+def api_thumb(file_id: str, owner_id: Owner, v: str = "") -> Response:
+    """256 px JPEG for the folder view. With `v` (the file's prepared_at) it is cached for good."""
+    rec = _need(file_id, owner_id)
+    try:
+        body = prepare.thumbnail(file_id, rec)
+    except prepare.Pending:
+        return JSONResponse(status_code=202, content={"status": "pending"})
+    headers = {"Cache-Control": "private, max-age=31536000, immutable"} if v else {"Cache-Control": "no-cache"}
+    return Response(content=body, media_type="image/jpeg", headers=headers)
 
 
 @app.get("/api/files/{file_id}/plane")

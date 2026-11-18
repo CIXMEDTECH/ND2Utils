@@ -48,6 +48,10 @@ export interface FileSummary {
   voxel_um: number[];
   objective: string | null;
   magnification: number | null;
+  /** Confocal scan zoom (Nikon / Leica); 1 or missing for camera images. */
+  zoom?: number | null;
+  /** False when the file carries no pixel size (no scale bar can be drawn). */
+  calibrated?: boolean | null;
   na: number | null;
   acquired: string | null;
   instrument: string | null;

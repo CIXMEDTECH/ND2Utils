@@ -567,6 +567,184 @@ def _clone_file_data(src_id: str, dst_id: str) -> None:
         shutil.copytree(cache, settings.cache_dir / dst_id, dirs_exist_ok=True)
 
 
+_DOUBLE_EXT = (".ome.tiff", ".ome.tif")
+
+
+def _split_ext(name: str) -> tuple[str, str]:
+    lowered = name.lower()
+    for ext in _DOUBLE_EXT:
+        if lowered.endswith(ext) and len(name) > len(ext):
+            return name[: -len(ext)], name[-len(ext):]
+    stem, dot, ext = name.rpartition(".")
+    return (stem, dot + ext) if dot and stem else (name, "")
+
+
+def unique_name(taken: set[str], name: str) -> str:
+    """`name`, or "stem (2).ext", "stem (3).ext"… — the first not in `taken` (lower-case names)."""
+    if name.lower() not in taken:
+        return name
+    stem, ext = _split_ext(name)
+    n = 2
+    while f"{stem} ({n}){ext}".lower() in taken:
+        n += 1
+    return f"{stem} ({n}){ext}"
+
+
+def move_items(
+    owner_id: str,
+    *,
+    file_ids: list[str],
+    folders: list[str],
+    target_folder: str,
+    conflict: str = "skip",
+) -> dict[str, Any]:
+    """Move files and folders within one workspace, like a file manager.
+
+    A moved folder keeps its name (and its subfolders) below `target_folder`, merging into a
+    folder of the same name that is already there. Name clashes are skipped, replace the
+    existing file, or get a " (2)" suffix (`conflict`: skip / replace / rename). Only metadata
+    changes - files are stored by id - so previews and caches stay valid. One index write.
+
+    Returns counts plus `undo`, the original places, for undo_move()."""
+    target = normalize_folder(target_folder)
+    normalized = [normalize_folder(f) for f in folders]
+    if "" in normalized:
+        # The workspace root contains every target folder.
+        raise PathError("A folder cannot be moved into itself.")
+    picked = list(dict.fromkeys(normalized))
+    # Moving a folder moves everything inside it: drop selections nested in another one.
+    picked = [f for f in picked if not any(f != g and _in_folder(f, g) for g in picked)]
+    replaced_ids: list[str] = []
+    with _LOCK:
+        existing = set(list_folders(owner_id))
+        for folder in picked:
+            if folder not in existing:
+                raise FileNotFoundError(folder)
+            if _in_folder(target, folder):
+                raise PathError("A folder cannot be moved into itself.")
+        index = load_index()
+        owned = {fid: rec for fid, rec in index.items() if _owned(rec, owner_id)}
+        plan: list[tuple[str, str]] = []
+        folder_map: dict[str, str] = {}
+        skipped = 0
+        for folder in picked:
+            dest = "/".join(p for p in (target, folder.rsplit("/", 1)[-1]) if p)
+            if dest == folder:
+                continue  # already there
+            for sub in existing:
+                if _in_folder(sub, folder):
+                    folder_map[sub] = dest + sub[len(folder):]
+            for fid, rec in owned.items():
+                current = rec.get("folder") or ""
+                if _in_folder(current, folder):
+                    plan.append((fid, dest + current[len(folder):]))
+        planned = {fid for fid, _ in plan}
+        for fid in dict.fromkeys(file_ids):
+            rec = owned.get(fid)
+            if rec is None:
+                raise FileNotFoundError(fid)
+            if fid in planned:
+                continue
+            if (rec.get("folder") or "") == target:
+                skipped += 1
+                continue
+            planned.add(fid)
+            plan.append((fid, target))
+        # Names already present in each destination (files that stay where they are).
+        names: dict[str, dict[str, str]] = {}
+        for fid, rec in owned.items():
+            if fid not in planned:
+                names.setdefault(rec.get("folder") or "", {})[(rec.get("name") or "").lower()] = fid
+        moved = renamed = 0
+        undo_files: list[dict[str, str]] = []
+        for fid, dest in plan:
+            rec = index[fid]
+            name = rec.get("name") or fid
+            here = names.setdefault(dest, {})
+            new_name = name
+            clash = here.get(name.lower())
+            if clash:
+                # Never replace a file that is itself part of this move.
+                if conflict == "replace" and clash not in planned:
+                    replaced_ids.append(clash)
+                    here.pop(name.lower(), None)
+                elif conflict == "rename":
+                    new_name = unique_name(set(here), name)
+                    renamed += 1
+                else:
+                    skipped += 1
+                    continue
+            undo_files.append({"id": fid, "folder": rec.get("folder") or "", "name": name})
+            # A new record object: readers may still hold the old one.
+            index[fid] = {**rec, "folder": dest, "name": new_name}
+            here[new_name.lower()] = fid
+            moved += 1
+        if moved:
+            save_index(index)
+        data = _load_folders()
+        current = set(data.get(owner_id) or [])
+        removed = sorted(f for f in current if f in folder_map)
+        current.difference_update(folder_map)
+        current.update(folder_map.values())
+        current.update(_ancestors(target))
+        data[owner_id] = sorted(current)
+        _write_json(settings.folders_path, data)
+    for clash in replaced_ids:
+        delete_file(clash, owner_id)  # data, and references from projects
+    return {
+        "moved": moved,
+        "skipped": skipped,
+        "renamed": renamed,
+        "replaced": len(replaced_ids),
+        "undo": {
+            "files": undo_files,
+            "folders_removed": removed,
+            "folders_added": sorted(set(folder_map.values())),
+        },
+    }
+
+
+def undo_move(owner_id: str, undo: dict[str, Any]) -> dict[str, int]:
+    """Put files back where move_items found them (skipping any whose old name is now taken)."""
+    files = [f for f in undo.get("files") or [] if isinstance(f, dict)]
+    restored = skipped = 0
+    with _LOCK:
+        index = load_index()
+        taken: dict[str, dict[str, str]] = {}
+        moving = {f.get("id") for f in files}
+        for fid, rec in index.items():
+            if _owned(rec, owner_id) and fid not in moving:
+                taken.setdefault(rec.get("folder") or "", {})[(rec.get("name") or "").lower()] = fid
+        for item in files:
+            fid = str(item.get("id") or "")
+            rec = index.get(fid)
+            if not _owned(rec, owner_id):
+                skipped += 1
+                continue
+            folder = normalize_folder(item.get("folder"))
+            name = normalize_filename(item.get("name") or rec.get("name"))
+            here = taken.setdefault(folder, {})
+            if name.lower() in here:
+                skipped += 1
+                continue
+            index[fid] = {**rec, "folder": folder, "name": name}
+            here[name.lower()] = fid
+            restored += 1
+        if restored:
+            save_index(index)
+        data = _load_folders()
+        current = set(data.get(owner_id) or [])
+        current.update(normalize_folder(f) for f in undo.get("folders_removed") or [] if f)
+        in_use = {rec.get("folder") or "" for rec in index.values() if _owned(rec, owner_id)}
+        for added in undo.get("folders_added") or []:
+            added = normalize_folder(added)
+            if not any(_in_folder(u, added) for u in in_use):
+                current = {f for f in current if not _in_folder(f, added)}
+        data[owner_id] = sorted(current)
+        _write_json(settings.folders_path, data)
+    return {"restored": restored, "skipped": skipped}
+
+
 def transfer(
     source_owner: str,
     target_owner: str,
@@ -582,9 +760,15 @@ def transfer(
     A selected folder keeps its name and inner structure below `target_folder`; selected files
     land directly in `target_folder`. Same-name files in the destination are skipped or replaced.
     """
+    same = source_owner == target_owner
+    if same and mode == "move":
+        moved = move_items(
+            source_owner, file_ids=file_ids, folders=folders, target_folder=target_folder,
+            conflict="replace" if conflict == "replace" else "skip",
+        )
+        return {"copied": 0, "moved": moved["moved"], "skipped": moved["skipped"], "replaced": moved["replaced"], "files": []}
     target_folder = normalize_folder(target_folder)
     folders = [normalize_folder(f) for f in folders]
-    same = source_owner == target_owner
     existing_folders = set(list_folders(source_owner))
     plan: list[tuple[dict[str, Any], str]] = []
     seen: set[str] = set()

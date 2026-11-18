@@ -4,6 +4,10 @@ import {
   ArrowClockwise,
   ArrowCounterClockwise,
   ArrowsLeftRight,
+  ClipboardText,
+  ArrowElbowDownRight,
+  FolderOpen,
+  Scissors,
   Check,
   CheckCircle,
   Copy,
@@ -31,6 +35,9 @@ import { CropOverlay, centerCropBoxAt, defaultCropBox, fitCropToAspect, type Cro
 import { folderInputId } from "../components/DropZone";
 import { ExportPanel } from "../components/ExportPanel";
 import { FileTree, type TreeTarget } from "../components/FileTree";
+import { FolderView } from "../components/FolderView";
+import { MoveDialog } from "../components/MoveDialog";
+import { MoveToast } from "../components/MoveToast";
 import { ConfirmDialog, Modal, NameDialog } from "../components/Modal";
 import { Glass } from "../components/Glass";
 import { Guide } from "../components/Guide";
@@ -63,6 +70,7 @@ import { segmentNucleiFromPacked } from "../lib/nucleus";
 import { createPreviewLayers, drawPreview, niceScaleUm, unpackPlane } from "../lib/plane";
 import { readPref, writePref } from "../lib/storage";
 import { countFilesIn, orderedFiles } from "../lib/tree";
+import { currentSelection, performMove, selectionFor, type MoveSet } from "../lib/moves";
 import type { Rect, SlideViewer, ViewState } from "../lib/slide";
 import type { ExportTarget, FileSummary, LutSetting, NucleusResult, PackedPlane, SlideInfo } from "../lib/types";
 import { useApp } from "../store";
@@ -94,7 +102,10 @@ type NameAction =
   | { mode: "renameFolder"; path: string }
   | { mode: "renameFile"; file: FileSummary };
 
-type DeleteAction = { type: "folder"; path: string } | { type: "file"; file: FileSummary };
+type DeleteAction =
+  | { type: "folder"; path: string }
+  | { type: "file"; file: FileSummary }
+  | { type: "selection"; items: MoveSet };
 
 const UPLOAD_INPUT = "workspace-nd2-upload";
 const TREE_WIDTH_KEY = "nd2utils.treeWidth";
@@ -147,6 +158,10 @@ export function Workspace() {
   const [exportTarget, setExportTarget] = useState<ExportTarget | null>(null);
   const [nameAction, setNameAction] = useState<NameAction | null>(null);
   const [deleteAction, setDeleteAction] = useState<DeleteAction | null>(null);
+  const [moveDialog, setMoveDialog] = useState<MoveSet | null>(null);
+  const folderView = useApp((s) => s.folderView);
+  const checkedFolders = useApp((s) => s.checkedFolders);
+  const clipboard = useApp((s) => s.clipboard);
   const [transferSeed, setTransferSeed] = useState<TransferSeed | null>(null);
   const [treeWidth, setTreeWidth] = useState(() => clampTreeWidth(Number(readPref(TREE_WIDTH_KEY)) || TREE_WIDTH_DEFAULT));
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -572,6 +587,33 @@ export function Workspace() {
     return () => window.clearTimeout(handle);
   }, [order, previewReady, selectedId]);
 
+  // Ctrl/⌘+X cut, Ctrl/⌘+V paste into the current folder, Esc clears the selection.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const el = event.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      const app = useApp.getState();
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === "x") {
+        const items = currentSelection();
+        if (!items.file_ids.length && !items.folders.length && app.selectedId) items.file_ids.push(app.selectedId);
+        if (!items.file_ids.length && !items.folders.length) return;
+        event.preventDefault();
+        app.setClipboard(items);
+      } else if (mod && event.key.toLowerCase() === "v" && app.clipboard) {
+        event.preventDefault();
+        const items = app.clipboard;
+        app.setClipboard(null);
+        void performMove(items, app.currentFolder);
+      } else if (event.key === "Escape" && !event.defaultPrevented) {
+        if (app.clipboard) app.setClipboard(null);
+        else app.clearSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // ArrowUp / ArrowDown continuous file stepping
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -643,6 +685,9 @@ export function Workspace() {
   }, [channelVisible, composite, cropping, localPreview, scaleBar, selected]);
 
   const selectedIds = files.filter((file) => checked[file.id]).map((file) => file.id);
+  const pickedCount = selectedIds.length + Object.values(checkedFolders).filter(Boolean).length;
+  const barButton =
+    "inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-lg px-2 text-sm text-[var(--text)] transition-colors hover:bg-[var(--bg-elev)]";
   const exportIds = (selectedIds.length ? selectedIds : selected ? [selected.id] : []).filter(
     (id) => !isSlide(files.find((file) => file.id === id)),
   );
@@ -714,8 +759,29 @@ export function Workspace() {
     if (target.type === "folder") {
       const path = target.path;
       const count = countFilesIn(files, path);
+      const picked = selectionFor({ folder: path });
       items.push(
-        { key: "export", label: t(lang, "exportEllipsis"), icon: <ExportIcon size={15} />, disabled: count === 0, onSelect: () => exportFolder(path) },
+        { key: "open-folder", label: t(lang, "openFolder"), icon: <FolderOpen size={15} />, onSelect: () => useApp.getState().openFolderView(path) },
+        ...(path
+          ? [
+              { key: "cut", label: t(lang, "cut"), icon: <Scissors size={15} />, onSelect: () => useApp.getState().setClipboard(picked) },
+              { key: "move", label: t(lang, "moveTo"), icon: <ArrowElbowDownRight size={15} />, onSelect: () => setMoveDialog(picked) },
+            ]
+          : []),
+        ...(clipboard
+          ? [
+              {
+                key: "paste",
+                label: `${t(lang, "pasteHere")} (${clipboard.file_ids.length + clipboard.folders.length})`,
+                icon: <ClipboardText size={15} />,
+                onSelect: () => {
+                  useApp.getState().setClipboard(null);
+                  void performMove(clipboard, path);
+                },
+              },
+            ]
+          : []),
+        { key: "export", label: t(lang, "exportEllipsis"), icon: <ExportIcon size={15} />, separated: true, disabled: count === 0, onSelect: () => exportFolder(path) },
         { key: "upload", label: t(lang, "uploadFilesHere"), icon: <UploadSimple size={15} />, separated: true, onSelect: () => uploadInto(path, false) },
         { key: "upload-dir", label: t(lang, "uploadFolderHere"), icon: <FolderSimplePlus size={15} />, onSelect: () => uploadInto(path, true) },
         { key: "mkdir", label: t(lang, "newFolder"), icon: <FolderPlus size={15} />, onSelect: () => setNameAction({ mode: "newFolder", parent: path }) },
@@ -809,11 +875,18 @@ export function Workspace() {
             },
           ]
         : []),
-      { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, separated: true, onSelect: () => setNameAction({ mode: "renameFile", file }) },
+      { key: "cut", label: t(lang, "cut"), icon: <Scissors size={15} />, separated: true, onSelect: () => useApp.getState().setClipboard(selectionFor({ file: file.id })) },
+      { key: "move", label: t(lang, "moveTo"), icon: <ArrowElbowDownRight size={15} />, onSelect: () => setMoveDialog(selectionFor({ file: file.id })) },
+      { key: "rename", label: t(lang, "rename"), icon: <PencilSimple size={15} />, onSelect: () => setNameAction({ mode: "renameFile", file }) },
       { key: "delete", label: t(lang, "delete"), icon: <Trash size={15} />, danger: true, onSelect: () => setDeleteAction({ type: "file", file }) },
     );
     setMenu({ x, y, title: joinPath(file.folder, file.name), items });
   }
+
+  // A stable callback for the memoised tree (openMenu itself changes on every render).
+  const openMenuRef = useRef(openMenu);
+  openMenuRef.current = openMenu;
+  const stableOpenMenu = useCallback((target: TreeTarget, x: number, y: number) => openMenuRef.current(target, x, y), []);
 
   async function rebuild(body: { file_ids?: string[]; folders?: string[] }, affected: FileSummary[]) {
     try {
@@ -849,7 +922,13 @@ export function Workspace() {
 
   async function submitDelete() {
     if (!deleteAction) return;
-    if (deleteAction.type === "folder") {
+    if (deleteAction.type === "selection") {
+      // Folders first (their files go with them), then loose files that are still there.
+      for (const path of deleteAction.items.folders) await deleteFolder(path).catch(() => undefined);
+      const remaining = new Set(useApp.getState().files.map((f) => f.id));
+      for (const id of deleteAction.items.file_ids) if (remaining.has(id)) await deleteFile(id).catch(() => undefined);
+      useApp.getState().clearSelection();
+    } else if (deleteAction.type === "folder") {
       await deleteFolder(deleteAction.path);
       if (useApp.getState().currentFolder.startsWith(deleteAction.path)) setCurrentFolder(parentPath(deleteAction.path));
     } else {
@@ -1065,6 +1144,39 @@ export function Workspace() {
           >
             <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-[var(--accent)] group-focus-visible:bg-[var(--accent)] group-active:bg-[var(--accent)]" />
           </div>
+          {pickedCount > 0 && (
+            <div className="flex flex-wrap items-center gap-1 border-b border-[var(--line)] bg-[var(--accent-soft)] px-2 py-1.5 text-sm">
+              <span className="mr-auto px-1 font-medium text-[var(--accent)]">
+                {t(lang, "selectedItems")} {pickedCount} {t(lang, "items")}
+              </span>
+              <button type="button" onClick={() => setMoveDialog(currentSelection())} className={barButton} title={t(lang, "moveTo")}>
+                <ArrowElbowDownRight size={15} className="shrink-0" />
+                {t(lang, "moveTo")}
+              </button>
+              {selectedIds.length > 0 && (
+                <button type="button" onClick={(event) => openProjectPicker(event, selectedIds)} className={barButton} title={t(lang, "addToProject")}>
+                  <SquaresFour size={15} className="shrink-0" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  const sel = currentSelection();
+                  setExportTarget({ fileIds: sel.file_ids, folders: sel.folders, label: `${pickedCount} ${t(lang, "items")}` });
+                }}
+                className={barButton}
+                title={t(lang, "exportSelected")}
+              >
+                <ExportIcon size={15} className="shrink-0" />
+              </button>
+              <button type="button" onClick={() => setDeleteAction({ type: "selection", items: currentSelection() })} className={`${barButton} text-[var(--danger)]`} title={t(lang, "deleteSelected")}>
+                <Trash size={15} className="shrink-0" />
+              </button>
+              <button type="button" onClick={() => useApp.getState().clearSelection()} className={barButton} title={t(lang, "clearSelection")}>
+                <X size={14} className="shrink-0" />
+              </button>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-[var(--text-dim)]">
             <span className="inline-flex items-center gap-2 font-medium text-[var(--text)]">
               {t(lang, "files")}
@@ -1116,7 +1228,7 @@ export function Workspace() {
           )}
 
           <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--line)] max-lg:max-h-[70dvh]">
-            <FileTree onMenu={openMenu} />
+            <FileTree onMenu={stableOpenMenu} />
             {files.length === 0 && (
               <p className="mx-3 my-4 rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-sm leading-5 text-[var(--text-dim)]">
                 <FileIcon size={24} weight="duotone" className="mx-auto mb-2 text-[var(--accent)]" />
@@ -1124,7 +1236,9 @@ export function Workspace() {
               </p>
             )}
           </div>
-          <p className="border-t border-[var(--line)] px-3 py-2 text-xs leading-4 text-[var(--text-dim)]">{t(lang, "treeHint")}</p>
+          <p className="border-t border-[var(--line)] px-3 py-2 text-xs leading-4 text-[var(--text-dim)]">
+            {clipboard ? `${t(lang, "cut")}: ${clipboard.file_ids.length + clipboard.folders.length} ${t(lang, "items")} · Ctrl/⌘+V` : t(lang, "dragHint")}
+          </p>
         </Glass>
 
         {/* Center Pane: Optical Viewport */}
@@ -1157,7 +1271,9 @@ export function Workspace() {
             </div>
           )}
 
-          {selected && selectedIsSlide ? (
+          {folderView !== null ? (
+            <FolderView path={folderView} onMenu={stableOpenMenu} />
+          ) : selected && selectedIsSlide ? (
             <div className="flex h-full min-h-[450px] flex-col">
               <div className="flex min-h-10 items-center gap-1.5 border-b border-white/[0.07] bg-black/30 px-3 text-xs text-white/65">
                 <SlideZoomControls viewer={slideViewer} view={slideReady ? slideView : null} />
@@ -1660,9 +1776,16 @@ export function Workspace() {
 
       <ConfirmDialog
         open={Boolean(deleteAction)}
-        title={t(lang, deleteAction?.type === "folder" ? "deleteFolder" : "delete")}
+        title={t(lang, deleteAction?.type === "folder" ? "deleteFolder" : deleteAction?.type === "selection" ? "deleteSelected" : "delete")}
         body={
-          deleteAction && (
+          deleteAction?.type === "selection" ? (
+            <>
+              <span className="mb-1 block font-mono text-xs text-[var(--text)]">
+                {deleteAction.items.file_ids.length} {t(lang, "nFiles")} · {deleteAction.items.folders.length} {t(lang, "subfolders")}
+              </span>
+              {t(lang, "deleteSelectedHint")}
+            </>
+          ) : deleteAction && (
             <>
               <span className="mb-1 block truncate font-mono text-xs text-[var(--text)]">
                 /{deleteAction.type === "folder" ? deleteAction.path : joinPath(deleteAction.file.folder, deleteAction.file.name)}
@@ -1676,6 +1799,8 @@ export function Workspace() {
         onConfirm={submitDelete}
         onClose={() => setDeleteAction(null)}
       />
+      {moveDialog && <MoveDialog items={moveDialog} onClose={() => setMoveDialog(null)} />}
+      <MoveToast />
     </Shell>
   );
 }

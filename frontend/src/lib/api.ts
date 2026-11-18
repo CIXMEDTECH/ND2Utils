@@ -334,6 +334,39 @@ export async function getJob(id: string): Promise<JobInfo> {
   return json(await fetch(`/api/jobs/${id}`));
 }
 
+export interface MoveUndo {
+  files: { id: string; folder: string; name: string }[];
+  folders_removed: string[];
+  folders_added: string[];
+}
+
+export interface MoveResult {
+  moved: number;
+  skipped: number;
+  renamed: number;
+  replaced: number;
+  undo: MoveUndo;
+}
+
+export type MoveConflict = "skip" | "replace" | "rename";
+
+export async function moveItems(body: {
+  file_ids: string[];
+  folders: string[];
+  target_folder: string;
+  conflict?: MoveConflict;
+}): Promise<MoveResult> {
+  return json<MoveResult>(await send("/api/items/move", "POST", body));
+}
+
+export async function undoMove(undo: MoveUndo): Promise<{ restored: number; skipped: number }> {
+  return json(await send("/api/items/undo-move", "POST", undo));
+}
+
+export function thumbUrl(file: { id: string; prepared_at?: number | null }): string {
+  return `/api/files/${file.id}/thumb?v=${file.prepared_at ?? 0}`;
+}
+
 export async function deleteJob(id: string): Promise<void> {
   const res = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
   // Already gone (deleted in another tab, or purged): that is what the user wanted.

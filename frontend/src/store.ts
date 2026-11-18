@@ -46,6 +46,12 @@ export interface AppState {
   detail: FileDetail | null;
   jobs: JobInfo[];
   checked: Record<string, boolean>;
+  /** Folders ticked in the tree / folder view (moved, exported or deleted with the files). */
+  checkedFolders: Record<string, boolean>;
+  /** The folder shown in the centre as a file-manager view; null while a file is previewed. */
+  folderView: string | null;
+  /** Items cut with Ctrl/⌘+X, pasted with Ctrl/⌘+V. */
+  clipboard: { file_ids: string[]; folders: string[] } | null;
   /** When enabled, channel visibility is preserved when switching between images. */
   channelLocked: boolean;
   lockedChannels: LockedChannelsState;
@@ -64,7 +70,12 @@ export interface AppState {
   select: (id: string | null) => void;
   setDetail: (d: FileDetail | null) => void;
   toggleChecked: (id: string, value?: boolean) => void;
+  setChecked: (ids: string[], value: boolean) => void;
+  toggleFolderChecked: (path: string, value?: boolean) => void;
+  clearSelection: () => void;
   checkAll: (value: boolean) => void;
+  openFolderView: (path: string | null) => void;
+  setClipboard: (items: { file_ids: string[]; folders: string[] } | null) => void;
   toggleChannelLock: (channels?: { name: string }[], currentVisible?: boolean[]) => void;
   updateLockedChannels: (channels: { name: string }[], visible: boolean[]) => void;
   resolveVisibleChannels: (channels: { name: string }[]) => boolean[];
@@ -102,6 +113,9 @@ const emptyWorkspace = {
   detail: null,
   jobs: [],
   checked: {},
+  checkedFolders: {},
+  folderView: null,
+  clipboard: null,
 };
 
 const fileKeys = new WeakMap<FileSummary, string>();
@@ -196,6 +210,12 @@ export const useApp = create<AppState>((set, get) => ({
     const checkedIds = files.filter((f) => currentChecked[f.id]).map((f) => f.id);
     const checkedSame = checkedIds.length === Object.values(currentChecked).filter(Boolean).length;
     const nextFolder = currentFolder && !folders.includes(currentFolder) ? "" : currentFolder;
+    const folderSet = new Set(folders);
+    const staleFolders = Object.keys(prev.checkedFolders).filter((f) => !folderSet.has(f));
+    if (staleFolders.length) {
+      set({ checkedFolders: Object.fromEntries(Object.keys(prev.checkedFolders).filter((f) => folderSet.has(f)).map((f) => [f, true])) });
+    }
+    if (prev.folderView && !folderSet.has(prev.folderView) && prev.folderView !== "") set({ folderView: null });
     const nextSelected = still ? selectedId : files[0]?.id ?? null;
     if (files === prev.files && folders === prev.folders && checkedSame && nextFolder === currentFolder && nextSelected === selectedId) {
       return;
@@ -225,18 +245,37 @@ export const useApp = create<AppState>((set, get) => ({
   },
   setCurrentFolder: (folder) => set({ currentFolder: folder }),
   reveal: (folder) => set({ revealRequest: { path: folder, seq: (get().revealRequest?.seq ?? 0) + 1 } }),
-  select: (id) => set({ selectedId: id, detail: id === get().selectedId ? get().detail : null }),
+  select: (id) => set({ selectedId: id, detail: id === get().selectedId ? get().detail : null, folderView: null }),
   setDetail: (d) => set({ detail: d }),
   toggleChecked: (id, value) => {
     const cur = get().checked;
     const next = { ...cur, [id]: value ?? !cur[id] };
     set({ checked: next });
   },
+  setChecked: (ids, value) => {
+    const next = { ...get().checked };
+    for (const id of ids) {
+      if (value) next[id] = true;
+      else delete next[id];
+    }
+    set({ checked: next });
+  },
+  toggleFolderChecked: (path, value) => {
+    const cur = get().checkedFolders;
+    const on = value ?? !cur[path];
+    const next = { ...cur };
+    if (on) next[path] = true;
+    else delete next[path];
+    set({ checkedFolders: next });
+  },
+  clearSelection: () => set({ checked: {}, checkedFolders: {} }),
   checkAll: (value) => {
     const checked: Record<string, boolean> = {};
     for (const f of get().files) checked[f.id] = value;
-    set({ checked });
+    set({ checked, checkedFolders: value ? get().checkedFolders : {} });
   },
+  openFolderView: (path) => set(path === null ? { folderView: null } : { folderView: path, currentFolder: path }),
+  setClipboard: (clipboard) => set({ clipboard }),
   toggleChannelLock: (channels, currentVisible) => {
     const nextLocked = !get().channelLocked;
     writePref("nd2utils.channelLocked", nextLocked ? "1" : "0");
