@@ -56,11 +56,11 @@ import {
   createPreviewLayers,
   drawCroppedPreview,
   drawPreview,
-  niceScaleUm,
   unpackPlane,
   type PreviewLayer,
 } from "../lib/plane";
 import { forget as forgetPreviews, getDisplay } from "../lib/previewCache";
+import { autoScaleUm, unifiedScaleUm } from "../lib/scalebar";
 import type {
   ChannelEdit,
   FileSummary,
@@ -195,6 +195,8 @@ function buildPreviewLayersForFile(
 }
 
 interface StudioCardCanvasProps {
+  /** One bar length for the whole project (same magnification), or null for per image. */
+  scaleUm: number | null;
   file: FileSummary;
   packed: PackedPlane | undefined;
   adjustments: ChannelAdjustment[];
@@ -218,6 +220,7 @@ interface StudioCardCanvasProps {
 }
 
 function StudioImageCard({
+  scaleUm,
   file,
   packed,
   adjustments,
@@ -256,24 +259,28 @@ function StudioImageCard({
     const dims = { width: imgW, height: imgH };
     if (viewMode === "cropped") {
       drawCroppedPreview(canvas, dims, layers, crop, {
-        scaleBar,
+        scaleBar: scaleBar && file.calibrated !== false,
         visible,
         umPerPixel: umPerPx,
+        optics: file,
+        scaleUm,
       });
     } else {
       drawPreview(canvas, dims, layers, {
         composite: true,
         // Show native scale bar cleanly in "preview" mode; in "box" mode CropOverlay renders its own adaptive scale bar
-        scaleBar: viewMode === "preview" ? scaleBar : false,
+        scaleBar: viewMode === "preview" ? scaleBar && file.calibrated !== false : false,
         visible,
         umPerPixel: umPerPx,
+        optics: file,
+        scaleUm,
       });
     }
-  }, [crop, imgH, imgW, layers, packed, scaleBar, umPerPx, viewMode, visible]);
+  }, [crop, file, imgH, imgW, layers, packed, scaleBar, scaleUm, umPerPx, viewMode, visible]);
 
   const effectiveW = viewMode === "preview" ? imgW : crop.w;
   const effectiveH = viewMode === "preview" ? imgH : crop.h;
-  const [newScaleUm] = umPerPx > 0 && effectiveW > 0 ? niceScaleUm(umPerPx, effectiveW) : [0, 0];
+  const [newScaleUm] = autoScaleUm(umPerPx, effectiveW, file, scaleUm) ?? [0, 0];
   const nuclei = nucleiResult?.nuclei ?? [];
   const isLandscape = viewMode === "cropped" ? crop.w >= crop.h : imgW >= imgH;
 
@@ -417,6 +424,8 @@ function StudioImageCard({
                 imageWidth={imgW}
                 imageHeight={imgH}
                 umPerPixel={umPerPx}
+                optics={file}
+                scaleUm={scaleUm}
                 crop={crop}
                 aspectRatio={aspectRatio}
                 scaleBar={scaleBar}
@@ -482,6 +491,7 @@ function StudioImageCard({
  * Scale Bar toggle, CropOverlay toggle, and individual channel visibility toggles.
  */
 function StudioStageInspector({
+  scaleUm,
   file,
   packed,
   adjustments,
@@ -504,6 +514,7 @@ function StudioStageInspector({
   onNextFile,
   onBackToGrid,
 }: {
+  scaleUm: number | null;
   file: FileSummary;
   packed: PackedPlane | undefined;
   adjustments: ChannelAdjustment[];
@@ -542,19 +553,23 @@ function StudioStageInspector({
     const dims = { width: imgW, height: imgH };
     if (viewMode === "cropped") {
       drawCroppedPreview(canvas, dims, layers, crop, {
-        scaleBar,
+        scaleBar: scaleBar && file.calibrated !== false,
         visible,
         umPerPixel: umPerPx,
+        optics: file,
+        scaleUm,
       });
     } else {
       drawPreview(canvas, dims, layers, {
         composite: viewMode === "box" ? true : composite,
-        scaleBar: viewMode === "box" ? false : scaleBar,
+        scaleBar: viewMode === "box" ? false : scaleBar && file.calibrated !== false,
         visible,
         umPerPixel: umPerPx,
+        optics: file,
+        scaleUm,
       });
     }
-  }, [composite, crop, imgH, imgW, layers, packed, scaleBar, umPerPx, viewMode, visible]);
+  }, [composite, crop, file, imgH, imgW, layers, packed, scaleBar, scaleUm, umPerPx, viewMode, visible]);
 
   return (
     <div className="flex h-full min-h-[460px] flex-1 flex-col">
@@ -613,6 +628,8 @@ function StudioStageInspector({
               imageWidth={imgW}
               imageHeight={imgH}
               umPerPixel={umPerPx}
+              optics={file}
+              scaleUm={scaleUm}
               crop={crop}
               aspectRatio={aspectRatio}
               scaleBar={scaleBar}
@@ -860,6 +877,20 @@ export function Studio() {
     }
     return ASPECT_PRESETS.find((p) => p.key === aspectPreset)?.ratio ?? null;
   }, [aspectPreset, customRatioH, customRatioW]);
+
+  // One scale bar length for the whole project when its images share a magnification, so the
+  // panels of a figure line up (computed on the shown width: full image or crop box).
+  const projectScaleUm = useMemo(
+    () =>
+      unifiedScaleUm(
+        projectFiles.map((f) => {
+          const { width: imgW, height: imgH } = resolveImgDimensions(f, planesByFile[f.id]);
+          const box = cropsByFile[f.id] ?? defaultCropBox(imgW, imgH, activeAspectRatio);
+          return { umPerPx: Number(f.voxel_um?.[0] || 0), width: viewMode === "preview" ? imgW : box.w, optics: f };
+        }),
+      ),
+    [activeAspectRatio, cropsByFile, planesByFile, projectFiles, viewMode],
+  );
 
   const activeRatioLabel = useMemo(() => {
     if (aspectPreset === "free") return "";
@@ -2066,6 +2097,7 @@ export function Studio() {
                 const adjs = getAdjustmentsForFile(selectedFile);
                 return (
                   <StudioStageInspector
+                    scaleUm={projectScaleUm}
                     file={selectedFile}
                     packed={packed}
                     adjustments={adjs}
@@ -2119,6 +2151,7 @@ export function Studio() {
                   return (
                     <StudioImageCard
                       key={file.id}
+                      scaleUm={projectScaleUm}
                       file={file}
                       packed={packed}
                       adjustments={getAdjustmentsForFile(file)}
@@ -2695,6 +2728,7 @@ export function Studio() {
       >
         {exportTargetFiles && exportTargetFiles.length > 0 && (
           <ExportPanel
+            scaleBarUm={projectScaleUm}
             fileIds={exportTargetFiles.map((f) => f.id)}
             visible={getAdjustmentsForFile(exportTargetFiles[0]).map((c) => c.visible)}
             cropsByFile={

@@ -24,6 +24,7 @@ from nd2utils.config import settings
 from nd2utils.models import LutSetting
 from nd2utils.ometiff import TILE, Slide, iter_tiles, open_slide, read_region
 from nd2utils.render import _font, apply_lut, nice_scale_um
+from nd2utils.scalebar import auto_scale_um
 from nd2utils.store import JobCancelled, get_file_detail, get_owned_job, job_cancelled, source_path, upsert_job
 
 
@@ -144,11 +145,13 @@ class Compositor:
         return (acc * 255.0 + 0.5).astype(np.uint8)
 
 
-def _scale_bar_patch(width: int, height: int, um_per_px: float | None) -> tuple[int, int, np.ndarray] | None:
+def _scale_bar_patch(
+    width: int, height: int, um_per_px: float | None, magnification: float | None = None
+) -> tuple[int, int, np.ndarray] | None:
     """The scale bar box for the bottom-right corner, as (x, y, RGBA patch). Same look as render.draw_scale_bar."""
     if not um_per_px or width < 64 or height < 48:
         return None
-    um, px = nice_scale_um(um_per_px, width)
+    um, px = auto_scale_um(um_per_px, width, magnification) or nice_scale_um(um_per_px, width)
     pad = 16
     patch_w = min(px + pad + 12, width)
     patch_h = 44
@@ -160,7 +163,7 @@ def _scale_bar_patch(width: int, height: int, um_per_px: float | None) -> tuple[
     y0 = y - 4
     draw.rectangle([x0 - 6, y0 - 18, x1 + 6, y + 4], fill=(8, 8, 10, 255))
     draw.rectangle([x0, y0, x1, y0 + 3], fill=(240, 244, 248, 255))
-    draw.text((x0, y0 - 16), f"{um:g} um", fill=(240, 244, 248, 255), font=_font(12))
+    draw.text((x0, y0 - 16), f"{um:g} µm", fill=(240, 244, 248, 255), font=_font(12))
     return width - patch_w, height - patch_h, np.asarray(img)
 
 
@@ -303,7 +306,7 @@ def write_composite(slide: Slide, p: ExportPlan, req: SlideExportRequest, meta: 
         raise SlideExportError("Nothing to export: all channels are hidden.", "empty")
     p = p.model_copy(update={"channels": shown})
     compose = Compositor(slide, shown, req.luts, colors)
-    patch = _scale_bar_patch(p.width, p.height, p.um_per_px) if req.scale_bar else None
+    patch = _scale_bar_patch(p.width, p.height, p.um_per_px, meta.get("magnification")) if req.scale_bar else None
     if req.format == "tiff":
         resolution = (1e4 / p.um_per_px, 1e4 / p.um_per_px) if p.um_per_px else None
         with tifffile.TiffWriter(dest, bigtiff=p.width * p.height * 3 > 2**31) as tif:

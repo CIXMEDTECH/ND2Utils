@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { niceScaleUm } from "../lib/plane";
+import { autoScaleUm, type Optics } from "../lib/scalebar";
 import { formatUm } from "../lib/format";
 import type { NucleusRoi } from "../lib/types";
 
@@ -111,8 +111,12 @@ export function CropOverlay({
   activeNucleusId,
   onSelectNucleus,
   compact = false,
+  optics,
+  scaleUm: forcedScaleUm,
   onChange,
 }: {
+  optics?: Optics;
+  scaleUm?: number | null;
   imageWidth: number;
   imageHeight: number;
   umPerPixel: number;
@@ -282,7 +286,7 @@ export function CropOverlay({
   const widthPct = (crop.w / imageWidth) * 100;
   const heightPct = (crop.h / imageHeight) * 100;
 
-  const [scaleUm, scalePx] = umPerPixel > 0 ? niceScaleUm(umPerPixel, crop.w) : [0, 0];
+  const [scaleUm, scalePx] = autoScaleUm(umPerPixel, crop.w, optics, forcedScaleUm) ?? [0, 0];
   const scaleBarPct = crop.w > 0 ? Math.min(90, Math.max(6, (scalePx / crop.w) * 100)) : 0;
 
   return (

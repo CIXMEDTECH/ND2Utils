@@ -4,6 +4,7 @@ import {
   ArrowClockwise,
   ArrowCounterClockwise,
   ArrowsLeftRight,
+  Binoculars,
   ClipboardText,
   ArrowElbowDownRight,
   FolderOpen,
@@ -38,6 +39,7 @@ import { FileTree, type TreeTarget } from "../components/FileTree";
 import { FolderView } from "../components/FolderView";
 import { MoveDialog } from "../components/MoveDialog";
 import { MoveToast } from "../components/MoveToast";
+import { OrganizeDialog } from "../components/OrganizeDialog";
 import { ConfirmDialog, Modal, NameDialog } from "../components/Modal";
 import { Glass } from "../components/Glass";
 import { Guide } from "../components/Guide";
@@ -67,7 +69,8 @@ import {
 import { forget as forgetPreviews, getDisplay, isPending, prefetch as prefetchPreviews } from "../lib/previewCache";
 import { axisSize, baseName, detailMessage, fileExtension, formatUm, isSlide, joinPath, parentPath } from "../lib/format";
 import { segmentNucleiFromPacked } from "../lib/nucleus";
-import { createPreviewLayers, drawPreview, niceScaleUm, unpackPlane } from "../lib/plane";
+import { createPreviewLayers, drawPreview, unpackPlane } from "../lib/plane";
+import { autoScaleUm } from "../lib/scalebar";
 import { readPref, writePref } from "../lib/storage";
 import { countFilesIn, orderedFiles } from "../lib/tree";
 import { currentSelection, performMove, selectionFor, type MoveSet } from "../lib/moves";
@@ -159,6 +162,7 @@ export function Workspace() {
   const [nameAction, setNameAction] = useState<NameAction | null>(null);
   const [deleteAction, setDeleteAction] = useState<DeleteAction | null>(null);
   const [moveDialog, setMoveDialog] = useState<MoveSet | null>(null);
+  const [organizeFolder, setOrganizeFolder] = useState<string | null>(null);
   const folderView = useApp((s) => s.folderView);
   const checkedFolders = useApp((s) => s.checkedFolders);
   const clipboard = useApp((s) => s.clipboard);
@@ -678,9 +682,10 @@ export function Workspace() {
     drawPreview(canvas, localPreview.dimensions, localPreview.layers, {
       composite: cropping ? true : composite,
       // When cropping is active, the CropOverlay renders its own adaptive scale bar inside the crop box
-      scaleBar: cropping ? false : scaleBar,
+      scaleBar: cropping ? false : scaleBar && selected.calibrated !== false,
       visible: channelVisible,
       umPerPixel: Number(selected.voxel_um?.[0] || 0),
+      optics: selected,
     });
   }, [channelVisible, composite, cropping, localPreview, scaleBar, selected]);
 
@@ -781,6 +786,7 @@ export function Workspace() {
               },
             ]
           : []),
+        { key: "organize", label: t(lang, "organizeByMag"), icon: <Binoculars size={15} />, disabled: count === 0, onSelect: () => setOrganizeFolder(path) },
         { key: "export", label: t(lang, "exportEllipsis"), icon: <ExportIcon size={15} />, separated: true, disabled: count === 0, onSelect: () => exportFolder(path) },
         { key: "upload", label: t(lang, "uploadFilesHere"), icon: <UploadSimple size={15} />, separated: true, onSelect: () => uploadInto(path, false) },
         { key: "upload-dir", label: t(lang, "uploadFolderHere"), icon: <FolderSimplePlus size={15} />, onSelect: () => uploadInto(path, true) },
@@ -950,7 +956,7 @@ export function Workspace() {
   }
 
   const umPerPx = Number(selected?.voxel_um?.[0] || slide?.um_per_px || 0);
-  const newScaleBarUm = umPerPx > 0 && cropBox.w > 0 ? niceScaleUm(umPerPx, cropBox.w)[0] : 0;
+  const newScaleBarUm = autoScaleUm(umPerPx, cropBox.w, selected ?? undefined)?.[0] ?? 0;
 
   // Shared Crop Control Bar rendered when cropping is active
   const cropToolbar = cropping && selected && (
@@ -1364,6 +1370,7 @@ export function Workspace() {
                     imageWidth={imageDimensions.width}
                     imageHeight={imageDimensions.height}
                     umPerPixel={umPerPx}
+                    optics={selected ?? undefined}
                     crop={cropBox}
                     aspectRatio={activeAspectRatio}
                     scaleBar={scaleBar}
@@ -1553,9 +1560,20 @@ export function Workspace() {
                       <dd>
                         {selected.objective ?? "–"}
                         {selected.na ? ` · NA ${selected.na}` : ""}
+                        {selected.zoom && Math.abs(selected.zoom - 1) > 0.05 ? ` · zoom ${Number(selected.zoom.toFixed(2))}×` : ""}
                       </dd>
                       <dt className="text-[var(--text-dim)]">{t(lang, "voxel")}</dt>
-                      <dd className="font-mono tabular-nums">{formatUm(selected.voxel_um?.[0])}/px</dd>
+                      <dd className="font-mono tabular-nums">
+                        {selected.calibrated === false ? t(lang, "uncalibrated") : `${formatUm(selected.voxel_um?.[0])}/px`}
+                      </dd>
+                      <dt className="text-[var(--text-dim)]">{t(lang, "scaleBar")}</dt>
+                      <dd className="font-mono tabular-nums">
+                        {(() => {
+                          const bar = selected.calibrated === false ? null : autoScaleUm(Number(selected.voxel_um?.[0] || 0), Number(selected.width || 0), selected);
+                          if (!bar) return "–";
+                          return `${bar[0]} µm ${t(lang, selected.magnification ? "scaleBarAutoMag" : "scaleBarAutoWidth")}`;
+                        })()}
+                      </dd>
                       <dt className="text-[var(--text-dim)]">{t(lang, "instrument")}</dt>
                       <dd>{selected.instrument ?? "–"}</dd>
                       <dt className="text-[var(--text-dim)]">{t(lang, "software")}</dt>
@@ -1800,6 +1818,7 @@ export function Workspace() {
         onClose={() => setDeleteAction(null)}
       />
       {moveDialog && <MoveDialog items={moveDialog} onClose={() => setMoveDialog(null)} />}
+      <OrganizeDialog folder={organizeFolder} onClose={() => setOrganizeFolder(null)} />
       <MoveToast />
     </Shell>
   );

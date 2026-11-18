@@ -371,6 +371,14 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
             names = [c.get("name") or f"C{i}" for i, c in enumerate(channels)]
             colors = [c.get("color") or [255, 255, 255] for c in channels]
             voxel = meta.get("voxel_um") or [1, 1, 1]
+            # No pixel size in the file: a bar would be made up.
+            calibrated = meta.get("calibrated") is not False
+            bar_ok = bool(req.scale_bar and voxel and voxel[0] and calibrated)
+            bar_opts = {
+                "magnification": meta.get("magnification"),
+                "zoom": meta.get("zoom"),
+                "length_um": req.scale_bar_um,
+            }
             bits_sig = _significant_bits(meta, handle)
             if bits_sig and not meta.get("bits_significant"):
                 meta = {**meta, "bits_significant": bits_sig}
@@ -423,23 +431,23 @@ def run_export(job_id: str, req: ExportRequest, owner_id: str) -> None:
                 # so ordinary viewers never only get the (dark looking) raw 12/16-bit files.
                 if want_composite and shown:
                     rgb = composite_rgb(planes, luts, colors, req.visible)
-                    if req.scale_bar and voxel and voxel[0]:
-                        rgb = draw_scale_bar(rgb, float(voxel[0]))
+                    if bar_ok:
+                        rgb = draw_scale_bar(rgb, float(voxel[0]), **bar_opts)
                     dest = target(_export_filename(stem, tag=tag, role=composite_role, ext=ext))
                     _save_display(dest, rgb, display_fmt, req.jpeg_quality, voxel)
                 if want_split:
                     for i in shown:
                         fallback = colors[i] if i < len(colors) else [255, 255, 255]
                         ch_rgb = _channel_rgb(planes[i], luts[i], fallback)
-                        if req.scale_bar and voxel and voxel[0]:
-                            ch_rgb = draw_scale_bar(ch_rgb, float(voxel[0]))
+                        if bar_ok:
+                            ch_rgb = draw_scale_bar(ch_rgb, float(voxel[0]), **bar_opts)
                         dest = target(_export_filename(stem, tag=tag, role=ch_names[i], ext=ext))
                         _save_display(dest, ch_rgb, display_fmt, req.jpeg_quality, voxel)
 
                 # Standalone scale bar images (one set per unique scale bar specification)
-                if req.separate_scale_bar and planes and voxel and float(voxel[0] or 0) > 0:
+                if req.separate_scale_bar and planes and voxel and float(voxel[0] or 0) > 0 and calibrated:
                     img_h, img_w = int(planes[0].shape[-2]), int(planes[0].shape[-1])
-                    um_val, px_val, bar_pngs = render_standalone_scale_bars(img_w, img_h, float(voxel[0]))
+                    um_val, px_val, bar_pngs = render_standalone_scale_bars(img_w, img_h, float(voxel[0]), **bar_opts)
                     scale_dir = folder if req.flat_structure else (folder / "scale_bars")
                     spec_key = (scale_dir, img_w, img_h, round(um_val, 4), px_val)
                     if spec_key not in seen_scale_specs:

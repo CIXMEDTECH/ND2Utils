@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { FolderSimplePlus, UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
 import { t } from "../i18n";
-import { fromDataTransfer, fromFileList, type PendingUpload, useUploads } from "../lib/uploads";
+import { fromDataTransfer, fromFileList, type PendingUpload, setSortAfterUpload, sortAfterUpload, useUploads } from "../lib/uploads";
 import { useApp } from "../store";
 import { folderInputId } from "./DropZone";
 import { UPLOAD_ACCEPT } from "../lib/format";
@@ -21,6 +21,7 @@ export function UploadBar({ inputId }: { inputId: string }) {
   const clearError = useUploads((s) => s.clearError);
   const upload = useUploads((s) => s.upload);
   const [over, setOver] = useState(false);
+  const [sortAfter, setSortAfter] = useState(sortAfterUpload);
 
   async function handle(items: PendingUpload[] | Promise<PendingUpload[]>) {
     if (progress) return;
@@ -88,7 +89,18 @@ export function UploadBar({ inputId }: { inputId: string }) {
           <FolderSimplePlus size={14} /> {t(lang, "chooseFolder")}
         </button>
       </div>
-      <p className="mt-1.5 truncate px-0.5 text-2xs text-[var(--text-dim)]" title={`/${currentFolder}`}>
+      <label className="mt-1.5 flex items-center gap-1.5 px-0.5 text-xs text-[var(--text-dim)]">
+        <input
+          type="checkbox"
+          checked={sortAfter}
+          onChange={(event) => {
+            setSortAfter(event.target.checked);
+            setSortAfterUpload(event.target.checked);
+          }}
+        />
+        {t(lang, "organizeAfterUpload")}
+      </label>
+      <p className="mt-1 truncate px-0.5 text-2xs text-[var(--text-dim)]" title={`/${currentFolder}`}>
         {over ? t(lang, "dropActive") : `${t(lang, "dropShort")} · ${t(lang, "uploadTarget")} /${currentFolder}`}
       </p>
       {progress && (

@@ -1,3 +1,4 @@
+import { autoScaleUm, type Optics } from "./scalebar";
 import type { LutSetting, PackedPlane } from "./types";
 
 export interface PreviewLayer {
@@ -221,22 +222,38 @@ export function niceScaleUm(umPerPixel: number, width: number): [number, number]
   return [um, width > 24 ? Math.min(px, Math.max(8, width - 24)) : px];
 }
 
-function drawScaleBar(context: CanvasRenderingContext2D, width: number, height: number, umPerPixel: number): void {
-  if (!(umPerPixel > 0)) return;
-  const [um, pixels] = niceScaleUm(umPerPixel, width);
-  const padding = Math.max(8, Math.min(16, Math.round(Math.min(width, height) * 0.04)));
+function drawScaleBar(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  umPerPixel: number,
+  optics?: Optics,
+  lengthUm?: number | null,
+): void {
+  const fit = autoScaleUm(umPerPixel, width, optics, lengthUm);
+  if (!fit) return;
+  const [um, pixels] = fit;
+  // Grows with the image, like the exported bar (render.draw_scale_bar).
+  const font = Math.max(12, Math.round(width / 48));
+  const barH = Math.max(3, Math.round(width / 320));
+  const padding = Math.max(8, Math.min(Math.round(width / 64), Math.round(Math.min(width, height) * 0.06)));
   const x1 = width - padding;
   const x0 = x1 - pixels;
-  const y = height - padding;
-  const barY = y - 4;
+  const y1 = height - padding;
+  const barY = y1 - barH;
   context.save();
+  context.font = `${font}px "JetBrains Mono Variable", "Noto Sans SC Variable", ui-monospace, monospace`;
+  context.textBaseline = "bottom";
+  const label = `${Number(um.toPrecision(6))} µm`;
+  const textW = context.measureText(label).width;
+  const margin = Math.max(6, Math.round(font / 2));
+  const boxX0 = Math.min(x0, x1 - textW) - margin;
+  const textBottom = barY - Math.max(3, Math.round(font / 4));
   context.fillStyle = "rgb(8 10 14 / 0.88)";
-  context.fillRect(x0 - 6, barY - 18, pixels + 12, 25);
+  context.fillRect(boxX0, textBottom - font - margin / 2, x1 + margin - boxX0, y1 + margin / 2 - (textBottom - font - margin / 2));
   context.fillStyle = "rgb(240 244 248)";
-  context.fillRect(x0, barY, pixels, 3);
-  context.font = '12px "JetBrains Mono Variable", "Noto Sans SC Variable", ui-monospace, monospace';
-  context.textBaseline = "top";
-  context.fillText(`${Number(um.toPrecision(6))} µm`, x0, barY - 16);
+  context.fillRect(x0, barY, pixels, barH);
+  context.fillText(label, x0, textBottom);
   context.restore();
 }
 
@@ -249,6 +266,9 @@ export function drawPreview(
     scaleBar: boolean;
     visible: boolean[];
     umPerPixel: number;
+    optics?: Optics;
+    /** Force this bar length (one length for a whole Studio project). */
+    scaleUm?: number | null;
   },
 ): void {
   const active = layers
@@ -286,7 +306,7 @@ export function drawPreview(
   }
   if (options.scaleBar) {
     const scaledUmPerPixel = options.umPerPixel * (source.width / previewWidth);
-    drawScaleBar(context, width, height, scaledUmPerPixel);
+    drawScaleBar(context, width, height, scaledUmPerPixel, options.optics, options.scaleUm);
   }
 }
 
@@ -299,6 +319,8 @@ export function drawCroppedPreview(
     scaleBar: boolean;
     visible: boolean[];
     umPerPixel: number;
+    optics?: Optics;
+    scaleUm?: number | null;
   },
 ): void {
   const active = layers
@@ -331,7 +353,7 @@ export function drawCroppedPreview(
 
   if (options.scaleBar && options.umPerPixel > 0) {
     const croppedUmPerPx = options.umPerPixel * (crop.w / sw);
-    drawScaleBar(context, sw, sh, croppedUmPerPx);
+    drawScaleBar(context, sw, sh, croppedUmPerPx, options.optics, options.scaleUm);
   }
 }
 

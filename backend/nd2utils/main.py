@@ -136,6 +136,8 @@ async def lifespan(_app: FastAPI):
     fail_interrupted_jobs()
     # Files imported before background preparation existed (or interrupted by a restart).
     prepare.schedule_missing()
+    # Optics fields added in 1.1 (zoom, calibrated): read them for older files in the background.
+    asyncio.get_running_loop().run_in_executor(None, prepare.backfill_optics)
     task = asyncio.create_task(_purge_loop())
     yield
     task.cancel()
@@ -688,7 +690,7 @@ def api_admin_transfer(body: TransferBody, _admin: AdminUser) -> dict[str, Any]:
 _SUMMARY_KEYS = (
     "id", "name", "folder", "format", "levels", "size_bytes", "status", "error", "version", "dtype",
     "shape", "axes", "width", "height", "channels", "voxel_um",
-    "objective", "magnification", "na", "acquired", "instrument",
+    "objective", "magnification", "zoom", "calibrated", "na", "acquired", "instrument",
     "software", "bits_significant", "is_rgb", "created_at", "prepare", "prepared_at",
     "cropped", "crop", "edited", "edits", "orig_width", "orig_height",
 )
@@ -780,6 +782,79 @@ def api_move_items(body: MoveBody, owner_id: Owner) -> dict[str, Any]:
         raise _bad_path(exc) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "File or folder not found."}) from exc
+
+
+class OrganizeBody(BaseModel):
+    folder: str = ""
+    recursive: bool = True
+    apply: bool = False
+    unknown_label: str = "未知倍镜"
+    # Only these files, or only files imported since this time (seconds); None = all.
+    file_ids: list[str] | None = None
+    since: float | None = None
+
+
+def magnification_label(rec: dict[str, Any], unknown: str) -> str:
+    """Folder name for a file's optics: "100x", or "100x zoom3" for a zoomed confocal scan."""
+    mag = rec.get("magnification")
+    if not mag:
+        return unknown
+    label = f"{float(mag):g}x"
+    zoom = rec.get("zoom")
+    if zoom and abs(float(zoom) - 1.0) > 0.05:
+        label += f" zoom{round(float(zoom), 2):g}"
+    return label
+
+
+@app.post("/api/organize/magnification")
+def api_organize_by_magnification(body: OrganizeBody, owner_id: Owner) -> dict[str, Any]:
+    """Sort the files of a folder into one subfolder per objective (and confocal zoom).
+
+    Each file goes into a subfolder of the folder it is in now. `apply=false` returns only the
+    plan (for the preview dialog); files already in a folder of their label are left alone."""
+    root = _folder_arg(body.folder)
+    if root and root not in list_folders(owner_id):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Folder not found."})
+    unknown = (body.unknown_label or "unknown").strip()[:60] or "unknown"
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    only = set(body.file_ids) if body.file_ids is not None else None
+    for rec in list_files(owner_id):
+        if only is not None and rec["id"] not in only:
+            continue
+        if body.since is not None and float(rec.get("created_at") or 0) < body.since:
+            continue
+        folder = rec.get("folder") or ""
+        if body.recursive:
+            if root and folder != root and not folder.startswith(root + "/"):
+                continue
+        elif folder != root:
+            continue
+        label = magnification_label(rec, unknown)
+        if folder.rsplit("/", 1)[-1] == label:
+            continue  # already sorted
+        groups.setdefault((folder, label), []).append(rec)
+    plan = [
+        {
+            "source": folder,
+            "label": label,
+            "target": "/".join(p for p in (folder, label) if p),
+            "count": len(recs),
+            "file_ids": [r["id"] for r in recs],
+            "names": [r.get("name") for r in recs[:6]],
+        }
+        for (folder, label), recs in sorted(groups.items())
+    ]
+    result: dict[str, Any] = {"groups": plan, "files": sum(g["count"] for g in plan)}
+    if body.apply and plan:
+        undo = {"files": [], "folders_removed": [], "folders_added": []}
+        moved = 0
+        for group in plan:
+            out = move_items(owner_id, file_ids=group["file_ids"], folders=[], target_folder=group["target"], conflict="rename")
+            moved += out["moved"]
+            undo["files"].extend(out["undo"]["files"])
+            undo["folders_added"].append(group["target"])
+        result.update({"moved": moved, "undo": undo})
+    return result
 
 
 class UndoMoveBody(BaseModel):
@@ -1607,9 +1682,11 @@ def api_preview(
         planes,
         rec.get("channels") or [],
         composite=composite,
-        scale_bar=scale_bar,
+        scale_bar=scale_bar and rec.get("calibrated") is not False,
         visible=vis,
         voxel_um=rec.get("voxel_um"),
+        magnification=rec.get("magnification"),
+        zoom=rec.get("zoom"),
     )
     fmt = "png" if format == "png" else "jpeg"
     payload = encode_image(rgb, fmt, quality)
@@ -1719,8 +1796,10 @@ def api_projection(
         planes,
         rec.get("channels") or [],
         composite=True,
-        scale_bar=scale_bar,
+        scale_bar=scale_bar and rec.get("calibrated") is not False,
         voxel_um=rec.get("voxel_um"),
+        magnification=rec.get("magnification"),
+        zoom=rec.get("zoom"),
     )
     return Response(content=encode_image(rgb, "jpeg", 88), media_type="image/jpeg")
 

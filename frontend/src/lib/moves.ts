@@ -82,7 +82,7 @@ export const useMoveToast = create<{ toast: MoveToast | null; dismiss: () => voi
 }));
 
 let seq = 0;
-function showToast(text: string, undo: MoveUndo | null, error = false) {
+export function showToast(text: string, undo: MoveUndo | null, error = false) {
   seq += 1;
   useMoveToast.setState({ toast: { text, undo, error, seq } });
 }

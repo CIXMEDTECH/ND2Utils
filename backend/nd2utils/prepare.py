@@ -465,6 +465,49 @@ def schedule_missing() -> int:
     return count
 
 
+def _optics_of(file_id: str, rec: dict[str, Any]) -> dict[str, Any]:
+    """zoom / calibrated for a record imported before v1.1 recorded them (metadata only)."""
+    voxel = rec.get("voxel_um") or [1.0]
+    out: dict[str, Any] = {"zoom": rec.get("zoom"), "calibrated": bool(voxel and float(voxel[0] or 1.0) != 1.0)}
+    source = settings.uploads_dir / file_id / "source.nd2"
+    fmt = rec.get("format") or "nd2"
+    try:
+        if fmt == "nd2" and not rec.get("cropped"):
+            import nd2
+
+            with nd2.ND2File(source) as nd:
+                ch = (nd.metadata.channels or [None])[0] if nd.metadata else None
+                micro = getattr(ch, "microscope", None)
+                zoom = getattr(micro, "zoomMagnification", None)
+                out["zoom"] = float(zoom) if zoom else None
+                volume = getattr(ch, "volume", None)
+                if volume is not None and getattr(volume, "axesCalibrated", None):
+                    out["calibrated"] = bool(volume.axesCalibrated[0])
+        elif fmt == "lif":
+            detail = json.loads((settings.uploads_dir / file_id / "detail.json").read_text(encoding="utf-8"))
+            raw = (detail.get("text_info") or {}).get("Zoom")
+            out["zoom"] = float(raw) if raw else None
+    except Exception:
+        log.debug("Could not read optics of %s", file_id, exc_info=True)
+    return out
+
+
+def backfill_optics() -> int:
+    """Fill in zoom / calibrated for files imported by older versions (startup, background)."""
+    from nd2utils import store
+
+    todo = [(fid, rec) for fid, rec in store.index_items() if "calibrated" not in rec]
+    changes: dict[str, dict[str, Any]] = {}
+    for file_id, rec in todo:
+        changes[file_id] = _optics_of(file_id, rec)
+        if len(changes) >= 200:
+            store.patch_files(changes)
+            changes = {}
+    if changes:
+        store.patch_files(changes)
+    return len(todo)
+
+
 def wait_idle(timeout: float = 60) -> None:
     with _GUARD:
         pending = list(_QUEUED.values())

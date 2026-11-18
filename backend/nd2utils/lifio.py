@@ -238,6 +238,12 @@ def _voxel_um(image: liffile.LifImage) -> list[float]:
     return out
 
 
+def _calibrated(image: liffile.LifImage) -> bool:
+    dims = {d.label: d for d in image._dimensions}  # noqa: SLF001
+    dim = dims.get("X")
+    return bool(dim is not None and dim.number_elements > 1 and dim.length)
+
+
 def _text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
@@ -342,6 +348,7 @@ def _describe(image: liffile.LifImage) -> dict[str, Any]:
     objective = _text(attr.get("ObjectiveName") or "") or None
     mag = _float(attr.get("Magnification"))
     na = _float(attr.get("NumericalAperture"))
+    zoom = _float(attr.get("Zoom"))
     software = _text(hardware.get("Software")) if hardware is not None and hardware.get("Software") else None
     system = hardware.get("SystemTypeName") if hardware is not None else None
     instrument = f"Leica {_text(system)}" if system else "Leica"
@@ -379,6 +386,8 @@ def _describe(image: liffile.LifImage) -> dict[str, Any]:
         "voxel_um": voxel,
         "objective": objective,
         "magnification": mag,
+        "zoom": zoom,
+        "calibrated": _calibrated(image),
         "na": na,
         "acquired": acquired,
         "instrument": instrument,

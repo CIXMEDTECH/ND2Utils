@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { t } from "../i18n";
 import { useApp } from "../store";
-import { uploadFile } from "./api";
+import { organizeByMagnification, uploadFile } from "./api";
+import { readPref, writePref } from "./storage";
 import { detailMessage, isSupportedName, joinPath } from "./format";
 
 /** A file to upload plus its folder relative to the drop target ("" = directly into the target). */
@@ -71,6 +72,17 @@ export function fromDataTransfer(dt: DataTransfer): Promise<PendingUpload[]> {
   })();
 }
 
+const SORT_KEY = "nd2utils.sortAfterUpload";
+
+/** "Sort by magnification after import" (remembered per browser). */
+export function sortAfterUpload(): boolean {
+  return readPref(SORT_KEY) === "1";
+}
+
+export function setSortAfterUpload(value: boolean) {
+  writePref(SORT_KEY, value ? "1" : "0");
+}
+
 export const useUploads = create<UploadState>((set, get) => ({
   progress: null,
   error: null,
@@ -84,6 +96,7 @@ export const useUploads = create<UploadState>((set, get) => ({
       return null;
     }
     set({ error: null });
+    const startedAt = Date.now() / 1000 - 2;
     let lastId: string | null = null;
     let firstError: string | null = null;
     for (let i = 0; i < files.length; i += 1) {
@@ -113,6 +126,11 @@ export const useUploads = create<UploadState>((set, get) => ({
     try {
       set({ progress: { label: t(lang, "indexing"), ratio: null } });
       const app = useApp.getState();
+      if (lastId && sortAfterUpload()) {
+        await organizeByMagnification({ folder: target, recursive: true, apply: true, since: startedAt, unknown_label: t(lang, "unknownMag") }).catch(
+          () => undefined,
+        );
+      }
       await app.refreshFiles();
       if (lastId) {
         app.select(lastId);

@@ -668,6 +668,7 @@ def identify_path(path: Path, file_id: str, name: str, size_bytes: int, created_
         um_y = ome.get("um_y") or um_x
         if not um_x:
             um_x = um_y = _tiff_resolution_um(slide)
+        calibrated = bool(um_x)
         voxel = [float(um_x or 1.0), float(um_y or um_x or 1.0), float(ome.get("um_z") or 1.0)]
         sizes = {"T": slide.axis_len("T"), "Z": slide.axis_len("Z"), "C": slide.n_channels, "Y": slide.height, "X": slide.width}
         axes = [{"name": key, "size": int(value)} for key, value in sizes.items()]
@@ -716,6 +717,8 @@ def identify_path(path: Path, file_id: str, name: str, size_bytes: int, created_
             "voxel_um": voxel,
             "objective": ome.get("objective"),
             "magnification": ome.get("magnification"),
+            "zoom": None,
+            "calibrated": calibrated,
             "na": ome.get("na"),
             "acquired": ome.get("acquired"),
             "instrument": ome.get("instrument"),
@@ -753,6 +756,14 @@ def _tiff_resolution_um(slide: Slide) -> float | None:
         per_unit = num / den if den else 0
         if per_unit <= 0:
             return None
+        # ImageJ keeps its calibration as pixels per `unit=` from the description.
+        desc = page.description or ""
+        if desc.startswith("ImageJ="):
+            match = re.search(r"^unit=(\S+)", desc, re.MULTILINE)
+            scale = {"micron": 1.0, "um": 1.0, "\u00b5m": 1.0, "µm": 1.0, "nm": 1e-3, "mm": 1e3, "cm": 1e4}.get(
+                (match.group(1) if match else "").strip().lower()
+            )
+            return scale / per_unit if scale else None
         if unit == 3:  # centimeter
             return 1e4 / per_unit
         if unit == 2 and per_unit not in (72, 96, 150, 300, 600):  # inch, not a plain dpi

@@ -305,6 +305,7 @@ export async function startSlideExport(
     t: number;
     z: number;
     scale_bar: boolean;
+    scale_bar_um?: number;
     jpeg_quality?: number;
   },
 ): Promise<{ id: string; width: number; height: number }> {
@@ -357,6 +358,26 @@ export async function moveItems(body: {
   conflict?: MoveConflict;
 }): Promise<MoveResult> {
   return json<MoveResult>(await send("/api/items/move", "POST", body));
+}
+
+export interface OrganizeGroup {
+  source: string;
+  label: string;
+  target: string;
+  count: number;
+  file_ids: string[];
+  names: string[];
+}
+
+export async function organizeByMagnification(body: {
+  folder: string;
+  recursive?: boolean;
+  apply?: boolean;
+  unknown_label?: string;
+  file_ids?: string[];
+  since?: number;
+}): Promise<{ groups: OrganizeGroup[]; files: number; moved?: number; undo?: MoveUndo }> {
+  return json(await send("/api/organize/magnification", "POST", body));
 }
 
 export async function undoMove(undo: MoveUndo): Promise<{ restored: number; skipped: number }> {

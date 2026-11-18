@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
 
 from nd2utils.models import LutSetting, NucleusParams
+from nd2utils.scalebar import auto_scale_um
 
 
 def _as_float(plane: np.ndarray) -> np.ndarray:
@@ -155,6 +156,8 @@ def preview_rgb(
     visible: list[bool] | None = None,
     voxel_um: list[float] | None = None,
     overrides: dict[str, LutSetting] | None = None,
+    magnification: float | None = None,
+    zoom: float | None = None,
 ) -> np.ndarray:
     luts = build_luts(planes, channels, overrides, visible)
     colors = [c.get("color") or [255, 255, 255] for c in channels]
@@ -165,7 +168,7 @@ def preview_rgb(
         rgb = split_mosaic(planes, luts, colors, names, visible)
     um = float((voxel_um or [0])[0] or 0)
     if scale_bar and um:
-        rgb = draw_scale_bar(rgb, um)
+        rgb = draw_scale_bar(rgb, um, magnification=magnification, zoom=zoom)
     return rgb
 
 
@@ -208,22 +211,39 @@ def _font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def draw_scale_bar(rgb: np.ndarray, um_per_px: float) -> np.ndarray:
-    if um_per_px <= 0:
+def draw_scale_bar(
+    rgb: np.ndarray,
+    um_per_px: float,
+    *,
+    magnification: float | None = None,
+    zoom: float | None = None,
+    length_um: float | None = None,
+) -> np.ndarray:
+    """Bottom-right scale bar. Its length follows the magnification (see scalebar.py); the
+    label and bar grow with the image so they stay legible on large exports."""
+    fit = auto_scale_um(um_per_px, rgb.shape[1], magnification, zoom, length_um)
+    if fit is None:
         return rgb
+    um, px = fit
     img = Image.fromarray(rgb, mode="RGB")
     draw = ImageDraw.Draw(img)
-    um, px = nice_scale_um(um_per_px, img.width)
-    pad = 16
-    y = img.height - pad
-    x1 = img.width - pad
-    x0 = x1 - px
-    y0 = y - 4
-    draw.rectangle([x0 - 6, y0 - 18, x1 + 6, y + 4], fill=(8, 8, 10))
-    draw.rectangle([x0, y0, x1, y0 + 3], fill=(240, 244, 248))
+    w = img.width
+    font_size = max(12, round(w / 48))
+    bar_h = max(3, round(w / 320))
+    pad = max(16, round(w / 64))
+    font = _font(font_size)
     label = f"{um:g} µm"
-    font = _font(12)
-    draw.text((x0, y0 - 16), label, fill=(240, 244, 248), font=font)
+    bbox = draw.textbbox((0, 0), label, font=font)
+    text_h = bbox[3] - bbox[1]
+    y1 = img.height - pad
+    x1 = w - pad
+    x0 = x1 - px
+    bar_y0 = y1 - bar_h
+    text_y = bar_y0 - text_h - max(4, font_size // 3) - bbox[1]
+    margin = max(6, font_size // 2)
+    draw.rectangle([min(x0, x1 - (bbox[2] - bbox[0])) - margin, text_y + bbox[1] - margin // 2, x1 + margin, y1 + margin // 2], fill=(8, 8, 10))
+    draw.rectangle([x0, bar_y0, x1, y1], fill=(240, 244, 248))
+    draw.text((x0, text_y), label, fill=(240, 244, 248), font=font)
     return np.asarray(img)
 
 
@@ -237,11 +257,15 @@ def render_standalone_scale_bars(
     width: int,
     height: int,
     um_per_px: float,
+    *,
+    magnification: float | None = None,
+    zoom: float | None = None,
+    length_um: float | None = None,
 ) -> tuple[float, int, dict[str, bytes]]:
     """Render standalone transparent PNG scale bar images for each scale bar style."""
     w = max(32, int(width))
     h = max(32, int(height))
-    um, px = nice_scale_um(um_per_px, w)
+    um, px = auto_scale_um(um_per_px, w, magnification, zoom, length_um) or nice_scale_um(um_per_px, w)
     pad = min(16, max(4, min(w, h) // 8))
     y = h - pad
     x1 = w - pad

@@ -17,6 +17,7 @@ export function ExportPanel({
   visible,
   cropsByFile,
   channelEditsByFile,
+  scaleBarUm,
 }: {
   fileIds: string[];
   /** Workspace folders to export recursively (resolved on the server). */
@@ -28,6 +29,8 @@ export function ExportPanel({
   visible?: boolean[];
   cropsByFile?: Record<string, { x: number; y: number; w: number; h: number; ratio_label?: string }>;
   channelEditsByFile?: Record<string, ChannelEdit[]>;
+  /** One scale bar length for every exported image (Studio projects of one magnification). */
+  scaleBarUm?: number | null;
 }) {
   const lang = useApp((s) => s.lang);
   const nav = useNavigate();
@@ -59,6 +62,7 @@ export function ExportPanel({
         channels_mode: channelsMode,
         // OME-TIFF packages also contain viewable 8-bit companions; they get the scale bar too.
         scale_bar: scaleBar,
+        scale_bar_um: scaleBarUm ?? undefined,
         separate_scale_bar: separateScaleBar,
         flat_structure: flatStructure,
         include_metadata: includeMetadata,

@@ -386,6 +386,8 @@ def _identify_handle(
     objective = None
     mag = None
     na = None
+    zoom = None
+    calibrated = None
     software = None
     instrument = None
     custom: dict[str, Any] = {}
@@ -435,6 +437,10 @@ def _identify_handle(
                 objective = objective or getattr(micro, "objectiveName", None)
                 mag = mag if mag is not None else getattr(micro, "objectiveMagnification", None)
                 na = na if na is not None else getattr(micro, "objectiveNumericalAperture", None)
+                zoom = zoom if zoom is not None else getattr(micro, "zoomMagnification", None)
+            volume = getattr(ch, "volume", None) if ch is not None else None
+            if calibrated is None and volume is not None and getattr(volume, "axesCalibrated", None):
+                calibrated = bool(volume.axesCalibrated[0])
             vmin, vmax, gamma = lut_guess[i] if i < len(lut_guess) else (None, None, 1.0)
             channels.append(
                 {
@@ -471,7 +477,9 @@ def _identify_handle(
         vs = nd.voxel_size()
         voxel = [float(vs.x), float(vs.y), float(vs.z)]
     except Exception:
-        pass
+        calibrated = False
+    if calibrated is None:
+        calibrated = voxel[0] != 1.0
 
     bits_sig = getattr(nd.attributes, "bitsPerComponentSignificant", None)
     dtype = str(nd.dtype)
@@ -548,6 +556,8 @@ def _identify_handle(
         "voxel_um": voxel,
         "objective": objective,
         "magnification": float(mag) if mag is not None else None,
+        "zoom": float(zoom) if zoom else None,
+        "calibrated": bool(calibrated),
         "na": float(na) if na is not None else None,
         "acquired": acquired,
         "instrument": instrument,

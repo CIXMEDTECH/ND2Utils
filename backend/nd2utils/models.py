@@ -68,6 +68,8 @@ class IdentifySummary(BaseModel):
     voxel_um: list[float] = []
     objective: str | None = None
     magnification: float | None = None
+    zoom: float | None = None
+    calibrated: bool | None = None
     na: float | None = None
     acquired: str | None = None
     instrument: str | None = None
@@ -181,6 +183,8 @@ class ExportRequest(BaseModel):
     channels_mode: Literal["composite", "split", "both"] = "composite"
     burn_lut: bool = False
     scale_bar: bool = True
+    # Force one bar length (µm) for every image of the export (a figure); None = per image.
+    scale_bar_um: float | None = None
     separate_scale_bar: bool = False
     flat_structure: bool = False
     include_metadata: bool = True
