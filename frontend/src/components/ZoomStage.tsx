@@ -26,6 +26,7 @@ export function ZoomStage({
   mediaReady = false,
   mediaLoading,
   toolbarExtra,
+  onTap,
 }: {
   src: string | null;
   alt: string;
@@ -35,6 +36,9 @@ export function ZoomStage({
   mediaReady?: boolean;
   mediaLoading?: boolean;
   toolbarExtra?: React.ReactNode;
+  /** A press without movement (not a pan): the element pressed and the release event. Lets
+   * overlays react to clicks while panning still works everywhere. */
+  onTap?: (target: Element, event: React.PointerEvent) => void;
 }) {
   const lang = useApp((s) => s.lang);
   const [zoom, setZoom] = useState(1);
@@ -45,7 +49,7 @@ export function ZoomStage({
 
   const stageRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const drag = useRef<{ x: number; y: number; px: number; py: number; target: Element | null } | null>(null);
   const currentRef = useRef({ zoom: 1, x: 0, y: 0 });
   const targetRef = useRef({ zoom: 1, x: 0, y: 0 });
   const rafRef = useRef<number>(0);
@@ -192,9 +196,11 @@ export function ZoomStage({
     return () => cancelAnimationFrame(id);
   }, [previewReady, loadedSrc, fit]);
 
-  function endDrag() {
+  function endDrag(event?: React.PointerEvent) {
+    const start = drag.current;
     drag.current = null;
     setDragging(false);
+    if (event && start?.target && onTap && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) onTap(start.target, event);
   }
 
   useEffect(() => {
@@ -300,6 +306,7 @@ export function ZoomStage({
             y: event.clientY,
             px: currentRef.current.x,
             py: currentRef.current.y,
+            target: event.target instanceof Element ? event.target : null,
           };
           setDragging(true);
         }}
@@ -313,8 +320,8 @@ export function ZoomStage({
           targetRef.current.y = nextY;
           setPan({ x: nextX, y: nextY });
         }}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        onPointerUp={(event) => endDrag(event)}
+        onPointerCancel={() => endDrag()}
       >
         {mediaReady && media ? (
           <div

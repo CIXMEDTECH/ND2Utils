@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import time
@@ -87,6 +88,7 @@ from nd2utils.store import (
     migrate_index,
     normalize_filename,
     normalize_folder,
+    prune_empty_folders,
     purge_expired,
     remove_file_data,
     rename_folder,
@@ -796,6 +798,28 @@ class OrganizeBody(BaseModel):
     # Only these files, or only files imported since this time (seconds); None = all.
     file_ids: list[str] | None = None
     since: float | None = None
+    # Sort again from scratch: files already in magnification folders are taken out of them
+    # and placed by their current label (subfolders included; other folders are kept).
+    regroup: bool = False
+
+
+_MAG_FOLDER = re.compile(r"^\d+(?:\.\d+)?x(?: zoom\d+(?:\.\d+)?)?$", re.I)
+UNKNOWN_MAG_LABELS = ("未知倍镜", "unknown magnification", "unknown")
+
+
+def is_mag_folder(name: str, unknown: str = "") -> bool:
+    """A folder made by "sort by magnification": "100x", "60x zoom1.21", or the unknown label."""
+    name = name.strip()
+    return bool(_MAG_FOLDER.match(name)) or name.lower() in {u.lower() for u in (*UNKNOWN_MAG_LABELS, unknown) if u}
+
+
+def regroup_base(folder: str, root: str, unknown: str) -> str:
+    """The folder without its trailing magnification folders, never above `root`."""
+    parts = folder.split("/") if folder else []
+    floor = len(root.split("/")) if root else 0
+    while len(parts) > floor and is_mag_folder(parts[-1], unknown):
+        parts.pop()
+    return "/".join(parts)
 
 
 def magnification_label(rec: dict[str, Any], unknown: str) -> str:
@@ -820,35 +844,63 @@ def api_organize_by_magnification(body: OrganizeBody, owner_id: Owner) -> dict[s
     if root and root not in list_folders(owner_id):
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Folder not found."})
     unknown = (body.unknown_label or "unknown").strip()[:60] or "unknown"
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    recursive = body.recursive or body.regroup
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     only = set(body.file_ids) if body.file_ids is not None else None
+    unchanged = 0
+    prune: set[str] = set()
     for rec in list_files(owner_id):
         if only is not None and rec["id"] not in only:
             continue
         if body.since is not None and float(rec.get("created_at") or 0) < body.since:
             continue
         folder = rec.get("folder") or ""
-        if body.recursive:
+        if recursive:
             if root and folder != root and not folder.startswith(root + "/"):
                 continue
         elif folder != root:
             continue
         label = magnification_label(rec, unknown)
-        if folder.rsplit("/", 1)[-1] == label:
-            continue  # already sorted
-        groups.setdefault((folder, label), []).append(rec)
+        if body.regroup:
+            base = regroup_base(folder, root, unknown)
+            target = "/".join(p for p in (base, label) if p)
+            if folder == target:
+                unchanged += 1
+                continue
+            # The magnification folders the file leaves (removed afterwards if empty).
+            parts = folder.split("/")
+            for depth in range(len(base.split("/")) if base else 0, len(parts)):
+                prune.add("/".join(parts[: depth + 1]))
+        else:
+            if folder.rsplit("/", 1)[-1] == label:
+                unchanged += 1
+                continue  # already sorted
+            base, target = folder, "/".join(p for p in (folder, label) if p)
+        groups.setdefault((folder, label, target), []).append(rec)
     plan = [
         {
             "source": folder,
             "label": label,
-            "target": "/".join(p for p in (folder, label) if p),
+            "target": target,
             "count": len(recs),
             "file_ids": [r["id"] for r in recs],
             "names": [r.get("name") for r in recs[:6]],
         }
-        for (folder, label), recs in sorted(groups.items())
+        for (folder, label, target), recs in sorted(groups.items())
     ]
-    result: dict[str, Any] = {"groups": plan, "files": sum(g["count"] for g in plan)}
+    if prune:
+        # Folders that end up without files (preview; apply checks again).
+        moving = {fid for g in plan for fid in g["file_ids"]}
+        staying = {rec.get("folder") or "" for rec in list_files(owner_id) if rec["id"] not in moving}
+        staying.update(g["target"] for g in plan)
+        prune = {f for f in prune if not any(u == f or u.startswith(f + "/") for u in staying)}
+    result: dict[str, Any] = {
+        "groups": plan,
+        "files": sum(g["count"] for g in plan),
+        "unchanged": unchanged,
+        "regroup": body.regroup,
+        "folders_to_prune": sorted(prune),
+    }
     if body.apply and plan:
         undo = {"files": [], "folders_removed": [], "folders_added": []}
         moved = 0
@@ -857,7 +909,9 @@ def api_organize_by_magnification(body: OrganizeBody, owner_id: Owner) -> dict[s
             moved += out["moved"]
             undo["files"].extend(out["undo"]["files"])
             undo["folders_added"].append(group["target"])
-        result.update({"moved": moved, "undo": undo})
+        if prune:
+            undo["folders_removed"] = prune_empty_folders(owner_id, sorted(prune))
+        result.update({"moved": moved, "undo": undo, "pruned": undo["folders_removed"]})
     return result
 
 
@@ -2061,15 +2115,27 @@ def api_export(body: ExportRequest, owner_id: Owner) -> dict[str, Any]:
     return {"id": job_id, "status": "queued", "file_count": len(file_ids)}
 
 
-# --- analyses (comet assay) -------------------------------------------------------
+# --- analyses (comet assay, EdU) --------------------------------------------------
 
 
 class AnalysisCreate(BaseModel):
     name: str = ""
+    type: Literal["comet", "edu"] = "comet"
     file_ids: list[str] = []
     folders: list[str] = []
     params: dict[str, Any] | None = None
     run: bool = True
+
+
+class PairingBody(BaseModel):
+    file_ids: list[str] = []
+    folders: list[str] = []
+    edu_kind: str = "auto"
+
+
+class PreviewBody(BaseModel):
+    file_id: str
+    params: dict[str, Any] | None = None
 
 
 class AnalysisPatch(BaseModel):
@@ -2081,6 +2147,10 @@ class AnalysisPatch(BaseModel):
 
 class ResultPatch(BaseModel):
     deleted: list[int] | None = None
+    # EdU: per-nucleus classes set by hand ("positive" / "negative" / "excluded") and EdU
+    # objects removed from the independent count.
+    marks: dict[str, str] | None = None
+    edu_deleted: list[int] | None = None
     # Per-image parameters (re-analyses that image); null removes the override.
     params: dict[str, Any] | None = None
     reset_params: bool = False
@@ -2095,6 +2165,16 @@ def _need_analysis(analysis_id: str, owner_id: str) -> dict[str, Any]:
 
 def _analysis_view(rec: dict[str, Any], owner_id: str, full: bool) -> dict[str, Any]:
     out = _public(rec)
+    out["type"] = analyses.rec_type(rec)
+    is_edu = out["type"] == "edu"
+    pooled = None
+    if is_edu and full:
+        from nd2utils import edu_results
+
+        pooled = edu_results.pooled_thresholds(rec)
+        out["pooled_thresholds"] = pooled
+    partners = rec.get("partners") or {}
+    names = rec.get("names") or {}
     files = []
     for fid in rec["file_ids"]:
         f = get_owned_file(fid, owner_id)
@@ -2102,7 +2182,8 @@ def _analysis_view(rec: dict[str, Any], owner_id: str, full: bool) -> dict[str, 
             continue
         item = {
             "file_id": fid,
-            "name": f.get("name"),
+            "name": names.get(fid) or f.get("name"),
+            "file_name": f.get("name"),
             "folder": f.get("folder") or "",
             "group": (rec.get("groups") or {}).get(fid, "/"),
             "width": f.get("width"),
@@ -2110,12 +2191,41 @@ def _analysis_view(rec: dict[str, Any], owner_id: str, full: bool) -> dict[str, 
             "channels": f.get("channels") or [],
             "override": (rec.get("overrides") or {}).get(fid),
         }
+        if is_edu:
+            partner = get_owned_file(partners[fid], owner_id) if fid in partners else None
+            item["partner"] = {"file_id": partner["id"], "name": partner.get("name"), "channels": partner.get("channels") or []} if partner else None
         if full:
-            item.update(analyses.file_summary(analyses.read_result(rec["id"], fid)))
+            if is_edu:
+                item.update(edu_results.field_summary(rec, fid, pooled or {}))
+            else:
+                item.update(analyses.file_summary(analyses.read_result(rec["id"], fid)))
         files.append(item)
     out["files"] = files if full else None
     out["file_count"] = len(files)
+    out.pop("source_ids", None)
     return out
+
+
+def _json_gz(request: Request, payload: Any) -> Response:
+    """Large JSON (EdU results hold thousands of outlines), gzip-compressed when accepted."""
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    headers = {"Vary": "Accept-Encoding", "Cache-Control": "no-store"}
+    if len(body) > 4096 and "gzip" in request.headers.get("accept-encoding", ""):
+        body = gzip.compress(body, compresslevel=5)
+        headers["Content-Encoding"] = "gzip"
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
+def _analysis_file_ids(owner_id: str, file_ids: list[str], folders: list[str]) -> list[str]:
+    ids = list(file_ids)
+    for raw in folders:
+        folder = _folder_arg(raw)
+        ids.extend(rec["id"] for rec in files_in_folder(owner_id, folder))
+    if not ids:
+        raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select images first."})
+    for fid in ids:
+        _need(fid, owner_id)  # 404 for unknown or someone else's files
+    return list(dict.fromkeys(ids))
 
 
 @app.get("/api/analyses")
@@ -2123,17 +2233,23 @@ def api_list_analyses(owner_id: Owner) -> dict[str, Any]:
     return {"analyses": [_analysis_view(rec, owner_id, full=False) for rec in analyses.list_analyses(owner_id)]}
 
 
+@app.post("/api/analyses/pairing")
+def api_analysis_pairing(body: PairingBody, owner_id: Owner) -> dict[str, Any]:
+    """EdU fields (nuclear + EdU channel, possibly two files) among the chosen files."""
+    ids = _analysis_file_ids(owner_id, body.file_ids, body.folders)
+    return analyses.pairing_preview(owner_id, ids, body.edu_kind)
+
+
 @app.post("/api/analyses")
 def api_create_analysis(body: AnalysisCreate, owner_id: Owner) -> dict[str, Any]:
-    ids = list(body.file_ids)
-    for raw in body.folders:
-        folder = _folder_arg(raw)
-        ids.extend(rec["id"] for rec in files_in_folder(owner_id, folder))
-    if not ids:
-        raise HTTPException(status_code=400, detail={"code": "empty", "message": "Select images first."})
-    for fid in ids:
-        _need(fid, owner_id)  # 404 for unknown or someone else's files
-    rec = analyses.create(owner_id, name=body.name, file_ids=ids, params=body.params)
+    ids = _analysis_file_ids(owner_id, body.file_ids, body.folders)
+    try:
+        rec = analyses.create(owner_id, name=body.name, file_ids=ids, params=body.params, kind=body.type)
+    except analyses.NoFields as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "no_fields", "message": "No image has both a nuclear (DAPI/Hoechst) and an EdU channel.", "unpaired": exc.unpaired},
+        ) from exc
     if body.run:
         analyses.run(rec["id"], owner_id)
     return _analysis_view(analyses.get_owned(rec["id"], owner_id) or rec, owner_id, full=True)
@@ -2168,15 +2284,36 @@ def api_run_analysis(analysis_id: str, body: RunBody, owner_id: Owner) -> dict[s
     return {"queued": analyses.run(analysis_id, owner_id, body.file_ids)}
 
 
-@app.get("/api/analyses/{analysis_id}/results/{file_id}")
-def api_analysis_result(analysis_id: str, file_id: str, owner_id: Owner) -> dict[str, Any]:
+def _need_analysis_file(analysis_id: str, file_id: str, owner_id: str) -> dict[str, Any]:
     rec = _need_analysis(analysis_id, owner_id)
     if file_id not in rec["file_ids"]:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not in this analysis."})
-    res = analyses.read_result(analysis_id, file_id)
+    return rec
+
+
+@app.get("/api/analyses/{analysis_id}/results/{file_id}")
+def api_analysis_result(analysis_id: str, file_id: str, owner_id: Owner, request: Request) -> Response:
+    rec = _need_analysis_file(analysis_id, file_id, owner_id)
+    if analyses.rec_type(rec) == "edu":
+        from nd2utils import edu_results
+
+        res = edu_results.full_result(analysis_id, file_id)
+    else:
+        res = analyses.read_result(analysis_id, file_id)
     if res is None:
         return JSONResponse(status_code=202, content={"status": "pending"})
-    return res
+    return _json_gz(request, res)
+
+
+@app.post("/api/analyses/{analysis_id}/preview")
+def api_analysis_preview(analysis_id: str, body: PreviewBody, owner_id: Owner, request: Request) -> Response:
+    """Analyse one image with draft parameters; nothing is stored."""
+    rec = _need_analysis_file(analysis_id, body.file_id, owner_id)
+    try:
+        res = analyses.preview(rec, owner_id, body.file_id, body.params)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not found."}) from exc
+    return _json_gz(request, res)
 
 
 @app.patch("/api/analyses/{analysis_id}/results/{file_id}")
@@ -2187,6 +2324,10 @@ def api_patch_result(analysis_id: str, file_id: str, body: ResultPatch, owner_id
     out: dict[str, Any] = {}
     if body.deleted is not None:
         out["result"] = analyses.set_deleted(analysis_id, file_id, body.deleted)
+    if (body.marks is not None or body.edu_deleted is not None) and analyses.rec_type(rec) == "edu":
+        from nd2utils import edu_results
+
+        out["edits"] = edu_results.set_edits(analysis_id, file_id, body.marks, body.edu_deleted)
     if body.params is not None or body.reset_params:
         analyses.set_override(analysis_id, owner_id, file_id, None if body.reset_params else body.params)
         out["queued"] = analyses.run(analysis_id, owner_id, [file_id])
@@ -2194,14 +2335,16 @@ def api_patch_result(analysis_id: str, file_id: str, body: ResultPatch, owner_id
 
 
 @app.get("/api/analyses/{analysis_id}/image/{file_id}")
-def api_analysis_image(analysis_id: str, file_id: str, owner_id: Owner) -> Response:
-    rec = _need_analysis(analysis_id, owner_id)
-    if file_id not in rec["file_ids"]:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not in this analysis."})
+def api_analysis_image(
+    analysis_id: str, file_id: str, owner_id: Owner, role: Literal["nucleus", "edu"] | None = None, channel: int | None = None
+) -> Response:
+    _need_analysis_file(analysis_id, file_id, owner_id)
     try:
-        body = analyses.analysis_image(analysis_id, owner_id, file_id)
+        body = analyses.analysis_image(analysis_id, owner_id, file_id, role, channel)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Image not found."}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "unreadable", "message": str(exc)}) from exc
     return Response(content=body, media_type="image/png", headers={"Cache-Control": "no-cache"})
 
 
@@ -2215,8 +2358,9 @@ def run_analysis_export(job_id: str, analysis_id: str, owner_id: str) -> None:
     if rec is None:
         return
     analysis = analyses.get_owned(analysis_id, owner_id) or {}
-    stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(analysis.get("name") or "comet")).strip("_") or "comet"
-    name = f"{stem}_comet_{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    kind = analyses.rec_type(analysis)
+    stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(analysis.get("name") or kind)).strip("_") or kind
+    name = f"{stem}_{kind}_{time.strftime('%Y%m%d-%H%M%S')}.zip"
     dest = settings.exports_dir / name
     rec.update({"status": "running", "progress": 0.02, "message": "Writing tables"})
     upsert_job(rec)
@@ -2251,7 +2395,7 @@ def api_export_analysis(analysis_id: str, owner_id: Owner) -> dict[str, Any]:
             "created_at": time.time(),
             "download_name": None,
             "error": None,
-            "format": "comet · csv",
+            "format": f"{analyses.rec_type(rec)} · csv",
             "file_ids": list(rec["file_ids"]),
             "label": rec.get("name"),
             "_owner": owner_id,

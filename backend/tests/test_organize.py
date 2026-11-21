@@ -47,3 +47,49 @@ def test_organize_preview_then_apply(client, sample_files):
     assert client.post("/api/items/undo-move", json=done["undo"]).json()["restored"] == len(recs)
     folders = client.get("/api/files").json()["folders"]
     assert not any(f.startswith("exp/day1/") for f in folders)
+
+
+def _tiff(client, tmp_path, name, folder):
+    import numpy as np
+    import tifffile
+
+    path = tmp_path / name
+    tifffile.imwrite(path, np.full((32, 32), 7, np.uint8))
+    with path.open("rb") as fh:
+        r = client.post("/api/files", params={"folder": folder}, files={"file": (name, fh)})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_regroup_keeps_experiment_folders(client, tmp_path):
+    a = _tiff(client, tmp_path, "a_40x.tif", "exp/day1/未知倍镜")  # sorted before its magnification was known
+    b = _tiff(client, tmp_path, "b_100x.tif", "exp/day1/100x")  # already right
+    c = _tiff(client, tmp_path, "c_40x.tif", "exp/day1/100x/40x")  # nested by an earlier re-sort
+    d = _tiff(client, tmp_path, "d_40x.tif", "exp/day2")  # never sorted
+    e = _tiff(client, tmp_path, "e_20x.tif", "other")  # outside the folder
+    client.post("/api/folders", json={"path": "exp/day1/10x"})  # an empty magnification folder stays
+
+    # The normal sort would nest: it only looks at the last folder name.
+    plain = client.post("/api/organize/magnification", json={"folder": "exp"}).json()
+    assert {g["target"] for g in plain["groups"]} >= {"exp/day1/未知倍镜/40x"}
+
+    preview = client.post("/api/organize/magnification", json={"folder": "exp", "regroup": True}).json()
+    assert preview["regroup"] is True and preview["unchanged"] == 1  # b
+    targets = {fid: g["target"] for g in preview["groups"] for fid in g["file_ids"]}
+    assert targets == {a["id"]: "exp/day1/40x", c["id"]: "exp/day1/40x", d["id"]: "exp/day2/40x"}
+    # 100x still holds b; the emptied magnification folders go.
+    assert preview["folders_to_prune"] == ["exp/day1/100x/40x", "exp/day1/未知倍镜"]
+
+    done = client.post("/api/organize/magnification", json={"folder": "exp", "regroup": True, "apply": True}).json()
+    assert done["moved"] == 3 and done["pruned"] == ["exp/day1/100x/40x", "exp/day1/未知倍镜"]
+    listing = client.get("/api/files").json()
+    folders = {f["id"]: f["folder"] for f in listing["files"]}
+    assert folders[a["id"]] == "exp/day1/40x" and folders[d["id"]] == "exp/day2/40x" and folders[e["id"]] == "other"
+    assert folders[b["id"]] == "exp/day1/100x" and folders[c["id"]] == "exp/day1/40x"
+    assert "exp/day1/未知倍镜" not in listing["folders"] and "exp/day1/10x" in listing["folders"]
+
+    # Undo puts the files and the removed folder back.
+    assert client.post("/api/items/undo-move", json=done["undo"]).json()["restored"] == 3
+    listing = client.get("/api/files").json()
+    assert {f["id"]: f["folder"] for f in listing["files"]}[a["id"]] == "exp/day1/未知倍镜"
+    assert "exp/day1/未知倍镜" in listing["folders"]

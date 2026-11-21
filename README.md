@@ -10,14 +10,16 @@ Formerly ND2Utils — the repository, Docker image (`ghcr.io/cidmex/nd2utils`), 
 
 Lucida 明室（原 ND2Utils）是一个自托管的显微图像工作台：把 ND2 / LIF / OME-TIFF / TIFF 拖进浏览器，像文件管理器一样整理，查看通道、物镜和采集信息，精细查看与测量，多图编辑拼图，彗星实验统计，最后批量导出。
 
-### v1.1 新功能（beta1）
+### v1.1 新功能（beta）
 
 - **更流畅**：导入时不再卡住其他操作（文件打开锁按文件拆分、上传写盘移出事件循环、导出任务独立线程池、未准备好的预览立即返回并优先处理；前端轮询不再整页重渲染）。
 - **字体**：内置思源黑体（Noto Sans SC）+ Inter，字号整体加大；“设置 → 语言与外观 → 字号”可选 标准 / 大 / 特大。
 - **文件管理器**：拖动文件或文件夹到另一个文件夹即可移动；Ctrl/⌘+X 剪切、Ctrl/⌘+V 粘贴；右键“移动到…”；Shift / Ctrl 多选；移动后可撤销。点文件夹在中间显示文件夹视图（列表或缩略图）。
 - **元信息与比例尺**：自动读取物镜倍数和共聚焦 zoom；比例尺长度按“物镜 × zoom”查表（100x → 10 µm 起，保持在图宽的 8%–40%），预览、裁切、项目编辑和导出一致；没有像素标定的图不再画假比例尺。
-- **按倍镜整理**：右键文件夹“按倍镜整理…”，把文件分到 `100x`、`100x zoom3` 这样的子文件夹（先预览，可撤销）；上传栏可勾选“导入后按倍镜整理”。
+- **按倍镜整理**：右键文件夹“按倍镜整理…”，把文件分到 `100x`、`100x zoom3` 这样的子文件夹（先预览，可撤销）；上传栏可勾选“导入后按倍镜整理”。“全部重新分组”：忽略已有的倍镜文件夹，把整个文件夹树里的文件按当前识别的倍镜重新放好（实验子文件夹保留，清空的旧倍镜文件夹自动删除），需二次确认，可撤销。
 - **彗星实验统计**（导航“分析”）：复刻 OpenComet 算法，自动找彗星、定位头部，计算尾部 DNA%、尾矩、Olive 尾矩等 16 项指标；点击彗星可删除 / 恢复；按实验组汇总（均值、标准差、SEM、中位数，可含离群）并画箱线图；导出 `comets.csv`、`summary.csv` 和标注图。
+- **EdU 增殖分析**：在核通道（DAPI / Hoechst）分割全部细胞核（距离变换分水岭拆分粘连核），在红 / 绿 EdU 通道判定阳性，EdU 阳性比例 = 阳性细胞数 / 细胞核总数。两种计数方式可切换：以核为准（核内 EdU 平均强度高于阈值，默认 Li 自动阈值、全部图像合并计算），或两通道各自计数；阈值可在直方图上拖动，即时生效。DAPI / EdU 分开保存的图像（如 EVOS `…_DAPI.tiff` + `…_GFP.tiff`）按文件名自动配对。点击细胞核可改判或排除；按组汇总（视野数、合并比例、均值 ± SD）；导出 `fields.csv`、`nuclei.csv`、`edu_objects.csv`、`summary.csv` 和标注图。
+- **先调参、再分析**：彗星实验和 EdU 分析新建后不再直接批量运行，先在当前图上调参数并实时预览（不保存），满意后再分析全部图像；彗星实验新增高级参数（阈值方法与偏移、中值 / 滚球半径、开运算、面积上限、贴边、凸度 / 对称性 / 中线等有效与离群规则），默认值与 OpenComet 一致。
 - **导出记录**：可逐条删除、取消正在进行的导出、多选删除、一键清除已完成。
 - **新的首页与导航**：文件 · 查看 · 编辑 · 分析 · 导出 · 设置；首页按任务进入，并列出最近的编辑项目和分析。
 
@@ -90,14 +92,16 @@ TIFF / PNG / JPEG 是 8 位显示图，不能用来定量。定量请导出 OME-
 
 Lucida (formerly ND2Utils) is a self-hosted microscopy workbench: drop ND2 / LIF / OME-TIFF / TIFF files into the browser, organise them like a file manager, inspect channels, optics and acquisition data, measure, compose figures, quantify comet assays, and batch-export. Advanced mode follows NIS-Elements Viewer workflows (LUT, histogram, ND bar, scale bar, MIP, ROI).
 
-### New in v1.1 (beta1)
+### New in v1.1 (beta)
 
 - Responsive while importing: per-file open locks, uploads written off the event loop, exports on their own pool, previews of files still being prepared answer at once and jump the queue; the UI no longer re-renders everything on each poll.
 - Bundled Noto Sans SC + Inter, larger type, and a text size setting (standard / large / extra large).
 - File manager: drag files and folders onto folders, Ctrl/⌘+X / Ctrl/⌘+V, “Move to…”, Shift/Ctrl multi-select, undo; opening a folder shows its contents as a list or thumbnails.
 - Optics metadata (objective, confocal zoom, calibration) and magnification-aware scale bars shared by previews, crops, Studio and exports; uncalibrated images get no bar.
-- “Sort by magnification…” puts files into `100x` / `100x zoom3` subfolders (preview, undo), optionally right after import.
+- “Sort by magnification…” puts files into `100x` / `100x zoom3` subfolders (preview, undo), optionally right after import. “Regroup everything”: existing magnification folders are dissolved and every file in the tree is placed again by its current magnification (experiment subfolders are kept, emptied magnification folders removed), after a second confirmation and with undo.
 - Comet assay analysis (OpenComet re-implementation): comets, heads, tail DNA %, tail moment, Olive moment and more; click to remove comets; per-group statistics and box plots; CSV tables and overlay images.
+- EdU proliferation: nuclei segmented in DAPI / Hoechst (touching nuclei split by a distance-transform watershed), EdU+ judged in the red or green channel, EdU+ ratio = EdU+ cells / nuclei. Count per nucleus (mean EdU intensity above a threshold; Li by default, pooled over all images; drag it on the histogram) or count each channel separately — switchable at any time. Nuclear and EdU images saved separately (e.g. EVOS `…_DAPI.tiff` + `…_GFP.tiff`) are paired by name. Click nuclei to flip or exclude them; per-group statistics; `fields.csv`, `nuclei.csv`, `edu_objects.csv`, `summary.csv` and overlays.
+- Tune first, then analyse: comet and EdU analyses open in set-up mode with a live, unsaved preview of the current image; the batch runs when you start it. Comet analysis gains advanced parameters (threshold method/offset, filter radii, opening, area limits, border handling, validity and outlier rules) with OpenComet's values as defaults.
 - Export records can be deleted (running exports are cancelled), in bulk, or cleared.
 - New start page and navigation: Files · Inspect · Edit · Analyze · Exports · Settings.
 

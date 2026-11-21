@@ -1,35 +1,33 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import {
-  ArrowClockwise,
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  ChartBar,
-  Export as ExportIcon,
-  Folder,
-  Plus,
-  ShootingStar,
-  SpinnerGap,
-  SunDim,
-  Trash,
-  WarningCircle,
-} from "@phosphor-icons/react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Export as ExportIcon, SpinnerGap, SunDim, WarningCircle } from "@phosphor-icons/react";
 import { Glass } from "../components/Glass";
-import { Modal } from "../components/Modal";
 import { Shell } from "../components/Shell";
 import { ZoomStage } from "../components/ZoomStage";
+import {
+  Advanced,
+  AnalysisCards,
+  GROUP_COLORS,
+  ParamCheck,
+  ParamNumber,
+  ParamSelect,
+  PreviewBar,
+  SetupBanner,
+  StatCell,
+  TOOLS,
+  ToolPage,
+  fmt,
+  useAnalyses,
+  useDraftPreview,
+} from "../components/analysis/shared";
 import { t, type MsgKey } from "../i18n";
 import {
+  COMET_DEFAULTS,
   analysisImageUrl,
   analysisSummary,
-  createAnalysis,
-  deleteAnalysis,
   exportAnalysis,
   getAnalysis,
   getCometResult,
-  listAnalyses,
   patchCometResult,
   runAnalysis,
   updateAnalysis,
@@ -39,10 +37,10 @@ import {
   type Comet,
   type CometParams,
   type CometResult,
-  type Stat,
   type TailDirection,
 } from "../lib/api";
-import { detailMessage, formatDateTime } from "../lib/format";
+import { drawLayers, levelRange, useGrayImage } from "../lib/analysisCanvas";
+import { detailMessage } from "../lib/format";
 import type { Lang } from "../lib/types";
 import { useApp } from "../store";
 
@@ -62,148 +60,8 @@ const DETAIL_METRICS = [
   "TailArea", "TailLength", "TailDNA", "TailDNAPercent", "TailMoment", "OliveMoment",
 ];
 const STATUS_COLOR: Record<string, string> = { valid: "#ef4444", outlier: "#f97316", invalid: "#94a3b8", deleted: "#64748b" };
-const GROUP_COLORS = ["#0ea5e9", "#f97316", "#22c55e", "#a855f7", "#ef4444", "#eab308", "#14b8a6", "#ec4899"];
-
-const fmt = (v: number | null | undefined, digits = 2) => (v === null || v === undefined || !Number.isFinite(v) ? "–" : Number(v.toFixed(digits)).toString());
 
 // --- list ------------------------------------------------------------------------------------
-
-function NewAnalysisDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const lang = useApp((s) => s.lang);
-  const folders = useApp((s) => s.folders);
-  const files = useApp((s) => s.files);
-  const refreshFiles = useApp((s) => s.refreshFiles);
-  const nav = useNavigate();
-  const [name, setName] = useState("");
-  const [picked, setPicked] = useState<Set<string>>(() => new Set());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open && !files.length) void refreshFiles().catch(() => undefined);
-  }, [files.length, open, refreshFiles]);
-
-  const counts = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const f of files) map.set(f.folder, (map.get(f.folder) ?? 0) + 1);
-    return map;
-  }, [files]);
-
-  async function create() {
-    setBusy(true);
-    setError(null);
-    try {
-      const rec = await createAnalysis({ name: name || [...picked].map((p) => p.split("/").pop()).join(" · "), folders: [...picked] });
-      nav(analysisPath(rec));
-    } catch (err) {
-      setError(detailMessage(err, lang));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal open={open} title={t(lang, "newAnalysis")} subtitle={t(lang, "newAnalysisHint")} onClose={onClose} width={520}>
-      <label className="grid gap-1.5 text-sm text-[var(--text-dim)]">
-        {t(lang, "analysisName")}
-        <input value={name} onChange={(e) => setName(e.target.value)} className="h-9 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 text-[var(--text)]" />
-      </label>
-      <div className="mt-3 max-h-[44vh] overflow-auto rounded-xl border border-[var(--line)] p-1">
-        {folders.filter((f) => counts.get(f)).length === 0 && <p className="p-3 text-sm text-[var(--text-dim)]">{t(lang, "emptyFiles")}</p>}
-        {folders
-          .filter((f) => counts.get(f))
-          .map((f) => (
-            <label key={f} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-[var(--bg)]">
-              <input
-                type="checkbox"
-                checked={picked.has(f)}
-                onChange={(e) =>
-                  setPicked((prev) => {
-                    const next = new Set(prev);
-                    if (e.target.checked) next.add(f);
-                    else next.delete(f);
-                    return next;
-                  })
-                }
-              />
-              <Folder size={16} weight="duotone" className="shrink-0 text-[var(--accent)]" />
-              <span className="truncate">{f}</span>
-              <span className="ml-auto font-mono text-xs text-[var(--text-dim)]">{counts.get(f)}</span>
-            </label>
-          ))}
-      </div>
-      {error && <p className="mt-2 text-sm text-[var(--danger)]">{error}</p>}
-      <div className="mt-4 flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="h-9 rounded-lg px-3 text-sm text-[var(--text-dim)] hover:bg-[var(--bg)]">
-          {t(lang, "cancel")}
-        </button>
-        <button type="button" disabled={busy || !picked.size} onClick={() => void create()} className="primary-action min-h-9 px-4 disabled:opacity-50">
-          {t(lang, "startAnalysis")}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-/** Analysis tools. Each tool owns its pages under /analysis/<type>; more will follow. */
-const TOOLS: { type: AnalysisInfo["type"]; title: MsgKey; body: MsgKey; Icon: typeof ChartBar }[] = [
-  { type: "comet", title: "cometAssay", body: "cometToolBody", Icon: ShootingStar },
-];
-
-export const analysisPath = (a: Pick<AnalysisInfo, "id" | "type">) => `/analysis/${a.type}/${a.id}`;
-
-function AnalysisCards({ items, onChanged }: { items: AnalysisInfo[]; onChanged: () => void }) {
-  const lang = useApp((s) => s.lang);
-  return (
-    <ul className="grid gap-3 sm:grid-cols-2">
-      {items.map((a) => {
-        const tool = TOOLS.find((tl) => tl.type === a.type) ?? TOOLS[0];
-        return (
-          <li key={a.id}>
-            <Glass shape="card" className="flex items-start gap-3 p-4">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                <tool.Icon size={20} weight="duotone" />
-              </span>
-              <Link to={analysisPath(a)} className="min-w-0 flex-1">
-                <p className="truncate font-semibold">{a.name}</p>
-                <p className="mt-1 text-sm text-[var(--text-dim)]">
-                  {t(lang, tool.title)} · {a.file_count} {t(lang, "nFiles")} · {formatDateTime(a.updated_at, lang)}
-                </p>
-                {(a.status === "running" || a.status === "queued") && (
-                  <p className="mt-1 inline-flex items-center gap-1 text-xs text-[var(--accent)]">
-                    <SpinnerGap size={12} className="animate-spin" /> {Math.round(a.progress * 100)}%
-                  </p>
-                )}
-              </Link>
-              <button
-                type="button"
-                onClick={() => void deleteAnalysis(a.id).then(onChanged)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-dim)] hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-[var(--danger)]"
-                title={t(lang, "delete")}
-                aria-label={t(lang, "delete")}
-              >
-                <Trash size={16} />
-              </button>
-            </Glass>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function useAnalyses(type?: AnalysisInfo["type"]) {
-  const lang = useApp((s) => s.lang);
-  const [items, setItems] = useState<AnalysisInfo[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(() => {
-    void listAnalyses()
-      .then((all) => setItems(type ? all.filter((a) => a.type === type) : all))
-      .catch((err) => setError(detailMessage(err, lang)));
-  }, [lang, type]);
-  useEffect(load, [load]);
-  return { items, error, load };
-}
 
 /** /analysis: the analysis tools, and every analysis made with them. */
 export function AnalysisHub() {
@@ -252,43 +110,19 @@ export function AnalysisHub() {
 
 /** /analysis/comet: comet assay analyses and "new". */
 export function CometTool() {
-  const lang = useApp((s) => s.lang);
-  const { items, error, load } = useAnalyses("comet");
-  const [creating, setCreating] = useState(false);
-  return (
-    <Shell dense>
-      <main className="mx-auto max-w-5xl px-5 py-10 sm:py-14">
-        <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[var(--line)] pb-6">
-          <div>
-            <Link to="/analysis" className="inline-flex items-center gap-1 font-mono text-2xs uppercase tracking-[0.16em] text-[var(--accent)] hover:underline">
-              <ArrowLeft size={11} /> {t(lang, "analysisTitle")}
-            </Link>
-            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{t(lang, "cometAssay")}</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-dim)]">{t(lang, "analysisIntro")}</p>
-          </div>
-          <button type="button" onClick={() => setCreating(true)} className="primary-action">
-            <Plus size={16} />
-            {t(lang, "newAnalysis")}
-          </button>
-        </div>
-        {error && <p className="mt-4 text-sm text-[var(--danger)]">{error}</p>}
-        {items && items.length === 0 && (
-          <div className="flex min-h-64 flex-col items-center justify-center text-center">
-            <ShootingStar size={34} weight="duotone" className="mb-4 text-[var(--accent)]" />
-            <p className="max-w-md text-md leading-6 text-[var(--text-dim)]">{t(lang, "noAnalyses")}</p>
-          </div>
-        )}
-        <div className="mt-6">{items && <AnalysisCards items={items} onChanged={load} />}</div>
-      </main>
-      <NewAnalysisDialog open={creating} onClose={() => setCreating(false)} />
-    </Shell>
-  );
+  return <ToolPage type="comet" />;
 }
 
-/** Links from 1.1 beta1 (/analysis/<id>) → /analysis/comet/<id>. */
+/** Old links (/analysis/<id>) → the analysis under its tool. */
 export function AnalysisRedirect() {
   const { analysisId = "" } = useParams();
-  return <Navigate to={`/analysis/comet/${analysisId}`} replace />;
+  const [type, setType] = useState<AnalysisInfo["type"] | null>(null);
+  useEffect(() => {
+    void getAnalysis(analysisId)
+      .then((a) => setType(a.type))
+      .catch(() => setType("comet"));
+  }, [analysisId]);
+  return type ? <Navigate to={`/analysis/${type}/${analysisId}`} replace /> : null;
 }
 
 // --- charts ----------------------------------------------------------------------------------
@@ -366,15 +200,6 @@ function BoxPlot({ summary, metric }: { summary: AnalysisSummary; metric: Metric
 
 // --- detail ------------------------------------------------------------------------------------
 
-function StatCell({ stat }: { stat: Stat | undefined }) {
-  if (!stat || !stat.n) return <td className="px-2 py-1.5 text-right font-mono text-xs text-[var(--text-dim)]">–</td>;
-  return (
-    <td className="px-2 py-1.5 text-right font-mono text-xs tabular-nums" title={`SEM ${fmt(stat.sem)} · median ${fmt(stat.median)}`}>
-      {fmt(stat.mean)} <span className="text-[var(--text-dim)]">± {fmt(stat.sd)}</span>
-    </td>
-  );
-}
-
 interface DisplaySettings {
   mode: "auto" | "manual";
   black: number;
@@ -385,30 +210,13 @@ interface DisplaySettings {
 
 const DEFAULT_DISPLAY: DisplaySettings = { mode: "auto", black: 0, white: 255, gamma: 1, pseudo: false };
 
-/** Black/white points from the histogram (0.1 % / 99.9 %), like an auto-contrast. */
-function autoRange(hist: Uint32Array, total: number): [number, number] {
-  let acc = 0;
-  let lo = 0;
-  let hi = 255;
-  for (let v = 0; v < 256; v++) {
-    acc += hist[v];
-    if (acc > total * 0.001) {
-      lo = v;
-      break;
-    }
-  }
-  acc = 0;
-  for (let v = 255; v >= 0; v--) {
-    acc += hist[v];
-    if (acc > total * 0.001) {
-      hi = v;
-      break;
-    }
-  }
-  return hi > lo ? [lo, hi] : [lo, Math.min(255, lo + 1)];
-}
-
 const isReddish = (c: number[] | undefined) => Boolean(c && c[0] > 160 && c[1] < 120 && c[2] < 120);
+
+function cometCounts(res: CometResult | null, deleted: Set<number>) {
+  const counts = { valid: 0, outlier: 0, invalid: 0, deleted: 0 };
+  for (const c of res?.comets ?? []) counts[deleted.has(c.key) ? "deleted" : c.status] += 1;
+  return counts;
+}
 
 export function AnalysisDetail() {
   const { analysisId = "" } = useParams();
@@ -426,24 +234,28 @@ export function AnalysisDetail() {
   const [draft, setDraft] = useState<CometParams | null>(null);
   const [exporting, setExporting] = useState(false);
   const [display, setDisplay] = useState<DisplaySettings>(DEFAULT_DISPLAY);
-  const gray = useRef<{ data: Uint8Array; w: number; h: number; auto: [number, number] } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [imageVersion, setImageVersion] = useState(0);
 
   const busy = info?.status === "running" || info?.status === "queued";
   const files = useMemo(() => info?.files ?? [], [info]);
   const selected = files.find((f) => f.file_id === selectedId) ?? null;
+  const saved = useMemo(() => (info ? { ...COMET_DEFAULTS, ...(info.params as CometParams) } : null), [info]);
+  const neverRun = files.length > 0 && !busy && files.every((f) => !f.analyzed);
 
   const load = useCallback(async () => {
     try {
       const next = await getAnalysis(analysisId);
+      if (next.type === "edu") {
+        nav(`/analysis/edu/${analysisId}`, { replace: true });
+        return;
+      }
       setInfo(next);
-      setDraft((d) => d ?? next.params);
+      setDraft((d) => d ?? { ...COMET_DEFAULTS, ...(next.params as CometParams) });
       setSelectedId((id) => id ?? next.files?.[0]?.file_id ?? null);
     } catch (err) {
       setError(detailMessage(err, lang));
     }
-  }, [analysisId, lang]);
+  }, [analysisId, lang, nav]);
 
   useEffect(() => {
     void load();
@@ -459,6 +271,7 @@ export function AnalysisDetail() {
   // The selected image's result, reloaded whenever it is analysed again.
   const selectedVersion = selected?.analyzed_at;
   useEffect(() => {
+    setResult(null);
     if (!selectedId) return;
     let cancelled = false;
     void getCometResult(analysisId, selectedId)
@@ -471,6 +284,10 @@ export function AnalysisDetail() {
     };
   }, [analysisId, selectedId, selectedVersion]);
 
+  const pv = useDraftPreview<CometResult>({ analysisId, fileId: selectedId, draft, saved, hasResult: Boolean(selected?.analyzed), enabled: !busy });
+  const isPreview = Boolean(pv.preview);
+  const shown: CometResult | null = pv.preview ?? result;
+
   const statsVersion = files.map((f) => `${f.file_id}:${f.analyzed_at ?? 0}:${f.group}:${JSON.stringify(f.counts ?? {})}`).join("|");
   useEffect(() => {
     if (!info) return;
@@ -481,88 +298,30 @@ export function AnalysisDetail() {
   }, [analysisId, includeOutliers, statsVersion]);
 
   // The analysed (8-bit) channel, drawn through black/white/gamma so dim images can be seen.
-  const imageUrl = selected ? analysisImageUrl(analysisId, selected.file_id, selected.analyzed_at) : null;
-  useEffect(() => {
-    gray.current = null;
-    setImageVersion((v) => v + 1);
-    if (!imageUrl) return;
-    let cancelled = false;
-    const img = new Image();
-    img.onload = () => {
-      if (cancelled) return;
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
-      const scratch = document.createElement("canvas");
-      scratch.width = w;
-      scratch.height = h;
-      const ctx = scratch.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return;
-      ctx.drawImage(img, 0, 0);
-      const rgba = ctx.getImageData(0, 0, w, h).data;
-      const data = new Uint8Array(w * h);
-      const hist = new Uint32Array(256);
-      for (let i = 0, j = 0; i < data.length; i++, j += 4) {
-        data[i] = rgba[j];
-        hist[rgba[j]] += 1;
-      }
-      gray.current = { data, w, h, auto: autoRange(hist, data.length) };
-      setImageVersion((v) => v + 1);
-    };
-    img.src = imageUrl;
-    return () => {
-      cancelled = true;
-    };
-  }, [imageUrl]);
-
-  const channelColor = selected?.channels?.[result?.channel ?? 0]?.color ?? [255, 255, 255];
-  const imageReady = Boolean(gray.current);
+  const shownChannel = shown?.channel ?? draft?.channel ?? null;
+  const imageUrl = selected ? analysisImageUrl(analysisId, selected.file_id, 0, { channel: shownChannel ?? undefined }) : null;
+  const gray = useGrayImage(imageUrl);
+  const channelColor = selected?.channels?.[shownChannel ?? 0]?.color ?? [255, 255, 255];
   useLayoutEffect(() => {
-    const g = gray.current;
     const canvas = canvasRef.current;
-    if (!g || !canvas) return;
-    const [lo, hi] = display.mode === "auto" ? g.auto : [display.black, Math.max(display.white, display.black + 1)];
-    const color = display.pseudo ? channelColor : [255, 255, 255];
-    const inv = 1 / (display.gamma || 1);
-    const r = new Uint8ClampedArray(256);
-    const gg = new Uint8ClampedArray(256);
-    const b = new Uint8ClampedArray(256);
-    for (let v = 0; v < 256; v++) {
-      let level = (v - lo) / (hi - lo);
-      level = level <= 0 ? 0 : level >= 1 ? 1 : Math.pow(level, inv);
-      r[v] = level * color[0];
-      gg[v] = level * color[1];
-      b[v] = level * color[2];
-    }
-    if (canvas.width !== g.w) canvas.width = g.w;
-    if (canvas.height !== g.h) canvas.height = g.h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const out = ctx.createImageData(g.w, g.h);
-    const px = out.data;
-    for (let i = 0, j = 0; i < g.data.length; i++, j += 4) {
-      const v = g.data[i];
-      px[j] = r[v];
-      px[j + 1] = gg[v];
-      px[j + 2] = b[v];
-      px[j + 3] = 255;
-    }
-    ctx.putImageData(out, 0, 0);
+    if (!gray || !canvas) return;
+    drawLayers(canvas, [{ gray, color: display.pseudo ? channelColor : [255, 255, 255], levels: display, visible: true }]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [display, imageVersion, imageReady, channelColor.join(",")]);
+  }, [display, gray, channelColor.join(",")]);
 
-  const autoLevels = gray.current?.auto ?? [0, 255];
+  const autoLevels = gray ? levelRange(gray, { ...display, mode: "auto" }) : [0, 255];
   const shownBlack = display.mode === "auto" ? autoLevels[0] : display.black;
   const shownWhite = display.mode === "auto" ? autoLevels[1] : display.white;
-  const setLevel = (patch: Partial<DisplaySettings>) =>
-    setDisplay((d) => ({ ...d, black: shownBlack, white: shownWhite, ...patch, mode: "manual" }));
+  const setLevel = (patch: Partial<DisplaySettings>) => setDisplay((d) => ({ ...d, black: shownBlack, white: shownWhite, ...patch, mode: "manual" }));
   // Red outlines vanish on a red image: valid comets turn cyan while the pseudo-colour is red.
   const statusColor = (s: string) => (s === "valid" && display.pseudo && isReddish(channelColor) ? "#22d3ee" : STATUS_COLOR[s]);
 
-  const deleted = useMemo(() => new Set(result?.deleted ?? []), [result]);
-  const activeComet = result?.comets.find((c) => c.key === activeKey) ?? null;
+  const deleted = useMemo(() => new Set(isPreview ? [] : (result?.deleted ?? [])), [result, isPreview]);
+  const counts = cometCounts(shown, deleted);
+  const activeComet = shown?.comets.find((c) => c.key === activeKey) ?? null;
 
   async function toggleComet(c: Comet) {
-    if (!result || !selectedId) return;
+    if (!result || !selectedId || isPreview) return;
     const next = new Set(deleted);
     if (next.has(c.key)) next.delete(c.key);
     else next.add(c.key);
@@ -571,14 +330,16 @@ export function AnalysisDetail() {
     void load();
   }
 
-  async function applyParams(scope: "all" | "image") {
-    if (!draft || !info) return;
-    if (scope === "all") {
-      await updateAnalysis(analysisId, { params: draft });
-      await runAnalysis(analysisId);
-    } else if (selectedId) {
-      await patchCometResult(analysisId, selectedId, { params: draft });
-    }
+  async function applyAll() {
+    if (!draft) return;
+    await updateAnalysis(analysisId, { params: draft });
+    await runAnalysis(analysisId);
+    void load();
+  }
+
+  async function applyImage() {
+    if (!draft || !selectedId) return;
+    await patchCometResult(analysisId, selectedId, { params: { ...draft } });
     void load();
   }
 
@@ -617,6 +378,7 @@ export function AnalysisDetail() {
     up: <ArrowUp size={15} />,
     down: <ArrowDown size={15} />,
   };
+  const set = (patch: Partial<CometParams>) => setDraft((d) => (d ? { ...d, ...patch } : d));
 
   return (
     <Shell dense>
@@ -680,8 +442,10 @@ export function AnalysisDetail() {
                             {f.counts.valid}
                             {f.counts.outlier ? `+${f.counts.outlier}` : ""}
                           </span>
-                        ) : (
+                        ) : busy ? (
                           <SpinnerGap size={13} className="shrink-0 animate-spin text-[var(--text-dim)]" />
+                        ) : (
+                          <span className="shrink-0 text-2xs text-[var(--text-dim)]">{t(lang, "notAnalyzed")}</span>
                         )}
                       </button>
                     </li>
@@ -696,21 +460,21 @@ export function AnalysisDetail() {
         {/* image + overlay */}
         <main className="relative flex min-h-[460px] flex-col bg-[var(--well)]">
           {error && <p className="m-3 rounded-lg bg-black/60 p-2 text-sm text-[var(--danger)]">{error}</p>}
-          {selected && result?.error ? (
+          {selected && shown?.error ? (
             <p className="m-auto max-w-md p-6 text-center text-sm text-white/70">
-              {t(lang, "analysisFailed")}: {result.error}
+              {t(lang, "analysisFailed")}: {shown.error}
             </p>
           ) : (
             <ZoomStage
               src={null}
               alt={selected?.name ?? ""}
-              mediaReady={imageReady}
-              mediaLoading={Boolean(selected) && !imageReady}
+              mediaReady={Boolean(gray)}
+              mediaLoading={Boolean(selected) && !gray}
               media={<canvas ref={canvasRef} role="img" aria-label={selected?.name ?? ""} className="block max-h-none max-w-none" />}
               mediaOverlay={
-                result && !result.error ? (
-                  <svg viewBox={`0 0 ${result.width} ${result.height}`} className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
-                    {result.comets.map((c) => {
+                shown && !shown.error ? (
+                  <svg viewBox={`0 0 ${shown.width} ${shown.height}`} className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+                    {shown.comets.map((c) => {
                       const status = deleted.has(c.key) ? "deleted" : c.status;
                       const color = statusColor(status);
                       const pts = (c.hull ?? c.outline).map((p) => p.join(",")).join(" ");
@@ -719,7 +483,7 @@ export function AnalysisDetail() {
                         <g
                           key={c.key}
                           data-no-pan
-                          style={{ pointerEvents: "auto", cursor: "pointer" }}
+                          style={{ pointerEvents: "auto", cursor: isPreview ? "default" : "pointer" }}
                           onClick={(e) => {
                             e.stopPropagation();
                             setActiveKey(c.key);
@@ -733,7 +497,7 @@ export function AnalysisDetail() {
                             fill={active ? `${color}22` : "transparent"}
                             stroke={color}
                             strokeWidth={active ? 2.5 : 1.5}
-                            strokeDasharray={status === "deleted" ? "6 4" : undefined}
+                            strokeDasharray={status === "deleted" ? "6 4" : isPreview ? "2 2" : undefined}
                             vectorEffect="non-scaling-stroke"
                           />
                           {c.head && status !== "invalid" && (
@@ -744,7 +508,7 @@ export function AnalysisDetail() {
                               x={Math.max(...(c.hull ?? c.outline).map((p) => p[0])) + 4}
                               y={Math.min(...(c.hull ?? c.outline).map((p) => p[1])) + 14}
                               fill={color}
-                              fontSize={Math.max(12, result.width / 70)}
+                              fontSize={Math.max(12, shown.width / 70)}
                               fontWeight={600}
                             >
                               {c.num}
@@ -757,12 +521,13 @@ export function AnalysisDetail() {
                 ) : null
               }
             >
-              <div className="absolute left-3 top-3 z-20 flex flex-wrap gap-1.5 rounded-xl bg-black/60 px-2.5 py-1.5 text-xs text-white/80 backdrop-blur">
+              <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1.5 rounded-xl bg-black/60 px-2.5 py-1.5 text-xs text-white/80 backdrop-blur">
+                {isPreview && <span className="rounded-md bg-sky-400 px-1.5 py-0.5 font-medium text-slate-950">{t(lang, "previewBadge")}</span>}
                 {(["valid", "outlier", "invalid", "deleted"] as const).map((s) => (
                   <span key={s} className="inline-flex items-center gap-1">
                     <span className="h-2.5 w-2.5 rounded-sm border" style={{ borderColor: statusColor(s), borderStyle: s === "deleted" ? "dashed" : "solid" }} />
                     {t(lang, `status_${s}` as MsgKey)}
-                    {selected?.counts ? ` ${selected.counts[s]}` : ""}
+                    {shown ? ` ${counts[s]}` : ""}
                   </span>
                 ))}
               </div>
@@ -816,15 +581,16 @@ export function AnalysisDetail() {
 
         {/* parameters, comet, statistics */}
         <Glass as="aside" shape="panel" className="flex min-h-0 flex-col overflow-auto border-t lg:border-l lg:border-t-0">
-          <section className="border-b border-[var(--line)] p-4">
+          <section className="grid gap-3 border-b border-[var(--line)] p-4">
             <h2 className="text-sm font-semibold">{t(lang, "analysisParams")}</h2>
+            {neverRun && <SetupBanner count={files.length} unit={t(lang, "nFiles")} busy={busy} onStart={() => void applyAll()} />}
             {draft && (
-              <div className="mt-3 grid gap-3 text-sm">
-                <label className="grid gap-1 text-[var(--text-dim)]">
+              <>
+                <label className="grid gap-1 text-sm text-[var(--text-dim)]">
                   {t(lang, "cometChannel")}
                   <select
                     value={draft.channel ?? ""}
-                    onChange={(e) => setDraft({ ...draft, channel: e.target.value === "" ? null : Number(e.target.value) })}
+                    onChange={(e) => set({ channel: e.target.value === "" ? null : Number(e.target.value) })}
                     className="h-9 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-[var(--text)]"
                   >
                     <option value="">{t(lang, "channelAuto")}</option>
@@ -835,59 +601,73 @@ export function AnalysisDetail() {
                     ))}
                   </select>
                 </label>
-                <div className="grid gap-1 text-[var(--text-dim)]">
+                <div className="grid gap-1 text-sm text-[var(--text-dim)]">
                   {t(lang, "tailDirection")}
                   <div className="grid grid-cols-4 gap-0.5 rounded-lg bg-[var(--bg)] p-0.5">
                     {(["right", "left", "up", "down"] as const).map((d) => (
-                      <button key={d} type="button" onClick={() => setDraft({ ...draft, tail: d })} className={segmented(draft.tail === d)} title={t(lang, `tail_${d}` as MsgKey)}>
+                      <button key={d} type="button" onClick={() => set({ tail: d })} className={segmented(draft.tail === d)} title={t(lang, `tail_${d}` as MsgKey)}>
                         {tailIcons[d]}
                       </button>
                     ))}
                   </div>
                 </div>
-                <label className="grid gap-1 text-[var(--text-dim)]">
-                  {t(lang, "headFinding")}
-                  <select
-                    value={draft.head_mode}
-                    onChange={(e) => setDraft({ ...draft, head_mode: e.target.value as CometParams["head_mode"] })}
-                    className="h-9 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-[var(--text)]"
-                  >
-                    <option value="auto">{t(lang, "headAuto")}</option>
-                    <option value="profile">{t(lang, "headProfile")}</option>
-                    <option value="brightest">{t(lang, "headBrightest")}</option>
-                  </select>
-                </label>
-                <div className="flex items-center justify-between gap-2">
-                  <label className="inline-flex items-center gap-2">
-                    <input type="checkbox" checked={draft.background_correction} onChange={(e) => setDraft({ ...draft, background_correction: e.target.checked })} />
-                    {t(lang, "bgCorrection")}
-                  </label>
-                  <label className="inline-flex items-center gap-1.5 text-[var(--text-dim)]">
-                    {t(lang, "minArea")}
-                    <input
-                      type="number"
-                      min={16}
-                      step={50}
-                      value={draft.min_area}
-                      onChange={(e) => setDraft({ ...draft, min_area: Math.max(16, Number(e.target.value) || 400) })}
-                      className="h-8 w-20 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2 text-right font-mono text-[var(--text)]"
-                    />
-                  </label>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button type="button" disabled={busy} onClick={() => void applyParams("all")} className="primary-action min-h-9 px-2 disabled:opacity-50">
-                    <ArrowClockwise size={15} className="shrink-0" />
-                    {t(lang, "reanalyzeAll")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy || !selected}
-                    onClick={() => void applyParams("image")}
-                    className="inline-flex min-h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--line-strong)] bg-[var(--bg)] px-2 text-sm font-medium hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
-                  >
-                    {t(lang, "onlyThisImage")}
-                  </button>
-                </div>
+                <ParamSelect
+                  label={t(lang, "headFinding")}
+                  value={draft.head_mode}
+                  onChange={(v) => set({ head_mode: v })}
+                  options={[
+                    { value: "auto", label: t(lang, "headAuto") },
+                    { value: "profile", label: t(lang, "headProfile") },
+                    { value: "brightest", label: t(lang, "headBrightest") },
+                  ]}
+                />
+                <ParamSelect
+                  label={t(lang, "thresholdMethod")}
+                  value={draft.threshold_method}
+                  onChange={(v) => set({ threshold_method: v })}
+                  hint={t(lang, "thresholdMethodHint")}
+                  options={[
+                    { value: "huang", label: "Huang (OpenComet)" },
+                    { value: "otsu", label: "Otsu" },
+                    { value: "li", label: "Li" },
+                    { value: "triangle", label: "Triangle" },
+                    { value: "manual", label: t(lang, "manual") },
+                  ]}
+                />
+                {draft.threshold_method === "manual" ? (
+                  <ParamNumber label={t(lang, "thresholdValue")} value={draft.threshold_value} min={1} max={254} onChange={(v) => set({ threshold_value: v })} hint={t(lang, "thresholdValueHint")} />
+                ) : (
+                  <ParamNumber label={t(lang, "thresholdOffset")} value={draft.threshold_offset} min={-128} max={128} onChange={(v) => set({ threshold_offset: v })} hint={t(lang, "thresholdOffsetHint")} />
+                )}
+                <ParamNumber label={t(lang, "minArea")} value={draft.min_area} min={16} step={50} unit="px" onChange={(v) => set({ min_area: v })} />
+                <ParamCheck label={t(lang, "bgCorrection")} checked={draft.background_correction} onChange={(v) => set({ background_correction: v })} />
+                <Advanced
+                  onReset={() =>
+                    setDraft((d) => (d ? { ...COMET_DEFAULTS, channel: d.channel, tail: d.tail, head_mode: d.head_mode } : d))
+                  }
+                >
+                  <ParamNumber label={t(lang, "medianRadius")} value={draft.median_radius} min={0} max={50} step={1} unit="px" onChange={(v) => set({ median_radius: v })} hint={t(lang, "medianRadiusHint")} />
+                  <ParamNumber label={t(lang, "rollingBall")} value={draft.rolling_ball_factor} min={0.02} max={2} step={0.05} unit="×" onChange={(v) => set({ rolling_ball_factor: v })} hint={t(lang, "rollingBallHint")} />
+                  <ParamNumber label={t(lang, "openingIterations")} value={draft.opening_iterations} min={0} max={10} onChange={(v) => set({ opening_iterations: v })} hint={t(lang, "openingHint")} />
+                  <ParamNumber label={t(lang, "maxArea")} value={draft.max_area} min={0} step={500} unit="px" zeroLabel={t(lang, "noLimit")} onChange={(v) => set({ max_area: v })} />
+                  <ParamCheck label={t(lang, "excludeEdge")} checked={draft.exclude_edge} onChange={(v) => set({ exclude_edge: v })} />
+                  <p className="pt-1 text-xs font-medium text-[var(--text-dim)]">{t(lang, "validityRules")}</p>
+                  <ParamNumber label={t(lang, "convexityMin")} value={draft.convexity_min} min={0} max={1} step={0.01} onChange={(v) => set({ convexity_min: v })} hint={t(lang, "convexityHint")} />
+                  <ParamNumber label={t(lang, "symmetryMax")} value={draft.symmetry_max} min={0} max={5} step={0.05} onChange={(v) => set({ symmetry_max: v })} hint={t(lang, "symmetryHint")} />
+                  <ParamNumber label={t(lang, "centerlineMax")} value={draft.centerline_max} min={0} max={1} step={0.01} onChange={(v) => set({ centerline_max: v })} hint={t(lang, "centerlineHint")} />
+                  <ParamNumber label={t(lang, "outlierCenterline")} value={draft.outlier_centerline} min={0} max={1} step={0.01} onChange={(v) => set({ outlier_centerline: v })} />
+                  <ParamNumber label={t(lang, "outlierArea")} value={draft.outlier_area_sigma} min={0.5} max={10} step={0.5} unit="σ" onChange={(v) => set({ outlier_area_sigma: v })} />
+                </Advanced>
+                <PreviewBar
+                  state={pv}
+                  summary={pv.preview ? `${counts.valid}+${counts.outlier} · ${t(lang, "levelShort")} ${pv.preview.threshold ?? "–"}` : undefined}
+                  busyAnalysis={busy}
+                  canApplyImage={Boolean(selected)}
+                  applyAllLabel={neverRun ? t(lang, "startAnalysisN") : t(lang, "applyAllAndRun")}
+                  onApplyAll={() => void applyAll()}
+                  onApplyImage={() => void applyImage()}
+                  onDiscard={() => saved && setDraft({ ...saved })}
+                />
                 {selected?.override && (
                   <p className="flex items-center justify-between gap-2 rounded-lg bg-[var(--accent-soft)] px-2.5 py-1.5 text-xs text-[var(--accent)]">
                     {t(lang, "imageHasOverride")}
@@ -896,7 +676,7 @@ export function AnalysisDetail() {
                     </button>
                   </p>
                 )}
-              </div>
+              </>
             )}
           </section>
 
@@ -956,7 +736,7 @@ export function AnalysisDetail() {
                 {t(lang, "includeOutliers")}
               </label>
             </div>
-            {summary && summary.groups.length > 0 ? (
+            {summary && summary.total > 0 ? (
               <>
                 <div className="mt-2 overflow-x-auto">
                   <table className="w-full text-sm">
@@ -994,9 +774,9 @@ export function AnalysisDetail() {
                 <p className="mt-1 text-2xs leading-4 text-[var(--text-dim)]">{t(lang, "statsHint")}</p>
               </>
             ) : (
-              <p className="mt-3 text-xs text-[var(--text-dim)]">{busy ? t(lang, "analyzing") : t(lang, "noComets")}</p>
+              <p className="mt-3 text-xs text-[var(--text-dim)]">{busy ? t(lang, "analyzing") : neverRun ? t(lang, "notAnalyzedYet") : t(lang, "noComets")}</p>
             )}
-            <button type="button" disabled={exporting || busy} onClick={() => void startExport()} className="primary-action mt-4 w-full min-h-10 disabled:opacity-50">
+            <button type="button" disabled={exporting || busy || neverRun} onClick={() => void startExport()} className="primary-action mt-4 w-full min-h-10 disabled:opacity-50">
               <ExportIcon size={16} className="shrink-0" />
               {t(lang, "exportAnalysis")}
             </button>

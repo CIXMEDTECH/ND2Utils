@@ -369,6 +369,17 @@ export interface OrganizeGroup {
   names: string[];
 }
 
+export interface OrganizeResult {
+  groups: OrganizeGroup[];
+  files: number;
+  unchanged: number;
+  regroup: boolean;
+  folders_to_prune: string[];
+  moved?: number;
+  pruned?: string[];
+  undo?: MoveUndo;
+}
+
 export async function organizeByMagnification(body: {
   folder: string;
   recursive?: boolean;
@@ -376,7 +387,8 @@ export async function organizeByMagnification(body: {
   unknown_label?: string;
   file_ids?: string[];
   since?: number;
-}): Promise<{ groups: OrganizeGroup[]; files: number; moved?: number; undo?: MoveUndo }> {
+  regroup?: boolean;
+}): Promise<OrganizeResult> {
   return json(await send("/api/organize/magnification", "POST", body));
 }
 
@@ -475,10 +487,12 @@ export async function projectionUrl(
   return URL.createObjectURL(await res.blob());
 }
 
-// --- analyses (comet assay) -------------------------------------------------------------
+// --- analyses (comet assay, EdU) --------------------------------------------------------
 
+export type AnalysisType = "comet" | "edu";
 export type TailDirection = "right" | "left" | "up" | "down";
 export type HeadMode = "auto" | "profile" | "brightest";
+export type CometThresholdMethod = "huang" | "otsu" | "li" | "triangle" | "manual";
 
 export interface CometParams {
   channel: number | null;
@@ -486,34 +500,145 @@ export interface CometParams {
   background_correction: boolean;
   head_mode: HeadMode;
   min_area: number;
+  threshold_method: CometThresholdMethod;
+  threshold_offset: number;
+  threshold_value: number;
+  median_radius: number;
+  rolling_ball_factor: number;
+  opening_iterations: number;
+  max_area: number;
+  exclude_edge: boolean;
+  convexity_min: number;
+  symmetry_max: number;
+  centerline_max: number;
+  outlier_centerline: number;
+  outlier_area_sigma: number;
+}
+
+export const COMET_DEFAULTS: CometParams = {
+  channel: null,
+  tail: "right",
+  background_correction: true,
+  head_mode: "auto",
+  min_area: 400,
+  threshold_method: "huang",
+  threshold_offset: 0,
+  threshold_value: 30,
+  median_radius: 10,
+  rolling_ball_factor: 0.3,
+  opening_iterations: 3,
+  max_area: 0,
+  exclude_edge: true,
+  convexity_min: 0.85,
+  symmetry_max: 0.5,
+  centerline_max: 0.2,
+  outlier_centerline: 0.15,
+  outlier_area_sigma: 2,
+};
+
+export type EduKind = "auto" | "green" | "red" | "farred";
+export type EduCountMode = "nucleus" | "independent";
+export type SegMethod = "otsu" | "li" | "triangle" | "manual";
+export type EduMethod = "li" | "log-otsu" | "otsu" | "manual";
+
+export interface EduParams {
+  nucleus_channel: number | null;
+  edu_channel: number | null;
+  edu_kind: EduKind;
+  count_mode: EduCountMode;
+  smooth_sigma: number;
+  background_radius: number;
+  nucleus_method: SegMethod;
+  nucleus_factor: number;
+  nucleus_threshold: number;
+  split_touching: boolean;
+  split_strength: number;
+  min_area: number;
+  max_area: number;
+  exclude_border: boolean;
+  edu_method: EduMethod;
+  edu_threshold: number;
+  edu_scope: "analysis" | "image";
+  edu_seg_method: SegMethod;
+  edu_seg_factor: number;
+  edu_seg_threshold: number;
+}
+
+export const EDU_DEFAULTS: EduParams = {
+  nucleus_channel: null,
+  edu_channel: null,
+  edu_kind: "auto",
+  count_mode: "nucleus",
+  smooth_sigma: 1.5,
+  background_radius: 0,
+  nucleus_method: "otsu",
+  nucleus_factor: 1,
+  nucleus_threshold: 0,
+  split_touching: true,
+  split_strength: 2,
+  min_area: 0,
+  max_area: 0,
+  exclude_border: false,
+  edu_method: "li",
+  edu_threshold: 0,
+  edu_scope: "analysis",
+  edu_seg_method: "otsu",
+  edu_seg_factor: 1,
+  edu_seg_threshold: 0,
+};
+
+/** EdU parameters that only reclassify nuclei (no new segmentation). */
+export const EDU_CLASSIFY_KEYS = ["count_mode", "edu_method", "edu_threshold", "edu_scope"] as const;
+
+export interface ChannelBrief {
+  index: number;
+  name: string;
+  color: number[];
+}
+
+export interface EduCounts {
+  nuclei: number;
+  positive: number;
+  independent: number;
+  excluded: number;
+  ratio: number | null;
+  ratio_independent: number | null;
 }
 
 export interface AnalysisFile {
   file_id: string;
   name: string;
+  file_name?: string;
   folder: string;
   group: string;
   width: number | null;
   height: number | null;
-  channels: { index: number; name: string; color: number[] }[];
-  override: Partial<CometParams> | null;
+  channels: ChannelBrief[];
+  override: Record<string, unknown> | null;
   analyzed?: boolean;
   error?: string | null;
-  counts?: { valid: number; outlier: number; invalid: number; deleted: number };
+  /** Comet: valid/outlier/invalid/deleted; EdU: see EduCounts. */
+  counts?: { valid: number; outlier: number; invalid: number; deleted: number } & Partial<EduCounts>;
   analyzed_at?: number;
+  // EdU
+  partner?: { file_id: string; name: string; channels: ChannelBrief[] } | null;
+  threshold?: number | null;
 }
 
 export interface AnalysisInfo {
   id: string;
-  type: "comet";
+  type: AnalysisType;
   name: string;
-  params: CometParams;
+  params: CometParams | EduParams;
   status: "idle" | "queued" | "running" | "done";
   progress: number;
   created_at: number;
   updated_at: number;
   file_count: number;
   files: AnalysisFile[] | null;
+  // EdU
+  unpaired?: { file_id: string; name: string; reason: "no_nucleus" | "no_edu" }[];
+  pooled_thresholds?: Record<string, number | null>;
 }
 
 export interface Comet {
@@ -534,11 +659,66 @@ export interface CometResult {
   width: number;
   height: number;
   channel: number;
+  threshold?: number;
   comets: Comet[];
   deleted: number[];
   um_per_px: number | null;
   error: string | null;
-  analyzed_at: number;
+  analyzed_at: number | null;
+  params?: CometParams;
+  preview?: boolean;
+}
+
+export interface EduNucleus {
+  key: number;
+  /** Flat [x0, y0, x1, y1, …] in image pixels. */
+  outline: number[];
+  cx: number;
+  cy: number;
+  area: number;
+  dapi: number;
+  edu: number;
+}
+
+export interface EduObject {
+  key: number;
+  outline: number[];
+  cx: number;
+  cy: number;
+  area: number;
+  mean: number;
+}
+
+export interface EduChannelMeta {
+  file_id: string;
+  file: string;
+  channel: number;
+  channel_name: string;
+  color: number[];
+}
+
+export interface EduResult {
+  file_id: string;
+  name: string;
+  width: number;
+  height: number;
+  nuclei: EduNucleus[];
+  edu_objects: EduObject[];
+  marks: Record<string, "positive" | "negative" | "excluded">;
+  edu_deleted: number[];
+  auto_thresholds: Record<string, number | null>;
+  nucleus_level: number;
+  edu_seg_level: number;
+  diameter: number;
+  median_area: number;
+  background_radius: number;
+  nucleus?: EduChannelMeta;
+  edu?: EduChannelMeta;
+  um_per_px: number | null;
+  error: string | null;
+  analyzed_at: number | null;
+  params?: EduParams;
+  preview?: boolean;
 }
 
 export interface Stat {
@@ -557,12 +737,52 @@ export interface AnalysisSummary {
   groups: { group: string; metrics: Record<string, Stat>; values: Record<string, number[]> }[];
 }
 
+export interface EduGroupSummary {
+  group: string;
+  fields: number;
+  nuclei: number;
+  positive: number;
+  independent: number;
+  pooled_percent: number | null;
+  pooled_percent_independent: number | null;
+  percent: Stat;
+  percent_independent: Stat;
+  values: number[];
+  values_independent: number[];
+  names: string[];
+}
+
+export interface EduSummary {
+  type: "edu";
+  count_mode: EduCountMode;
+  groups: EduGroupSummary[];
+  threshold: number | null;
+  pooled: Record<string, number | null>;
+  total: number;
+}
+
+export interface PairingResult {
+  fields: { file_id: string; name: string; folder: string; nucleus: string; edu: string | null }[];
+  unpaired: { file_id: string; name: string; reason: "no_nucleus" | "no_edu" }[];
+}
+
 export async function listAnalyses(): Promise<AnalysisInfo[]> {
   return (await json<{ analyses: AnalysisInfo[] }>(await fetch("/api/analyses"))).analyses;
 }
 
-export async function createAnalysis(body: { name?: string; file_ids?: string[]; folders?: string[]; params?: Partial<CometParams> }): Promise<AnalysisInfo> {
+export async function createAnalysis(body: {
+  name?: string;
+  type?: AnalysisType;
+  file_ids?: string[];
+  folders?: string[];
+  params?: Partial<CometParams> | Partial<EduParams>;
+  run?: boolean;
+}): Promise<AnalysisInfo> {
   return json(await send("/api/analyses", "POST", body));
+}
+
+export async function pairAnalysisFiles(body: { file_ids?: string[]; folders?: string[]; edu_kind?: EduKind }): Promise<PairingResult> {
+  return json(await send("/api/analyses/pairing", "POST", body));
 }
 
 export async function getAnalysis(id: string): Promise<AnalysisInfo> {
@@ -571,7 +791,7 @@ export async function getAnalysis(id: string): Promise<AnalysisInfo> {
 
 export async function updateAnalysis(
   id: string,
-  body: Partial<{ name: string; params: Partial<CometParams>; groups: Record<string, string>; file_ids: string[] }>,
+  body: Partial<{ name: string; params: Partial<CometParams> | Partial<EduParams>; groups: Record<string, string>; file_ids: string[] }>,
 ): Promise<AnalysisInfo> {
   return json(await send(`/api/analyses/${id}`, "PATCH", body));
 }
@@ -584,28 +804,60 @@ export async function runAnalysis(id: string, fileIds?: string[]): Promise<{ que
   return json(await send(`/api/analyses/${id}/run`, "POST", { file_ids: fileIds ?? null }));
 }
 
-export async function getCometResult(id: string, fileId: string): Promise<CometResult | null> {
+export async function getAnalysisResult<T = CometResult>(id: string, fileId: string): Promise<T | null> {
   const res = await fetch(`/api/analyses/${id}/results/${fileId}`);
   if (res.status === 202) return null;
   return json(res);
 }
 
-export async function patchCometResult(
+export const getCometResult = (id: string, fileId: string) => getAnalysisResult<CometResult>(id, fileId);
+
+/** One image analysed with draft parameters; nothing is stored. */
+export async function previewAnalysis<T = CometResult>(id: string, fileId: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  return json(
+    await fetch(`/api/analyses/${id}/preview`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ file_id: fileId, params }),
+      signal,
+    }),
+  );
+}
+
+export async function patchAnalysisResult(
   id: string,
   fileId: string,
-  body: { deleted?: number[]; params?: Partial<CometParams>; reset_params?: boolean },
+  body: {
+    deleted?: number[];
+    params?: Record<string, unknown>;
+    reset_params?: boolean;
+    marks?: Record<string, "positive" | "negative" | "excluded">;
+    edu_deleted?: number[];
+  },
 ): Promise<unknown> {
   return json(await send(`/api/analyses/${id}/results/${fileId}`, "PATCH", body));
 }
 
+export const patchCometResult = patchAnalysisResult;
+
 export async function analysisSummary(id: string, includeOutliers: boolean): Promise<AnalysisSummary> {
   return json(await fetch(`/api/analyses/${id}/summary?include_outliers=${includeOutliers}`));
+}
+
+export async function eduSummary(id: string): Promise<EduSummary> {
+  return json(await fetch(`/api/analyses/${id}/summary`));
 }
 
 export async function exportAnalysis(id: string): Promise<{ id: string }> {
   return json(await send(`/api/analyses/${id}/export`, "POST"));
 }
 
-export function analysisImageUrl(id: string, fileId: string, version: number | undefined): string {
-  return `/api/analyses/${id}/image/${fileId}?v=${version ?? 0}`;
+export function analysisImageUrl(
+  id: string,
+  fileId: string,
+  version: number | null | undefined,
+  opts: { role?: "nucleus" | "edu"; channel?: number | null } = {},
+): string {
+  const extra = `${opts.role ? `&role=${opts.role}` : ""}${opts.channel !== undefined && opts.channel !== null ? `&channel=${opts.channel}` : ""}`;
+  return `/api/analyses/${id}/image/${fileId}?v=${version ?? 0}${extra}`;
 }

@@ -745,6 +745,26 @@ def undo_move(owner_id: str, undo: dict[str, Any]) -> dict[str, int]:
     return {"restored": restored, "skipped": skipped}
 
 
+def prune_empty_folders(owner_id: str, candidates: list[str]) -> list[str]:
+    """Forget registered folders that hold no file any more (with their empty subfolders).
+    Returns the removed paths, for undo_move()'s `folders_removed`."""
+    picked = {normalize_folder(f) for f in candidates if f}
+    if not picked:
+        return []
+    with _LOCK:
+        in_use = {rec.get("folder") or "" for rec in load_index().values() if _owned(rec, owner_id)}
+        empty = {f for f in picked if not any(_in_folder(u, f) for u in in_use)}
+        if not empty:
+            return []
+        data = _load_folders()
+        current = set(data.get(owner_id) or [])
+        removed = sorted(f for f in current if any(_in_folder(f, e) for e in empty))
+        if removed:
+            data[owner_id] = sorted(current.difference(removed))
+            _write_json(settings.folders_path, data)
+    return removed
+
+
 def transfer(
     source_owner: str,
     target_owner: str,

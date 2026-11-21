@@ -6,6 +6,7 @@ import {
   ArrowsLeftRight,
   Binoculars,
   ChartBar,
+  Dna,
   ClipboardText,
   ArrowElbowDownRight,
   FolderOpen,
@@ -464,14 +465,29 @@ export function Workspace() {
     }
   }
 
-  async function startCometAnalysis(items: MoveSet, label: string) {
+  /** New analysis of these files/folders; it opens in set-up mode (tune, preview, then run). */
+  async function startAnalysis(type: "comet" | "edu", items: MoveSet, label: string) {
     try {
       setError(null);
-      const rec = await createAnalysis({ name: label, file_ids: items.file_ids, folders: items.folders });
-      nav(`/analysis/comet/${rec.id}`);
+      const rec = await createAnalysis({ type, name: label, file_ids: items.file_ids, folders: items.folders, run: false });
+      nav(`/analysis/${type}/${rec.id}`);
     } catch (err) {
       setError(detailMessage(err, lang));
     }
+  }
+
+  function analysisMenuItems(items: MoveSet, label: string, count?: number): MenuItem[] {
+    const suffix = count && count > 1 ? ` (${count})` : "";
+    return [
+      { key: "comet", label: `${t(lang, "cometAnalyze")}${suffix}`, icon: <ChartBar size={15} />, onSelect: () => void startAnalysis("comet", items, label) },
+      { key: "edu", label: `${t(lang, "eduAnalyze")}${suffix}`, icon: <Dna size={15} />, onSelect: () => void startAnalysis("edu", items, label) },
+    ];
+  }
+
+  /** "Analyse ▾" buttons: the analysis tools as a small menu under the button. */
+  function openAnalysisMenu(event: React.MouseEvent, items: MoveSet, label: string) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenu({ x: box.left, y: box.bottom + 6, title: t(lang, "analysis"), items: analysisMenuItems(items, label) });
   }
 
   /** "Add to project": pick one of the recent projects or start a new one (it used to create a
@@ -799,13 +815,10 @@ export function Workspace() {
             ]
           : []),
         { key: "organize", label: t(lang, "organizeByMag"), icon: <Binoculars size={15} />, disabled: count === 0, onSelect: () => setOrganizeFolder(path) },
-        {
-          key: "comet",
-          label: t(lang, "cometAnalyze"),
-          icon: <ChartBar size={15} />,
-          disabled: count === 0,
-          onSelect: () => void startCometAnalysis(picked.folders.length || picked.file_ids.length ? picked : { file_ids: [], folders: [path] }, path.split("/").pop() || t(lang, "workspaceRoot")),
-        },
+        ...analysisMenuItems(
+          picked.folders.length || picked.file_ids.length ? picked : { file_ids: [], folders: [path] },
+          path.split("/").pop() || t(lang, "workspaceRoot"),
+        ).map((item) => ({ ...item, disabled: count === 0 })),
         { key: "export", label: t(lang, "exportEllipsis"), icon: <ExportIcon size={15} />, separated: true, disabled: count === 0, onSelect: () => exportFolder(path) },
         { key: "upload", label: t(lang, "uploadFilesHere"), icon: <UploadSimple size={15} />, separated: true, onSelect: () => uploadInto(path, false) },
         { key: "upload-dir", label: t(lang, "uploadFolderHere"), icon: <FolderSimplePlus size={15} />, onSelect: () => uploadInto(path, true) },
@@ -856,12 +869,7 @@ export function Workspace() {
         icon: <SquaresFour size={15} />,
         onSelect: () => void handleOpenInStudio((exportChecked ? checkedFiles : [file]).map((f) => f.id)),
       },
-      {
-        key: "comet",
-        label: exportChecked ? `${t(lang, "cometAnalyze")} (${checkedFiles.length})` : t(lang, "cometAnalyze"),
-        icon: <ChartBar size={15} />,
-        onSelect: () => void startCometAnalysis(selectionFor({ file: file.id }), file.folder.split("/").pop() || file.name),
-      },
+      ...analysisMenuItems(selectionFor({ file: file.id }), file.folder.split("/").pop() || file.name, exportChecked ? checkedFiles.length : undefined),
       isSlide(file)
         ? { key: "slide", label: t(lang, "openSlide"), icon: <Stack size={15} />, onSelect: () => nav(`/slide/${file.id}`) }
         : { key: "advanced", label: t(lang, "openAdvanced"), icon: <SlidersHorizontal size={15} />, onSelect: () => nav(`/advanced/${file.id}`) },
@@ -1189,7 +1197,13 @@ export function Workspace() {
                   <SquaresFour size={15} className="shrink-0" />
                 </button>
               )}
-              <button type="button" onClick={() => void startCometAnalysis(currentSelection(), `${pickedCount} ${t(lang, "items")}`)} className={barButton} title={t(lang, "cometAnalyze")}>
+              <button
+                type="button"
+                onClick={(event) => openAnalysisMenu(event, currentSelection(), `${pickedCount} ${t(lang, "items")}`)}
+                className={barButton}
+                title={t(lang, "analysis")}
+                aria-haspopup="menu"
+              >
                 <ChartBar size={15} className="shrink-0" />
               </button>
               <button
@@ -1643,17 +1657,19 @@ export function Workspace() {
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            void startCometAnalysis(
+                          onClick={(event) =>
+                            openAnalysisMenu(
+                              event,
                               selectedIds.length > 0 ? { file_ids: selectedIds, folders: [] } : { file_ids: [selected.id], folders: [] },
                               selected.folder.split("/").pop() || selected.name,
                             )
                           }
                           className={secondaryAction}
-                          title={t(lang, "cometAnalyze")}
+                          title={t(lang, "analysis")}
+                          aria-haspopup="menu"
                         >
                           <ChartBar size={16} weight="duotone" className="shrink-0" />
-                          <span className="truncate">{t(lang, "cometShort")}</span>
+                          <span className="truncate">{t(lang, "analyzeShort")}</span>
                         </button>
                         {(selected.cropped || selected.edited) && (
                           <button

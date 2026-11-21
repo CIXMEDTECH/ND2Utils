@@ -19,6 +19,10 @@ plugin step by step, with its constants:
    DNA %, tail moment (tail length × tail DNA fraction), Olive moment (tail DNA fraction ×
    distance between the intensity-median columns of tail and head).
 
+The constants above are the defaults of `CometParams`; threshold method/offset, filter radii,
+opening, area limits, edge handling and the validity/outlier limits can be changed (and are
+previewed on one image before a batch runs).
+
 Comets must lie horizontally with the head on the left; other directions are rotated first
 (`tail` parameter) and coordinates are mapped back. Per-comet values keep OpenComet's quirks
 (integer division in the height/width ratio, the first-column top of the bright region) so
@@ -38,10 +42,12 @@ from scipy.spatial import ConvexHull, QhullError
 
 HeadMode = Literal["auto", "profile", "brightest"]
 TailDirection = Literal["right", "left", "up", "down"]
+ThresholdMethod = Literal["huang", "otsu", "li", "triangle", "manual"]
 
 MIN_AREA = 400
 MEDIAN_RADIUS = 10
 ROLLING_BALL_FACTOR = 0.3
+OPENING_ITERATIONS = 3
 
 METRICS = (
     "CometArea", "CometIntensity", "CometLength", "CometDNA",
@@ -53,11 +59,45 @@ METRICS = (
 
 @dataclass
 class CometParams:
+    """Analysis parameters. The defaults are OpenComet's constants; the advanced ones exist so
+    unusual images (dim, crowded, other magnifications) can be tuned and previewed."""
+
     channel: int | None = None  # None: the brightest channel
     tail: TailDirection = "right"
     background_correction: bool = True
     head_mode: HeadMode = "auto"
     min_area: int = MIN_AREA
+    # Advanced: segmentation.
+    threshold_method: ThresholdMethod = "huang"
+    threshold_offset: int = 0  # added to the automatic level (8-bit grey values)
+    threshold_value: int = 30  # used by "manual"
+    median_radius: float = MEDIAN_RADIUS
+    rolling_ball_factor: float = ROLLING_BALL_FACTOR
+    opening_iterations: int = OPENING_ITERATIONS
+    max_area: int = 0  # 0: no upper limit
+    exclude_edge: bool = True
+    # Advanced: validity and outlier rules.
+    convexity_min: float = 0.85
+    symmetry_max: float = 0.5
+    centerline_max: float = 0.2
+    outlier_centerline: float = 0.15
+    outlier_area_sigma: float = 2.0
+
+    # name -> (low, high, integer?)
+    _RANGES = {
+        "min_area": (16, 10_000_000, True),
+        "threshold_offset": (-128, 128, True),
+        "threshold_value": (1, 254, True),
+        "median_radius": (0, 50, False),
+        "rolling_ball_factor": (0.02, 2.0, False),
+        "opening_iterations": (0, 10, True),
+        "max_area": (0, 100_000_000, True),
+        "convexity_min": (0.0, 1.0, False),
+        "symmetry_max": (0.0, 5.0, False),
+        "centerline_max": (0.0, 1.0, False),
+        "outlier_centerline": (0.0, 1.0, False),
+        "outlier_area_sigma": (0.5, 10.0, False),
+    }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "CometParams":
@@ -67,13 +107,31 @@ class CometParams:
             out.channel = int(raw["channel"])
         if raw.get("tail") in ("right", "left", "up", "down"):
             out.tail = raw["tail"]
-        if "background_correction" in raw:
-            out.background_correction = bool(raw["background_correction"])
+        for key in ("background_correction", "exclude_edge"):
+            if key in raw and raw[key] is not None:
+                setattr(out, key, bool(raw[key]))
         if raw.get("head_mode") in ("auto", "profile", "brightest"):
             out.head_mode = raw["head_mode"]
-        if raw.get("min_area"):
-            out.min_area = max(16, int(raw["min_area"]))
+        if raw.get("threshold_method") in ("huang", "otsu", "li", "triangle", "manual"):
+            out.threshold_method = raw["threshold_method"]
+        for key, (lo, hi, integer) in cls._RANGES.items():
+            value = raw.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(num):
+                continue
+            if key == "min_area" and num <= 0:
+                continue  # 0 / empty: keep the default
+            num = min(hi, max(lo, num))
+            setattr(out, key, int(round(num)) if integer else num)
         return out
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: getattr(self, k) for k in self.__dataclass_fields__}
 
 
 # --- grey conversion --------------------------------------------------------------
@@ -172,17 +230,47 @@ def huang_threshold(hist: np.ndarray) -> int:
     return best_t
 
 
-def segment(gray: np.ndarray, background_correction: bool = True) -> np.ndarray:
+def auto_level(seg: np.ndarray, method: str) -> int:
+    """Automatic 8-bit threshold level of the segmentation copy."""
+    hist = np.bincount(seg.ravel(), minlength=256)
+    if method == "huang":
+        return huang_threshold(hist)
+    from skimage import filters
+
+    if int(seg.min()) == int(seg.max()):
+        return int(seg.min())
+    fn = {"otsu": filters.threshold_otsu, "li": filters.threshold_li, "triangle": filters.threshold_triangle}[method]
+    return int(fn(seg))
+
+
+def segment_level(gray: np.ndarray, params: "CometParams | bool | None" = None) -> tuple[np.ndarray, int]:
+    """Foreground mask and the threshold level that produced it."""
+    if not isinstance(params, CometParams):
+        params = CometParams(background_correction=True if params is None else bool(params))
     seg = gray
-    if background_correction:
-        seg = median_filter(seg)
-        seg = subtract_background(seg, ROLLING_BALL_FACTOR * min(seg.shape))
-    level = huang_threshold(np.bincount(seg.ravel(), minlength=256))
-    mask = seg > level  # dark background: foreground = pixels above the Huang level
-    # ImageJ binary dilate() ×3 then erode() ×3 with a normal LUT = opening of the foreground.
-    opened = ndimage.minimum_filter(mask.astype(np.uint8), size=7, mode="nearest")
-    opened = ndimage.maximum_filter(opened, size=7, mode="nearest")
-    return opened.astype(bool)
+    if params.background_correction:
+        if params.median_radius > 0:
+            seg = median_filter(seg, params.median_radius)
+        seg = subtract_background(seg, params.rolling_ball_factor * min(seg.shape))
+    if params.threshold_method == "manual":
+        level = int(params.threshold_value)
+    else:
+        level = auto_level(seg, params.threshold_method) + int(params.threshold_offset)
+    level = min(254, max(0, level))
+    mask = seg > level  # dark background: foreground = pixels above the level
+    # ImageJ binary dilate() ×3 then erode() ×3 with a normal LUT = opening of the foreground
+    # (three 3×3 passes = one 7×7 pass).
+    n = int(params.opening_iterations)
+    if n <= 0:
+        return mask, level
+    size = 2 * n + 1
+    opened = ndimage.minimum_filter(mask.astype(np.uint8), size=size, mode="nearest")
+    opened = ndimage.maximum_filter(opened, size=size, mode="nearest")
+    return opened.astype(bool), level
+
+
+def segment(gray: np.ndarray, params: "CometParams | bool | None" = True) -> np.ndarray:
+    return segment_level(gray, params)[0]
 
 
 # --- geometry helpers ------------------------------------------------------------------
@@ -392,7 +480,7 @@ def analyze(planes: list[np.ndarray], params: CometParams | None = None, um_per_
     oh, ow = gray0.shape
     gray = _orient(gray0, params.tail)
     h, w = gray.shape
-    mask = segment(gray, params.background_correction)
+    mask, level = segment_level(gray, params)
 
     labels, n = ndimage.label(mask, structure=np.ones((3, 3), bool))
     particles: list[Particle] = []
@@ -400,10 +488,11 @@ def analyze(planes: list[np.ndarray], params: CometParams | None = None, um_per_
         if sl is None:
             continue
         comp = ndimage.binary_fill_holes(labels[sl] == key)
-        if int(comp.sum()) < params.min_area:
+        area = int(comp.sum())
+        if area < params.min_area or (params.max_area and area > params.max_area):
             continue
         x0, y0 = sl[1].start, sl[0].start
-        if x0 == 0 or y0 == 0 or sl[1].stop >= w or sl[0].stop >= h:
+        if params.exclude_edge and (x0 == 0 or y0 == 0 or sl[1].stop >= w or sl[0].stop >= h):
             continue  # ImageJ EXCLUDE_EDGE_PARTICLES
         particles.append(Particle(key=len(particles) + 1, shape=Shape(x0, y0, comp)))
 
@@ -417,19 +506,19 @@ def analyze(planes: list[np.ndarray], params: CometParams | None = None, um_per_
         sym = symmetry(s, fc)
         hratio = float(s.h // s.w)
         centerline = abs(fc - (s.y + s.h // 2)) / s.h
-        if convexity < 0.85:
+        if convexity < params.convexity_min:
             part.reasons.append("convexity")
-        if sym > 0.5:
+        if sym > params.symmetry_max:
             part.reasons.append("symmetry")
         if hratio > 1.05:
             part.reasons.append("height")
-        if s.x <= 1 or s.y <= 1 or s.x + s.w >= w - 1 or s.y + s.h >= h - 1:
+        if params.exclude_edge and (s.x <= 1 or s.y <= 1 or s.x + s.w >= w - 1 or s.y + s.h >= h - 1):
             part.reasons.append("edge")
-        if centerline > 0.2:
+        if centerline > params.centerline_max:
             part.reasons.append("centerline")
         if part.reasons:
             part.status = "invalid"
-        elif centerline > 0.15:
+        elif centerline > params.outlier_centerline:
             part.status = "outlier"
             part.reasons.append("centerline")
     valid = [p for p in particles if p.status == "valid"]
@@ -437,7 +526,7 @@ def analyze(planes: list[np.ndarray], params: CometParams | None = None, um_per_
         areas = np.array([p.shape.area for p in valid], np.float64)
         mean_a, std_a = areas.mean(), areas.std()
         for p in valid:
-            if abs(p.shape.area - mean_a) > 2.0 * std_a:
+            if abs(p.shape.area - mean_a) > params.outlier_area_sigma * std_a:
                 p.status = "outlier"
                 p.reasons.append("area")
 
@@ -539,7 +628,7 @@ def analyze(planes: list[np.ndarray], params: CometParams | None = None, um_per_
             }
         )
         comets.append(entry)
-    return {"channel": channel, "width": ow, "height": oh, "comets": comets}
+    return {"channel": channel, "width": ow, "height": oh, "threshold": level, "comets": comets}
 
 
 # --- orientation ---------------------------------------------------------------------------

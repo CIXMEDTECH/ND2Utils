@@ -14,6 +14,8 @@ const AnalysisHub = lazyPage(() => import("./pages/Analysis").then((module) => m
 const CometTool = lazyPage(() => import("./pages/Analysis").then((module) => module.CometTool));
 const AnalysisDetail = lazyPage(() => import("./pages/Analysis").then((module) => module.AnalysisDetail));
 const AnalysisRedirect = lazyPage(() => import("./pages/Analysis").then((module) => module.AnalysisRedirect));
+const EduTool = lazyPage(() => import("./pages/EduAnalysis").then((module) => module.EduTool));
+const EduDetail = lazyPage(() => import("./pages/EduAnalysis").then((module) => module.EduDetail));
 const Settings = lazyPage(() => import("./pages/Settings").then((module) => module.Settings));
 const Login = lazyPage(() => import("./pages/Login").then((module) => module.Login));
 
@@ -59,6 +61,8 @@ export function App() {
         <Route path="/analysis" element={<AnalysisHub />} />
         <Route path="/analysis/comet" element={<CometTool />} />
         <Route path="/analysis/comet/:analysisId" element={<AnalysisDetail />} />
+        <Route path="/analysis/edu" element={<EduTool />} />
+        <Route path="/analysis/edu/:analysisId" element={<EduDetail />} />
         <Route path="/analysis/:analysisId" element={<AnalysisRedirect />} />
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/settings" element={<Settings />} />
